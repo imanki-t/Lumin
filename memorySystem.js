@@ -5,9 +5,9 @@ import * as db from './database.js';
 
 const EMBEDDING_MODEL = 'gemini-embedding-001';
 
-const MAX_CONTEXT_TOKENS = 30000;
+const MAX_CONTEXT_TOKENS = 10000;
 const TOKENS_PER_MESSAGE = 150;
-const MAX_FULL_MESSAGES = 10;
+const MAX_FULL_MESSAGES = 3;
 const COMPRESSION_THRESHOLD = 60;
 const INDEX_BATCH_SIZE = 10;
 
