@@ -121,7 +121,7 @@ class MemorySystem {
       }).join('\n\n');
 
       const result = await chat.sendMessage({
-        message: `Summarize this conversation:\n\n${conversationText}`
+        message: `Summarize this conversation and mention people name properly:\n\n${conversationText}`
       });
 
       const summary = result.text || conversationText.slice(0, 500);
@@ -129,7 +129,7 @@ class MemorySystem {
       return [{
         role: 'user',
         content: [{
-          text: `[Previous conversation summary: ${summary}]`
+          text: `[Previous conversation summary of the users, you can use it to gain context.: ${summary}]`
         }],
         timestamp: Date.now()
       }];
