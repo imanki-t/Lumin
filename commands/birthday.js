@@ -1,5 +1,6 @@
 import { EmbedBuilder, MessageFlags, ButtonBuilder, ButtonStyle, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from 'discord.js';
 import { state, saveStateToFile, genAI } from '../botManager.js';
+import { memorySystem } from '../memorySystem.js';
 import * as db from '../database.js';
 import { getUserTime } from './timezone.js';
 
@@ -278,6 +279,8 @@ export async function handleBirthdayPrefSelect(interaction) {
     await db.saveBirthday(birthdayKey, state.birthdays[birthdayKey]);
     await saveStateToFile();
     
+    memorySystem.invalidatePersonalDataCache(userId);
+    
     const prefText = {
       dm: 'DMs only',
       server: 'this server only',
@@ -382,6 +385,8 @@ export async function handleBirthdayDeleteSelect(interaction) {
     delete state.birthdays[birthdayKey];
     await db.deleteBirthday(birthdayKey);
     await saveStateToFile();
+    
+    memorySystem.invalidatePersonalDataCache(interaction.user.id);
     
     const userId = interaction.user.id;
     const remaining = Object.keys(state.birthdays).filter(key => key.startsWith(userId)).length;
@@ -743,9 +748,8 @@ async function sendBirthdayWish(client, userId, data) {
           
           if (channel) {
             const mention = data.nameType === 'self' ? `<@${userId}>` : user.username;
-            // FIXED: Removed @everyone ping, using plain text
             await channel.send({
-              content: `🎉 everyone It's ${mention}'s birthday today! 🎂`,
+              content: `🎉 Everyone! It's ${mention}'s birthday today! 🎂`,
               embeds: [embed]
             });
           }
@@ -757,4 +761,4 @@ async function sendBirthdayWish(client, userId, data) {
   } catch (error) {
     console.error('Error in sendBirthdayWish:', error);
   }
-}
+        }
