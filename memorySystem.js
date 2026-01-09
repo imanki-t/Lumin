@@ -284,7 +284,7 @@ class MemorySystem {
      if (personalData && personalData.embedding) {
        const personalSimilarity = this.cosineSimilarity(queryEmbedding, personalData.embedding);
        
-       if (personalSimilarity > 0.6) {
+       if (personalSimilarity > 0.3) {
          relevantMessages.push({
            messages: [{
              role: 'user',
