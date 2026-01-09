@@ -125,13 +125,13 @@ return null; // No available keys
 }
 
 /**
-* Switches to the next available API key, skipping those on cooldown or rate limited.
-*/
+ * Switches to the next available API key, skipping those on cooldown or rate limited.
+ * Returns true if key was rotated, false if not.
+ */
 export function switchToNextKey(error) {
-  
   const oldIdx = currentKeyIdx;
 
-  // More accurate rate limit detection
+  // Detect rate limit errors
   const isRateLimit = 
     error?.status === 429 ||
     error?.code === 'RESOURCE_EXHAUSTED' ||
@@ -139,16 +139,27 @@ export function switchToNextKey(error) {
     error?.message?.includes('RESOURCE_EXHAUSTED') ||
     error?.message?.includes('quota');
 
-  // File permission errors should NOT trigger cooldown unless they are also rate limits
+  // Detect file permission errors (403 with "File" or "permission")
   const isFileError = 
-    error?.message?.includes('PERMISSION_DENIED') && 
-    (error?.message?.includes('File') || error?.message?.includes('file'));
+    (error?.status === 403 || error?.code === 403 || error?.message?.includes('403')) &&
+    (error?.message?.includes('File') || 
+     error?.message?.includes('file') || 
+     error?.message?.includes('PERMISSION_DENIED'));
 
-  if (isRateLimit && !isFileError) {
+  // CRITICAL: File permission errors should NOT rotate keys
+  // Files are tied to the key that uploaded them
+  if (isFileError) {
+    console.warn(`📁 File permission error detected - NOT rotating key (files are key-specific)`);
+    console.warn(`📁 Error: ${error?.message || 'Unknown file error'}`);
+    return false; // DO NOT ROTATE - return false immediately
+  }
+
+  // Only rotate for actual rate limit errors
+  if (isRateLimit) {
     keyCooldowns.set(oldIdx, Date.now() + 60000);
     console.warn(`⏱️ Key ${oldIdx + 1} on 60s cooldown (rate limit)`);
-  } else if (isFileError) {
-    console.log(`📁 Key ${oldIdx + 1} rotated due to file permission issue.`);
+  } else {
+    console.log(`⚠️ Key ${oldIdx + 1} encountered error: ${error?.message || 'Unknown'}`);
   }
 
   // Find next available key
