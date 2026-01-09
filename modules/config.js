@@ -19,9 +19,9 @@ export const GEMINI_3_MODELS = [
 
 // Fallback chain for model failures
 export const MODEL_FALLBACK_CHAIN = [
-  'gemini-3-flash-preview',      // Primary: Gemini 3.0 Flash
-  'gemini-2.5-flash',             // Fallback 1: Gemini 2.5 Flash
-  'gemini-2.5-flash-lite'         // Fallback 2: Gemini 2.5 Flash Lite
+  'gemini-2.5-flash',      // Primary: Gemini 3.0 Flash
+  'gemini-2.5-flash-lite',             // Fallback 1: Gemini 2.5 Flash
+  'gemini-3-flash-preview'         // Fallback 2: Gemini 2.5 Flash Lite
 ];
 
 export const safetySettings = [
