@@ -129,40 +129,53 @@ return null; // No available keys
 */
 function switchToNextKey(error) {
   const oldIdx = currentKeyIdx;
+
+  // More accurate rate limit detection
   const isRateLimit = 
     error?.status === 429 ||
     error?.code === 'RESOURCE_EXHAUSTED' ||
     (error?.message?.includes('429') && !error?.message?.includes('File')) ||
+    error?.message?.includes('RESOURCE_EXHAUSTED') ||
     error?.message?.includes('quota');
 
+  // File permission errors should NOT trigger cooldown unless they are also rate limits
   const isFileError = 
     error?.message?.includes('PERMISSION_DENIED') && 
     (error?.message?.includes('File') || error?.message?.includes('file'));
 
   if (isRateLimit && !isFileError) {
     keyCooldowns.set(oldIdx, Date.now() + 60000);
+    console.warn(`⏱️ Key ${oldIdx + 1} on 60s cooldown (rate limit)`);
+  } else if (isFileError) {
+    console.log(`📁 Key ${oldIdx + 1} rotated due to file permission issue.`);
   }
 
+  // Find next available key
   const nextIdx = findAvailableKey();
+
   if (nextIdx !== null) {
     currentKeyIdx = nextIdx;
+    console.log(`✅ Switched to Key ${nextIdx + 1}`);
   } else {
+    console.warn(`⚠️ ALL keys on cooldown or rate limited! Using round-robin fallback...`);
     currentKeyIdx = (oldIdx + 1) % apiKeys.length;
   }
 
+  // Only re-initialize and return TRUE if the key actually changed
   if (currentKeyIdx !== oldIdx) {
     currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
-    return true; 
-  }
-  return false;
-}
 
-const tracking = keyErrorTracking.get(oldIdx);
-if (error) {
-  tracking.lastError = {
-    message: error.message || 'Unknown error',
-    timestamp: new Date().toISOString()
-  };
+    const tracking = keyErrorTracking.get(oldIdx);
+    if (error && tracking) {
+      tracking.lastError = {
+        message: error.message || 'Unknown error',
+        timestamp: new Date().toISOString()
+      };
+    }
+    return true; // SIGNAL: Key was rotated
+  }
+
+  return false; // SIGNAL: Key stayed the same
 }
 
 async function withRetry(apiCall) {
