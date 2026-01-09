@@ -11,6 +11,7 @@ import config from '../config.js';
 import * as db from '../database.js';
 import { MODELS, safetySettings, getGenerationConfig, RATE_LIMIT_ERRORS, MODEL_FALLBACK_CHAIN, DEFAULT_MODEL } from './config.js';
 import { updateEmbed, sendAsTextFile } from './responseHandler.js';
+import { functionTools, executeFunctionCalls } from './functionTools.js'; // Import function tools
 
 /**
 * Removes file references from history to prevent 403 errors after key rotation.
@@ -470,7 +471,7 @@ async function handleTextMessage(message) {
     const selectedModel = effectiveSettings.selectedModel || DEFAULT_MODEL;
     const modelName = MODELS[selectedModel];
 
-    // Build tools
+    // Build tools - COMBINE EXISTING AND FUNCTION TOOLS
     const tools = [
       { googleSearch: {} },
       { urlContext: {} }
@@ -478,6 +479,12 @@ async function handleTextMessage(message) {
     if (!hasMedia) {
       tools.push({ codeExecution: {} });
     }
+    
+    // Add function tools
+    const allTools = [
+      ...tools,
+      ...functionTools
+    ];
 
     // PARALLEL: Get optimized history with RAG (includes personal data + cross-RAG)
     const history = await memorySystem.getOptimizedHistory(
@@ -494,7 +501,7 @@ async function handleTextMessage(message) {
       finalInstructions,
       null,
       safetySettings,
-      tools,
+      allTools, // Use combined tools
       history,
       parts,
       message,
@@ -917,7 +924,7 @@ async function handleModelResponse(
           safetySettings
         };
 
-        const result = await genAI.models.generateContentStream(request);
+        let result = await genAI.models.generateContentStream(request);
 
         if (!result) {
           throw new Error('API returned undefined - check API keys');
@@ -926,7 +933,17 @@ async function handleModelResponse(
         // Stop typing once streaming begins
         typingManager.stop(channelId);
 
+        // --- FUNCTION CALLING LOOP START ---
+        let functionCallParts = [];
+        
+        // First streaming pass - collect function calls
         for await (const chunk of result) {
+          // Check for function calls
+          if (chunk.functionCalls && chunk.functionCalls.length > 0) {
+            functionCallParts.push(...chunk.functionCalls);
+          }
+          
+          // Collect text
           const chunkText = chunk.text || '';
           
           let codeOutput = "";
@@ -991,6 +1008,111 @@ async function handleModelResponse(
             urlContextMetadata = chunk.candidates[0].url_context_metadata;
           }
         }
+
+        // Handle function execution if calls were detected
+        if (functionCallParts.length > 0) {
+          console.log(`🛠️ Executing ${functionCallParts.length} function call(s)...`);
+          
+          // Execute function calls
+          const functionResponses = await executeFunctionCalls(functionCallParts, userId, guildId);
+          
+          // Build the function turn with original user prompt + function call + function response
+          const functionTurnParts = [
+            ...parts, // Original user prompt
+            // Model's function call request
+            ...functionCallParts.map(call => ({
+              functionCall: call
+            })),
+            // Function responses
+            ...functionResponses
+          ];
+
+          // Call model again with function results
+          const nextRequest = {
+            model: modelName,
+            contents: [...history, { role: 'user', parts: functionTurnParts }],
+            config: { 
+              systemInstruction: systemInstruction, 
+              ...generationConfig, 
+              tools: tools 
+            },
+            safetySettings
+          };
+
+          const nextResult = await genAI.models.generateContentStream(nextRequest);
+          
+          // Reset response for final text generation
+          finalResponse = ''; 
+          tempResponse = '';
+
+          // Second streaming pass - collect final response
+          for await (const chunk of nextResult) {
+            const chunkText = chunk.text || '';
+            
+            let codeOutput = "";
+            if (chunk.codeExecutionResult) {
+              const outcome = chunk.codeExecutionResult.outcome || 'UNKNOWN';
+              const output = chunk.codeExecutionResult.output || '';
+              if (output) {
+                codeOutput = `\n**Code Execution (${outcome}):**\n\`\`\`\n${output}\n\`\`\`\n`;
+              }
+            }
+            
+            let executableCode = "";
+            if (chunk.executableCode) {
+              const language = chunk.executableCode.language || 'python';
+              const code = chunk.executableCode.code || '';
+              if (code) {
+                executableCode = `\n**Generated Code (${language}):**\n\`\`\`${language.toLowerCase()}\n${code}\n\`\`\`\n`;
+              }
+            }
+                
+            const combinedText = chunkText + executableCode + codeOutput;
+            if (combinedText && combinedText !== '') {
+              finalResponse += combinedText;
+              tempResponse += combinedText;
+
+              const currentWordCount = tempResponse.trim().split(/\s+/).length;
+
+              if (!botMessage && currentWordCount > WORD_THRESHOLD) {
+                try {
+                  if (shouldForceReply()) {
+                    botMessage = await originalMessage.reply({ content: tempResponse });
+                  } else {
+                    botMessage = await originalMessage.channel.send({ content: tempResponse });
+                  }
+                } catch (createErr) {
+                  console.error("Error creating initial message:", createErr);
+                  throw createErr;
+                }
+              }
+
+              if (botMessage) {
+                if (finalResponse.length > maxCharacterLimit) {
+                  if (!isLargeResponse) {
+                    isLargeResponse = true;
+                    const embed = new EmbedBuilder()
+                      .setColor(0xFFAA00)
+                      .setTitle('📄 Large Response')
+                      .setDescription('The response is too large. It will be sent as a text file once completed.');
+
+                    botMessage.edit({ content: ' ', embeds: [embed], components: [] }).catch(() => {});
+                  }
+                } else if (!updateTimeout) {
+                  updateTimeout = setTimeout(updateMessage, 800);
+                }
+              }
+            }
+
+            if (chunk.candidates && chunk.candidates[0]?.groundingMetadata) {
+              groundingMetadata = chunk.candidates[0].groundingMetadata;
+            }
+            if (chunk.candidates && chunk.candidates[0]?.url_context_metadata) {
+              urlContextMetadata = chunk.candidates[0].url_context_metadata;
+            }
+          }
+        }
+        // --- FUNCTION CALLING LOOP END ---
 
         clearTimeout(updateTimeout);
 
