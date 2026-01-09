@@ -1180,49 +1180,82 @@ async function handleModelResponse(
        break;
 
           } catch (error) {
-       attempts--;
+  attempts--;
 
-       // 1. Immediately trigger key rotation in botManager
-       // Note: Ensure switchToNextKey in botManager.js returns true if key changed
-       const rotated = switchToNextKey(error);
+  // 1. Check if this is a file permission error FIRST (before any rotation)
+  const isFileError = 
+    (error?.status === 403 || error?.code === 403 || error?.message?.includes('403')) &&
+    (error?.message?.includes('File') || 
+     error?.message?.includes('file') || 
+     error?.message?.includes('PERMISSION_DENIED'));
 
-       // 2. If a rotation happened, pre-emptively fix context in parallel
-       if (rotated && attempts > 0) {
-         typingManager.start(originalMessage.channel);
+  // 2. Handle file errors WITHOUT rotating keys
+  if (isFileError) {
+    console.warn(`📁 File permission error detected - cleaning history and retrying on same key`);
+    console.warn(`📁 Error details: ${error?.message || 'Unknown file error'}`);
+    
+    // Clean file references from history
+    history = cleanHistoryFiles(history);
+    
+    // Remove file references from current parts
+    parts = parts.filter(part => !part.fileUri && !part.fileData);
+    
+    // Ensure we have some text content (don't send empty request)
+    const hasTextContent = parts.some(p => p.text && p.text.trim().length > 0);
+    if (!hasTextContent) {
+      parts.unshift({ 
+        text: "[Previous file attachments were removed due to API key limitations. Please re-upload files if needed, or continue the conversation without them.]" 
+      });
+    }
+    
+    // Retry immediately on the SAME key (don't rotate)
+    if (attempts > 0) {
+      typingManager.start(originalMessage.channel);
+      await delay(1000); // Brief delay before retry
+      continue;
+    }
+  }
 
-         try {
-           // Run history cleaning and file re-uploads at the same time for speed
-           const [cleanedHistory, reprocessedResult] = await Promise.all([
-             Promise.resolve(cleanHistoryFiles(history)),
-             (async () => {
-               const { finalPrompt, summaryParts } = await extractFileText(originalMessage, originalPrompt);
-               let updatedParts = await processPromptAndMediaAttachments(
-                 finalPrompt,
-                 originalMessage,
-                 allAttachments
-               );
-               if (summaryParts && summaryParts.length > 0) {
-                 updatedParts.push(...summaryParts);
-               }
-               return updatedParts;
-             })()
-           ]);
+  // 3. For non-file errors, attempt key rotation
+  const rotated = switchToNextKey(error);
 
-           // Update variables with fresh data and retry the loop immediately
-           history = cleanedHistory;
-           parts = reprocessedResult;
-           continue; 
-         } catch (reProcessErr) {
-           console.error("Failed to re-prepare context after rotation:", reProcessErr);
-         }
-       }
-      
-       // 3. Fallback logic if no rotation occurred or it was a rate limit
-       const isRateLimitError = RATE_LIMIT_ERRORS.some(code => 
-         error.message?.includes(code) || 
-         error.status === code || 
-         error.code?.includes(code)
-       );
+  // 4. If a rotation happened, pre-emptively fix context in parallel
+  if (rotated && attempts > 0) {
+    typingManager.start(originalMessage.channel);
+
+    try {
+      // Run history cleaning and file re-uploads at the same time for speed
+      const [cleanedHistory, reprocessedResult] = await Promise.all([
+        Promise.resolve(cleanHistoryFiles(history)),
+        (async () => {
+          const { finalPrompt, summaryParts } = await extractFileText(originalMessage, originalPrompt);
+          let updatedParts = await processPromptAndMediaAttachments(
+            finalPrompt,
+            originalMessage,
+            allAttachments
+          );
+          if (summaryParts && summaryParts.length > 0) {
+            updatedParts.push(...summaryParts);
+          }
+          return updatedParts;
+        })()
+      ]);
+
+      // Update variables with fresh data and retry the loop immediately
+      history = cleanedHistory;
+      parts = reprocessedResult;
+      continue; 
+    } catch (reProcessErr) {
+      console.error("Failed to re-prepare context after rotation:", reProcessErr);
+    }
+  }
+ 
+  // 5. Fallback logic if no rotation occurred or it was a rate limit
+  const isRateLimitError = RATE_LIMIT_ERRORS.some(code => 
+    error.message?.includes(code) || 
+    error.status === code || 
+    error.code?.includes(code)
+  );
 
        if (isRateLimitError) {
          console.log(`⚠️ Rate limit hit on ${modelName}, attempting fallback...`);
@@ -1272,6 +1305,7 @@ async function handleModelResponse(
  }
 
 }
+
 
 
 
