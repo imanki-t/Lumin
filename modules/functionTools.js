@@ -3,7 +3,7 @@ import { memorySystem } from '../memorySystem.js';
 import { state, saveStateToFile, client } from '../botManager.js';
 import { scheduleReminder } from '../commands/reminder.js';
 
-// 1. Tool Definitions for Gemini
+// ✅ FIXED: Tool Definitions with UPPERCASE types (required by Gemini API)
 export const functionTools = [
   {
     functionDeclarations: [
@@ -11,10 +11,17 @@ export const functionTools = [
         name: "manage_personal_memory",
         description: "Add or remove permanent facts/memories about the user (e.g., likes, dislikes, pets).",
         parameters: {
-          type: "OBJECT",
+          type: "OBJECT",  // ✅ MUST be uppercase
           properties: {
-            action: { type: "STRING", enum: ["add", "remove"], description: "Action to perform" },
-            info: { type: "STRING", description: "The fact or information to store/delete" }
+            action: {
+              type: "STRING",  // ✅ MUST be uppercase
+              enum: ["add", "remove"],
+              description: "Action to perform"
+            },
+            info: {
+              type: "STRING",  // ✅ MUST be uppercase
+              description: "The fact or information to store/delete"
+            }
           },
           required: ["action", "info"]
         }
@@ -23,9 +30,12 @@ export const functionTools = [
         name: "search_memory",
         description: "Search the database for specific past conversations or facts using a query.",
         parameters: {
-          type: "OBJECT",
+          type: "OBJECT",  // ✅ MUST be uppercase
           properties: {
-            query: { type: "STRING", description: "The search query to find relevant memories" }
+            query: {
+              type: "STRING",  // ✅ MUST be uppercase
+              description: "The search query to find relevant memories"
+            }
           },
           required: ["query"]
         }
@@ -34,10 +44,16 @@ export const functionTools = [
         name: "set_reminder",
         description: "Set a reminder for the user. YOU MUST calculate the absolute target time based on the user's request and current time.",
         parameters: {
-          type: "OBJECT",
+          type: "OBJECT",  // ✅ MUST be uppercase
           properties: {
-            message: { type: "STRING", description: "What to remind about" },
-            datetime: { type: "STRING", description: "ISO 8601 formatted absolute timestamp (e.g. 2024-12-31T15:00:00) when the reminder should fire." }
+            message: {
+              type: "STRING",  // ✅ MUST be uppercase
+              description: "What to remind about"
+            },
+            datetime: {
+              type: "STRING",  // ✅ MUST be uppercase
+              description: "ISO 8601 formatted absolute timestamp (e.g. 2024-12-31T15:00:00) when the reminder should fire."
+            }
           },
           required: ["message", "datetime"]
         }
@@ -46,10 +62,16 @@ export const functionTools = [
         name: "set_birthday",
         description: "Set the user's birthday.",
         parameters: {
-          type: "OBJECT",
+          type: "OBJECT",  // ✅ MUST be uppercase
           properties: {
-            month: { type: "NUMBER", description: "Month (1-12)" },
-            day: { type: "NUMBER", description: "Day (1-31)" }
+            month: {
+              type: "NUMBER",  // ✅ Use NUMBER (not INTEGER) - uppercase
+              description: "Month (1-12)"
+            },
+            day: {
+              type: "NUMBER",  // ✅ Use NUMBER (not INTEGER) - uppercase
+              description: "Day (1-31)"
+            }
           },
           required: ["month", "day"]
         }
@@ -58,9 +80,12 @@ export const functionTools = [
         name: "set_timezone",
         description: "Set the user's timezone.",
         parameters: {
-          type: "OBJECT",
+          type: "OBJECT",  // ✅ MUST be uppercase
           properties: {
-            timezone: { type: "STRING", description: "IANA Timezone string (e.g. 'America/New_York', 'UTC')" }
+            timezone: {
+              type: "STRING",  // ✅ MUST be uppercase
+              description: "IANA Timezone string (e.g. 'America/New_York', 'UTC')"
+            }
           },
           required: ["timezone"]
         }
@@ -69,7 +94,7 @@ export const functionTools = [
   }
 ];
 
-// 2. Execution Logic
+// Execution Logic (unchanged)
 export async function executeFunctionCalls(calls, userId, guildId) {
   // Parallel processing of tool calls
   const results = await Promise.all(calls.map(async (call) => {
@@ -121,7 +146,7 @@ export async function executeFunctionCalls(calls, userId, guildId) {
                       hour: timeDate.getHours(),
                       minute: timeDate.getMinutes()
                   },
-                  location: 'dm', // Default to DM for tool-created reminders
+                  location: 'dm',
                   guildId: null,
                   active: true,
                   createdAt: Date.now()
@@ -137,7 +162,7 @@ export async function executeFunctionCalls(calls, userId, guildId) {
               // Schedule the reminder immediately
               scheduleReminder(client, reminder);
               
-              // Invalidate cache so bot knows about the new reminder immediately
+              // Invalidate cache
               memorySystem.invalidatePersonalDataCache(userId);
               
               response = { result: `Reminder successfully set for ${timeDate.toLocaleString()} to: ${args.message}` };
@@ -176,4 +201,4 @@ export async function executeFunctionCalls(calls, userId, guildId) {
   }));
 
   return results;
-      }
+}
