@@ -1,4 +1,4 @@
-﻿import { MongoClient } from 'mongodb';
+import { MongoClient } from 'mongodb';
 
 let client;
 let db;
@@ -58,7 +58,9 @@ async function createIndexes() {
    await db.collection(collections.customInstructions).createIndex({ id: 1 }, { unique: true });
    await db.collection(collections.blacklistedUsers).createIndex({ guildId: 1 }, { unique: true });
    await db.collection(collections.channelSettings).createIndex({ channelId: 1 }, { unique: true });
-   await db.collection(collections.memoryEntries).createIndex({ historyId: 1, timestamp: -1 });
+   await db.collection(collections.memoryEntries).createIndex({ "metadata.historyId": 1, timestamp: -1 });
+   await db.collection(collections.memoryEntries).createIndex({ "metadata.userId": 1 });
+   await db.collection(collections.memoryEntries).createIndex({ "metadata.guildId": 1 });
    // Note: Vector Index "vector_index" must be created in MongoDB Atlas manually for findSimilarMemories to work
    
    await db.collection(collections.imageUsage).createIndex({ userId: 1 }, { unique: true });
@@ -88,38 +90,142 @@ export async function closeDB() {
 // --- VECTOR SEARCH IMPLEMENTATION ---
 
 export async function findSimilarMemories(historyId, queryEmbedding, limit = 5) {
- try {
-   // Requires a Vector Search Index named "vector_index" on the "embedding" field
-   // Create via Atlas UI: { "fields": [{ "type": "vector", "path": "embedding", "numDimensions": 768, "similarity": "cosine" }, { "type": "filter", "path": "historyId" }] }
-   const pipeline = [
-     {
-       $vectorSearch: {
-         index: "vector_index",
-         path: "embedding",
-         queryVector: queryEmbedding,
-         numCandidates: limit * 20, // Fetch more candidates for better accuracy
-         limit: limit,
-         filter: { historyId: { $eq: historyId } }
-       }
-     },
-     {
-       $project: {
-         _id: 0,
-         messages: 1,
-         timestamp: 1,
-         text: 1,
-         score: { $meta: "vectorSearchScore" }
-       }
-     }
-   ];
+  try {
+    // Requires a Vector Search Index named "vector_index" on the "embedding" field
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index: "vector_index",
+          path: "embedding",
+          queryVector: queryEmbedding,
+          numCandidates: limit * 20,
+          limit: limit,
+          filter: { "metadata.historyId": { $eq: historyId } }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          messages: 1,
+          timestamp: 1,
+          text: 1,
+          metadata: 1,
+          score: { $meta: "vectorSearchScore" }
+        }
+      }
+    ];
 
-   const results = await db.collection(collections.memoryEntries).aggregate(pipeline).toArray();
-   return results;
- } catch (error) {
-   // Fallback if vector search fails (e.g., local DB without Atlas)
-   console.error('Database vector search failed (ensure Atlas & Index exist):', error.message);
-   return null; // Return null to trigger manual JS fallback in memorySystem
- }
+    const results = await db.collection(collections.memoryEntries).aggregate(pipeline).toArray();
+    return results;
+  } catch (error) {
+    // Graceful fallback if vector search fails
+    if (error.codeName === 'IndexNotFound' || error.message.includes('$vectorSearch')) {
+      console.log('ℹ️ Vector search index not available, using local search');
+    } else {
+      console.error('Vector search error:', error.message);
+    }
+    return null;
+  }
+}
+
+export async function findSimilarMemoriesWithFilter(historyId, queryEmbedding, limit = 5, extraFilter = {}) {
+  try {
+    const filter = { "metadata.historyId": { $eq: historyId } };
+    
+    if (extraFilter.userId) {
+      filter["metadata.userId"] = { $eq: extraFilter.userId };
+    }
+    if (extraFilter.guildId) {
+      filter["metadata.guildId"] = { $eq: extraFilter.guildId };
+    }
+    
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index: "vector_index",
+          path: "embedding",
+          queryVector: queryEmbedding,
+          numCandidates: limit * 20,
+          limit: limit,
+          filter: filter
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          messages: 1,
+          timestamp: 1,
+          text: 1,
+          metadata: 1,
+          score: { $meta: "vectorSearchScore" }
+        }
+      }
+    ];
+
+    const results = await db.collection(collections.memoryEntries).aggregate(pipeline).toArray();
+    return results;
+  } catch (error) {
+    if (error.codeName === 'IndexNotFound' || error.message.includes('$vectorSearch')) {
+      console.log('ℹ️ Vector search index not available for filtered search');
+    } else {
+      console.error('Filtered vector search error:', error.message);
+    }
+    return null;
+  }
+}
+
+// --- HELPER FUNCTIONS FOR PERSONAL DATA ---
+
+export async function getBirthday(userId) {
+  try {
+    const doc = await db.collection(collections.birthdays).findOne({ userId });
+    if (!doc) return null;
+    return {
+      month: doc.month,
+      day: doc.day,
+      name: doc.name
+    };
+  } catch (error) {
+    console.error('Error getting birthday:', error);
+    return null;
+  }
+}
+
+export async function getUserReminders(userId) {
+  try {
+    const reminders = await db.collection(collections.reminders)
+      .find({ userId, active: true })
+      .toArray();
+    return reminders;
+  } catch (error) {
+    console.error('Error getting user reminders:', error);
+    return [];
+  }
+}
+
+export async function getComplimentCount(userId) {
+  try {
+    const doc = await db.collection(collections.compliments).findOne({ userId });
+    return doc?.count || 0;
+  } catch (error) {
+    console.error('Error getting compliment count:', error);
+    return 0;
+  }
+}
+
+export async function getUserDailyQuote(userId) {
+  try {
+    const doc = await db.collection(collections.dailyQuotes).findOne({ userId });
+    if (!doc) return null;
+    return {
+      active: doc.active,
+      category: doc.category,
+      time: doc.time
+    };
+  } catch (error) {
+    console.error('Error getting daily quote:', error);
+    return null;
+  }
 }
 
 // --- STANDARD DB FUNCTIONS ---
@@ -422,8 +528,8 @@ export async function getAllUserResponsePreferences() {
 export async function saveMemoryEntry(historyId, entry) {
  try {
    await db.collection(collections.memoryEntries).insertOne({
-     historyId,
      ...entry,
+     metadata: entry.metadata || { historyId },
      createdAt: new Date()
    });
  } catch (error) {
@@ -435,7 +541,7 @@ export async function saveMemoryEntry(historyId, entry) {
 export async function getMemoryEntries(historyId, limit = 50) {
  try {
    const entries = await db.collection(collections.memoryEntries)
-     .find({ historyId })
+     .find({ "metadata.historyId": historyId })
      .sort({ timestamp: -1 })
      .limit(limit)
      .toArray();
