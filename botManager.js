@@ -70,8 +70,8 @@ const isFileError =
   (error?.message?.includes('File') || error?.message?.includes('file'));
 
 if (isRateLimit && !isFileError) {
-  keyCooldowns.set(oldIdx, Date.now() + 60000);
-  console.warn(`⏱️ Key ${oldIdx + 1} on 60s cooldown (rate limit)`);
+  keyCooldowns.set(oldIdx, Date.now() + 120000);
+  console.warn(`⏱️ Key ${oldIdx + 1} on 120s cooldown (rate limit)`);
 } else if (isFileError) {
   console.log(`📁 Key ${oldIdx + 1} rotated due to file permission issue.`);
 }
@@ -899,6 +899,7 @@ process.exit(0);
 
 
 });
+
 
 
 
