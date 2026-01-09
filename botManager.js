@@ -145,10 +145,10 @@ async function withRetry(apiCall) {
       // Reduced delay based on error type
       if (is403Error) {
         // 403 errors: immediate retry with new key (no delay)
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 3000));
       } else if (is429Error) {
         // 429 quota errors: short delay
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 2500));
       } else if (is500Error) {
         // Server errors: slightly longer delay
         await new Promise(r => setTimeout(r, 1000));
@@ -899,6 +899,7 @@ process.exit(0);
 
 
 });
+
 
 
 
