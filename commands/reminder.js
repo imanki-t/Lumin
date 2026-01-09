@@ -1,5 +1,6 @@
 import { EmbedBuilder, MessageFlags, StringSelectMenuBuilder, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { state, saveStateToFile } from '../botManager.js';
+import { memorySystem } from '../memorySystem.js';
 import * as db from '../database.js';
 import { getUserTime } from './timezone.js';
 
@@ -265,7 +266,6 @@ export async function handleReminderLocationSelect(interaction) {
     
     try {
       // Parse the time string into components (year, month, day, hour, minute)
-      // This parsing does NOT convert to UTC yet; it preserves the user's intended "wall clock" time.
       const parsedTime = parseReminderTime(type, timeStr);
       
       if (!state.reminders) {
@@ -305,6 +305,7 @@ export async function handleReminderLocationSelect(interaction) {
       await saveStateToFile();
       
       scheduleReminder(interaction.client, reminder);
+      memorySystem.invalidatePersonalDataCache(userId);
       
       const locationText = {
         dm: 'DMs',
@@ -462,6 +463,8 @@ export async function handleReminderDeleteSelect(interaction) {
     await db.deleteReminder(reminderId);
     await saveStateToFile();
     
+    memorySystem.invalidatePersonalDataCache(userId);
+    
     const activeCount = state.reminders[userId].filter(r => r.active).length;
     
     const embed = new EmbedBuilder()
@@ -568,7 +571,7 @@ function formatReminderTime(type, t) {
   }
 }
 
-function scheduleReminder(client, reminder) {
+export function scheduleReminder(client, reminder) {
   const checkAndTrigger = async () => {
     if (!reminder.active) return;
     
@@ -634,6 +637,8 @@ function scheduleReminder(client, reminder) {
           clearInterval(client.reminderIntervals.get(reminder.id));
           client.reminderIntervals.delete(reminder.id);
         }
+        
+        memorySystem.invalidatePersonalDataCache(userId);
       }
     }
   };
@@ -722,4 +727,4 @@ async function sendError(interaction, message, isUpdate = false) {
   } catch (e) {
     console.error('Failed to send error message:', e);
   }
-            }
+}
