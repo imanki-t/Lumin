@@ -1014,106 +1014,121 @@ async function handleModelResponse(
 
        // Handle function execution if calls were detected
        if (functionCallParts.length > 0) {
-         console.log(`🛠️ Executing ${functionCallParts.length} function call(s)...`);
-         
-         // Execute function calls
-         const functionResponses = await executeFunctionCalls(functionCallParts, userId, guildId);
-         
-         // Build the function turn with original user prompt + function call + function response
-         const functionTurnParts = [
-           ...parts, // Original user prompt
-           // Model's function call request
-           ...functionCallParts.map(call => ({
-             functionCall: call
-           })),
-           // Function responses
-           ...functionResponses
-         ];
+  console.log(`🛠️ Executing ${functionCallParts.length} function call(s)...`);
+  
+  const MAX_FUNCTION_TURNS = 3;
+  let functionTurnCount = 0;
+  
+  while (functionCallParts.length > 0 && functionTurnCount < MAX_FUNCTION_TURNS) {
+    functionTurnCount++;
+    console.log(`🔄 Function turn ${functionTurnCount}/${MAX_FUNCTION_TURNS}`);
+    
+    const functionResponses = await executeFunctionCalls(functionCallParts, userId, guildId);
+    
+    const functionTurnParts = [
+      ...parts,
+      ...functionCallParts.map(call => ({
+        functionCall: call
+      })),
+      ...functionResponses
+    ];
 
-         // Call model again with function results
-         const nextRequest = {
-           model: modelName,
-           contents: [...history, { role: 'user', parts: functionTurnParts }],
-           config: { 
-             systemInstruction: systemInstruction, 
-             ...generationConfig, 
-             tools: tools 
-           },
-           safetySettings
-         };
+    const nextRequest = {
+      model: modelName,
+      contents: [...history, { role: 'user', parts: functionTurnParts }],
+      config: { 
+        systemInstruction: systemInstruction, 
+        ...generationConfig, 
+        tools: tools 
+      },
+      safetySettings
+    };
 
-         const nextResult = await genAI.models.generateContentStream(nextRequest);
-         
-         // Reset response for final text generation
-         finalResponse = ''; 
-         tempResponse = '';
+    const nextResult = await genAI.models.generateContentStream(nextRequest);
+    
+    finalResponse = ''; 
+    tempResponse = '';
+    functionCallParts = [];
 
-         // Second streaming pass - collect final response
-         for await (const chunk of nextResult) {
-           const chunkText = chunk.text || '';
-           
-           let codeOutput = "";
-           if (chunk.codeExecutionResult) {
-             const outcome = chunk.codeExecutionResult.outcome || 'UNKNOWN';
-             const output = chunk.codeExecutionResult.output || '';
-             if (output) {
-               codeOutput = `\n**Code Execution (${outcome}):**\n\`\`\`\n${output}\n\`\`\`\n`;
-             }
-           }
-           
-           let executableCode = "";
-           if (chunk.executableCode) {
-             const language = chunk.executableCode.language || 'python';
-             const code = chunk.executableCode.code || '';
-             if (code) {
-               executableCode = `\n**Generated Code (${language}):**\n\`\`\`${language.toLowerCase()}\n${code}\n\`\`\`\n`;
-             }
-           }
-               
-           const combinedText = chunkText + executableCode + codeOutput;
-           if (combinedText && combinedText !== '') {
-             finalResponse += combinedText;
-             tempResponse += combinedText;
+    for await (const chunk of nextResult) {
+      if (chunk.functionCalls && chunk.functionCalls.length > 0) {
+        functionCallParts.push(...chunk.functionCalls);
+      }
+      
+      const chunkText = chunk.text || '';
+      
+      let codeOutput = "";
+      if (chunk.codeExecutionResult) {
+        const outcome = chunk.codeExecutionResult.outcome || 'UNKNOWN';
+        const output = chunk.codeExecutionResult.output || '';
+        if (output) {
+          codeOutput = `\n**Code Execution (${outcome}):**\n\`\`\`\n${output}\n\`\`\`\n`;
+        }
+      }
+      
+      let executableCode = "";
+      if (chunk.executableCode) {
+        const language = chunk.executableCode.language || 'python';
+        const code = chunk.executableCode.code || '';
+        if (code) {
+          executableCode = `\n**Generated Code (${language}):**\n\`\`\`${language.toLowerCase()}\n${code}\n\`\`\`\n`;
+        }
+      }
+          
+      const combinedText = chunkText + executableCode + codeOutput;
+      if (combinedText && combinedText !== '') {
+        finalResponse += combinedText;
+        tempResponse += combinedText;
 
-             const currentWordCount = tempResponse.trim().split(/\s+/).length;
+        const currentWordCount = tempResponse.trim().split(/\s+/).length;
 
-             if (!botMessage && currentWordCount > WORD_THRESHOLD) {
-               try {
-                 if (shouldForceReply()) {
-                   botMessage = await originalMessage.reply({ content: tempResponse });
-                 } else {
-                   botMessage = await originalMessage.channel.send({ content: tempResponse });
-                 }
-               } catch (createErr) {
-                 console.error("Error creating initial message:", createErr);
-                 throw createErr;
-               }
-             }
+        if (!botMessage && currentWordCount > WORD_THRESHOLD) {
+          try {
+            if (shouldForceReply()) {
+              botMessage = await originalMessage.reply({ content: tempResponse });
+            } else {
+              botMessage = await originalMessage.channel.send({ content: tempResponse });
+            }
+          } catch (createErr) {
+            console.error("Error creating initial message:", createErr);
+            throw createErr;
+          }
+        }
 
-             if (botMessage) {
-               if (finalResponse.length > maxCharacterLimit) {
-                 if (!isLargeResponse) {
-                   isLargeResponse = true;
-                   const embed = new EmbedBuilder()
-                     .setColor(0xFFAA00)
-                     .setTitle('📄 Large Response')
-                     .setDescription('The response is too large. It will be sent as a text file once completed.');
+        if (botMessage) {
+          if (finalResponse.length > maxCharacterLimit) {
+            if (!isLargeResponse) {
+              isLargeResponse = true;
+              const embed = new EmbedBuilder()
+                .setColor(0xFFAA00)
+                .setTitle('📄 Large Response')
+                .setDescription('The response is too large. It will be sent as a text file once completed.');
 
-                 botMessage.edit({ content: ' ', embeds: [embed], components: [] }).catch(() => {});
-                 }
-               } else if (!updateTimeout) {
-                 updateTimeout = setTimeout(updateMessage, 800);
-               }
-             }
-           }
+            botMessage.edit({ content: ' ', embeds: [embed], components: [] }).catch(() => {});
+            }
+          } else if (!updateTimeout) {
+            updateTimeout = setTimeout(updateMessage, 800);
+          }
+        }
+      }
 
-           if (chunk.candidates && chunk.candidates[0]?.groundingMetadata) {
-             groundingMetadata = chunk.candidates[0].groundingMetadata;
-           }
-           if (chunk.candidates && chunk.candidates[0]?.url_context_metadata) {
-             urlContextMetadata = chunk.candidates[0].url_context_metadata;
-           }
-         }
+      if (chunk.candidates && chunk.candidates[0]?.groundingMetadata) {
+        groundingMetadata = chunk.candidates[0].groundingMetadata;
+      }
+      if (chunk.candidates && chunk.candidates[0]?.url_context_metadata) {
+        urlContextMetadata = chunk.candidates[0].url_context_metadata;
+      }
+    }
+    
+    if (functionCallParts.length === 0) {
+      break;
+    }
+  }
+  
+  if (functionTurnCount >= MAX_FUNCTION_TURNS && functionCallParts.length > 0) {
+    console.warn(`⚠️ Function calling limit reached (${MAX_FUNCTION_TURNS} turns), stopping recursion`);
+    finalResponse += "\n\n[Function calling limit reached]";
+  }
        }
        // --- FUNCTION CALLING LOOP END ---
 
@@ -1305,6 +1320,7 @@ async function handleModelResponse(
  }
 
 }
+
 
 
 
