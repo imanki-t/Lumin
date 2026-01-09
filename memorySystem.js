@@ -163,10 +163,7 @@ async addPersonalData(userId, fact) {
    }
  }
 
- async getRelevantContext(historyId, currentQuery, allHistory, userId = null, guildId = null, maxRelevant = 5) {
- /**
-  * Fetch and embed user's personal data (timezone, birthday, reminders, facts, etc.)
-  */
+ 
  async getUserPersonalData(userId) {
    // Check cache first
    const cached = this.personalDataCache.get(userId);
