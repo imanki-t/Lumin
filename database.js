@@ -23,7 +23,8 @@ const collections = {
  activeUsersInChannels: 'activeUsersInChannels', 
  userResponsePreference: 'userResponsePreference',
  realive: 'realive',
- summaryUsage: 'summaryUsage'
+ summaryUsage: 'summaryUsage',
+ userFacts: 'userFacts'
 };
 
 export async function connectDB() {
@@ -73,6 +74,7 @@ async function createIndexes() {
    await db.collection(collections.serverDigests).createIndex({ guildId: 1 }, { unique: true });
    await db.collection(collections.realive).createIndex({ guildId: 1 }, { unique: true });
    await db.collection(collections.summaryUsage).createIndex({ userId: 1 }, { unique: true });
+   await db.collection(collections.userFacts).createIndex({ userId: 1 });
    
    console.log('✅ Database indexes created');
  } catch (error) {
@@ -1009,6 +1011,49 @@ export async function getAllSummaryUsages() {
    console.error('Error getting summary usages:', error);
    return {};
  }
+}
+
+// --- USER FACTS FUNCTIONS ---
+
+export async function saveUserFact(userId, fact) {
+  try {
+    await db.collection(collections.userFacts).insertOne({
+      userId,
+      fact,
+      createdAt: new Date()
+    });
+  } catch (error) {
+    console.error('Error saving user fact:', error);
+    throw error;
+  }
+}
+
+export async function getUserFacts(userId) {
+  try {
+    const docs = await db.collection(collections.userFacts)
+      .find({ userId })
+      .sort({ createdAt: -1 })
+      .limit(20) // Limit context size
+      .toArray();
+    return docs.map(d => d.fact);
+  } catch (error) {
+    console.error('Error getting user facts:', error);
+    return [];
+  }
+}
+
+export async function deleteUserFact(userId, factKeyword) {
+  try {
+    // Simple deletion by regex matching keyword
+    const result = await db.collection(collections.userFacts).deleteMany({
+      userId,
+      fact: { $regex: factKeyword, $options: 'i' }
+    });
+    return result.deletedCount;
+  } catch (error) {
+    console.error('Error deleting user fact:', error);
+    return 0;
+  }
 }
 
 export function getDB() {

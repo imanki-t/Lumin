@@ -1,4 +1,4 @@
-﻿import fs from 'fs/promises';
+import fs from 'fs/promises';
 import path from 'path';
 import { genAI, TEMP_DIR } from './botManager.js';
 import * as db from './database.js';
@@ -116,7 +116,14 @@ class MemorySystem {
  }
 
  /**
-  * Fetch and embed user's personal data (timezone, birthday, reminders, etc.)
+  * Clear cache when tools update data
+  */
+ invalidatePersonalDataCache(userId) {
+   this.personalDataCache.delete(userId);
+ }
+
+ /**
+  * Fetch and embed user's personal data (timezone, birthday, reminders, facts, etc.)
   */
  async getUserPersonalData(userId) {
    // Check cache first
@@ -127,12 +134,13 @@ class MemorySystem {
 
    try {
      // Parallel fetch all personal data
-     const [timezone, birthday, reminders, complimentCount, dailyQuote] = await Promise.all([
+     const [timezone, birthday, reminders, complimentCount, dailyQuote, userFacts] = await Promise.all([
        db.getUserTimezone(userId),
        db.getBirthday(userId),
        db.getUserReminders(userId),
        db.getComplimentCount(userId),
-       db.getUserDailyQuote(userId)
+       db.getUserDailyQuote(userId),
+       db.getUserFacts(userId) // Fetch unstructured facts
      ]);
 
      let personalContext = '';
@@ -164,6 +172,12 @@ class MemorySystem {
 
      if (dailyQuote && dailyQuote.active) {
        facts.push(`User receives daily ${dailyQuote.category || 'motivational'} quotes`);
+     }
+
+     // Append User Facts
+     if (userFacts && userFacts.length > 0) {
+       facts.push(`\n[User's Personal Context/Memories]:`);
+       userFacts.forEach(f => facts.push(`- ${f}`));
      }
 
      if (facts.length === 0) {
