@@ -42,16 +42,90 @@ let currentKeyIdx = 0;
 const keyUsageStats = new Map();
 const keyErrorTracking = new Map();
 const keyCooldowns = new Map(); // Track keys currently on 429 cooldown
+const keyRateLimits = new Map(); // Track requests per minute (15 req/min limit)
+
+const RATE_LIMIT_PER_MINUTE = 15;
+const RATE_LIMIT_WINDOW = 60000; // 1 minute in milliseconds
 
 apiKeys.forEach((_, idx) => {
 keyUsageStats.set(idx, { requests: 0, lastUsed: null, errors: 0, successfulRequests: 0 });
 keyErrorTracking.set(idx, { lastError: null });
+keyRateLimits.set(idx, { count: 0, windowStart: Date.now() });
 });
 
 let currentClient = new GoogleGenAI({ apiKey: apiKeys[0] });
 
 /**
-* Switches to the next available API key, skipping those on cooldown.
+* Check if a key has exceeded rate limit (15 requests/minute)
+*/
+function isKeyRateLimited(keyIdx) {
+const rateLimitData = keyRateLimits.get(keyIdx);
+if (!rateLimitData) return false;
+
+const now = Date.now();
+const timeSinceWindowStart = now - rateLimitData.windowStart;
+
+// Reset window if more than 1 minute has passed
+if (timeSinceWindowStart >= RATE_LIMIT_WINDOW) {
+rateLimitData.count = 0;
+rateLimitData.windowStart = now;
+keyRateLimits.set(keyIdx, rateLimitData);
+return false;
+}
+
+// Check if limit exceeded
+return rateLimitData.count >= RATE_LIMIT_PER_MINUTE;
+}
+
+/**
+* Increment rate limit counter for a key
+*/
+function incrementRateLimit(keyIdx) {
+const rateLimitData = keyRateLimits.get(keyIdx);
+if (!rateLimitData) return;
+
+const now = Date.now();
+const timeSinceWindowStart = now - rateLimitData.windowStart;
+
+// Reset window if more than 1 minute has passed
+if (timeSinceWindowStart >= RATE_LIMIT_WINDOW) {
+rateLimitData.count = 1;
+rateLimitData.windowStart = now;
+} else {
+rateLimitData.count++;
+}
+
+keyRateLimits.set(keyIdx, rateLimitData);
+}
+
+/**
+* Find next available key that's not rate limited or on cooldown
+*/
+function findAvailableKey() {
+const now = Date.now();
+  
+for (let i = 0; i < apiKeys.length; i++) {
+const testIdx = (currentKeyIdx + i) % apiKeys.length;
+    
+// Check cooldown
+const cooldownUntil = keyCooldowns.get(testIdx) || 0;
+if (now < cooldownUntil) {
+  continue;
+}
+    
+// Check rate limit
+if (isKeyRateLimited(testIdx)) {
+  continue;
+}
+    
+return testIdx;
+}
+  
+return null; // No available keys
+}
+
+/**
+* Switches to the next available API key, skipping those on cooldown or rate limited.
 */
 function switchToNextKey(error) {
 const oldIdx = currentKeyIdx;
@@ -70,29 +144,21 @@ const isFileError =
   (error?.message?.includes('File') || error?.message?.includes('file'));
 
 if (isRateLimit && !isFileError) {
-  keyCooldowns.set(oldIdx, Date.now() + 120000);
-  console.warn(`⏱️ Key ${oldIdx + 1} on 120s cooldown (rate limit)`);
+  keyCooldowns.set(oldIdx, Date.now() + 60000);
+  console.warn(`⏱️ Key ${oldIdx + 1} on 60s cooldown (rate limit)`);
 } else if (isFileError) {
   console.log(`📁 Key ${oldIdx + 1} rotated due to file permission issue.`);
 }
 
 // Find next available key
-let found = false;
-for (let i = 1; i <= apiKeys.length; i++) {
-  const nextIdx = (oldIdx + i) % apiKeys.length;
-  const cooldownUntil = keyCooldowns.get(nextIdx) || 0;
-  
-  if (Date.now() > cooldownUntil) {
-    currentKeyIdx = nextIdx;
-    found = true;
-    console.log(`✅ Switched to Key ${nextIdx + 1}`);
-    break;
-  }
-}
+const nextIdx = findAvailableKey();
 
-if (!found) {
-  console.warn(`⚠️ ALL keys on cooldown! Waiting...`);
-  currentKeyIdx = (oldIdx + i) % apiKeys.length;
+if (nextIdx !== null) {
+  currentKeyIdx = nextIdx;
+  console.log(`✅ Switched to Key ${nextIdx + 1}`);
+} else {
+  console.warn(`⚠️ ALL keys on cooldown or rate limited! Using round-robin fallback...`);
+  currentKeyIdx = (oldIdx + 1) % apiKeys.length;
 }
 
 currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
@@ -106,17 +172,26 @@ if (error) {
 }
 }
 
-// Replace the withRetry function in botManager.js (around line 50)
-
 async function withRetry(apiCall) {
   let attempts = 0;
   const maxAttempts = Math.max(3, apiKeys.length);
 
   while (attempts < maxAttempts) {
     try {
+      // Check rate limit BEFORE making the call
+      if (isKeyRateLimited(currentKeyIdx)) {
+        console.warn(`⏱️ Key ${currentKeyIdx + 1} hit rate limit (${RATE_LIMIT_PER_MINUTE} req/min), switching...`);
+        switchToNextKey({ message: 'Rate limit pre-check failed' });
+        attempts++;
+        continue;
+      }
+
       const stats = keyUsageStats.get(currentKeyIdx);
       stats.requests++;
       stats.lastUsed = Date.now();
+
+      // Increment rate limit counter
+      incrementRateLimit(currentKeyIdx);
 
       const result = await apiCall();
 
@@ -144,21 +219,17 @@ async function withRetry(apiCall) {
       
       // Reduced delay based on error type
       if (is403Error) {
-        // 403 errors: immediate retry with new key (no delay)
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 3000));
       } else if (is429Error) {
-        // 429 quota errors: short delay
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 2500));
       } else if (is500Error) {
-        // Server errors: slightly longer delay
         await new Promise(r => setTimeout(r, 1000));
       } else {
-        // Other errors: minimal delay
         await new Promise(r => setTimeout(r, 1000));
       }
     }
   }
-                     }
+}
 
 export const genAI = new Proxy({}, {
 get(target, prop) {
@@ -209,13 +280,26 @@ apiKeys.forEach((key, idx) => {
   const keyStats = keyUsageStats.get(idx);
   const tracking = keyErrorTracking.get(idx);
   const cooldown = keyCooldowns.get(idx);
+  const rateLimit = keyRateLimits.get(idx);
   const isOnCooldown = cooldown && Date.now() < cooldown;
+  const isRateLimited = isKeyRateLimited(idx);
+
+  // Calculate time until rate limit resets
+  const now = Date.now();
+  const timeUntilReset = rateLimit ? 
+    Math.max(0, RATE_LIMIT_WINDOW - (now - rateLimit.windowStart)) : 0;
+  const secondsUntilReset = Math.ceil(timeUntilReset / 1000);
+
+  let status = '🟢 Active';
+  if (isOnCooldown) status = '🔴 Cooldown';
+  else if (isRateLimited) status = `🟡 Rate Limited (${secondsUntilReset}s)`;
 
   stats.push({
     keyNumber: idx + 1,
     keyPreview: `${key.slice(0, 8)}...`,
     isCurrent: idx === currentKeyIdx,
-    status: isOnCooldown ? '🔴 Cooldown' : '🟢 Active',
+    status: status,
+    requestsThisMinute: rateLimit?.count || 0,
     totalRequests: keyStats.requests,
     successfulRequests: keyStats.successfulRequests,
     errors: keyStats.errors,
@@ -226,6 +310,7 @@ apiKeys.forEach((key, idx) => {
 return {
   totalKeys: apiKeys.length,
   currentKey: currentKeyIdx + 1,
+  rateLimit: `${RATE_LIMIT_PER_MINUTE} req/min`,
   keys: stats
 };
 }
@@ -236,6 +321,7 @@ console.log('--- API Key Status Report ---');
 console.table(stats.keys.map(k => ({
   Index: k.keyNumber,
   Status: k.status,
+  'This Min': k.requestsThisMinute,
   Ok: k.successfulRequests,
   Err: k.errors,
   Current: k.isCurrent ? '⭐' : ''
@@ -896,12 +982,4 @@ await db.closeDB();
 console.log('--- Shutdown Stats ---');
 console.log(JSON.stringify(getApiKeyStats(), null, 2));
 process.exit(0);
-
-
 });
-
-
-
-
-
-
