@@ -471,32 +471,36 @@ async function handleTextMessage(message) {
    const selectedModel = effectiveSettings.selectedModel || DEFAULT_MODEL;
    const modelName = MODELS[selectedModel];
 
-   // Build tools - COMBINE EXISTING AND FUNCTION TOOLS
-   // FIX: Consolidate tools into a single Tool object to avoid "Tool use with function calling is unsupported" error
-   
-   // 1. Create the base tool object
-   const unifiedTool = {
-     googleSearch: {},
-     urlContext: {}
-   };
+   // Build tools array - EACH TOOL TYPE MUST BE A SEPARATE OBJECT IN THE ARRAY
+// This is the correct format according to Gemini API documentation
+// See: https://ai.google.dev/gemini-api/docs/function-calling
 
-   // 2. Add Code Execution if conditions are met
-   if (!hasMedia) {
-     unifiedTool.codeExecution = {};
-   }
+const allTools = [];
 
-   // 3. Extract and merge function declarations
-   // We assume functionTools is an array of Tool objects (e.g., [{ functionDeclarations: [...] }])
-   // or an array of function declarations. To be safe, we check structure.
-   const customFunctionDeclarations = functionTools.flatMap(t => t.functionDeclarations || []);
-   
-   if (customFunctionDeclarations.length > 0) {
-     unifiedTool.functionDeclarations = customFunctionDeclarations;
-   }
-   
-   // 4. Send as a single-item array
-   const allTools = [unifiedTool];
+// 1. Add Google Search as separate tool
+allTools.push({ googleSearch: {} });
 
+// 2. Add URL Context as separate tool
+allTools.push({ urlContext: {} });
+
+// 3. Add Code Execution as separate tool (only if no media)
+if (!hasMedia) {
+  allTools.push({ codeExecution: {} });
+}
+
+// 4. Add Function Declarations as separate tool (if any exist)
+const customFunctionDeclarations = functionTools.flatMap(t => t.functionDeclarations || []);
+if (customFunctionDeclarations.length > 0) {
+  allTools.push({ functionDeclarations: customFunctionDeclarations });
+}
+
+// Result will be an array like:
+// [
+//   { googleSearch: {} },
+//   { urlContext: {} },
+//   { codeExecution: {} },  // optional
+//   { functionDeclarations: [...] }  // optional
+// ]
    // PARALLEL: Get optimized history with RAG (includes personal data + cross-RAG)
    const history = await memorySystem.getOptimizedHistory(
      historyId,
@@ -1278,4 +1282,5 @@ async function handleModelResponse(
    // Ensure cleanup always happens
    cleanup();
  }
+
 }
