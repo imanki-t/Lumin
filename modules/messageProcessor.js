@@ -11,7 +11,6 @@ import config from '../config.js';
 import * as db from '../database.js';
 import { MODELS, safetySettings, getGenerationConfig, RATE_LIMIT_ERRORS, MODEL_FALLBACK_CHAIN, DEFAULT_MODEL } from './config.js';
 import { updateEmbed, sendAsTextFile } from './responseHandler.js';
-import { functionTools, executeFunctionCalls } from './functionTools.js'; // Import function tools
 
 /**
 * Removes file references from history to prevent 403 errors after key rotation.
@@ -476,23 +475,12 @@ async function handleTextMessage(message) {
 // See: https://ai.google.dev/gemini-api/docs/function-calling
 
 const allTools = [];
-
-// 1. Add Google Search as separate tool
 allTools.push({ googleSearch: {} });
-
-// 2. Add URL Context as separate tool
 allTools.push({ urlContext: {} });
-
-// 3. Add Code Execution as separate tool (only if no media)
 if (!hasMedia) {
   allTools.push({ codeExecution: {} });
 }
-
-// 4. Add Function Declarations as separate tool (if any exist)
-const customFunctionDeclarations = functionTools.flatMap(t => t.functionDeclarations || []);
-if (customFunctionDeclarations.length > 0) {
-  allTools.push({ functionDeclarations: customFunctionDeclarations });
-}
+// Custom functionDeclarations removed - cannot mix with built-in tools
 
 // Result will be an array like:
 // [
@@ -1284,3 +1272,4 @@ async function handleModelResponse(
  }
 
 }
+
