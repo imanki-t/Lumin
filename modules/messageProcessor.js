@@ -5,7 +5,7 @@ import axios from 'axios';
 import { getTextExtractor } from 'office-text-extractor';
 import ffmpeg from 'fluent-ffmpeg';
 import { delay } from '../tools/others.js';
-import { genAI, state, chatHistoryLock, updateChatHistory, saveStateToFile, TEMP_DIR, client } from '../botManager.js';
+import { genAI, state, chatHistoryLock, updateChatHistory, saveStateToFile, TEMP_DIR, client, switchToNextKey } from '../botManager.js';
 import { memorySystem } from '../memorySystem.js';
 import config from '../config.js';
 import * as db from '../database.js';
@@ -1272,5 +1272,6 @@ async function handleModelResponse(
  }
 
 }
+
 
 
