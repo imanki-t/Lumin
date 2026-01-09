@@ -1,6 +1,7 @@
 import * as db from '../database.js';
 import { memorySystem } from '../memorySystem.js';
-import { state, saveStateToFile } from '../botManager.js';
+import { state, saveStateToFile, client } from '../botManager.js';
+import { scheduleReminder } from '../commands/reminder.js';
 
 // 1. Tool Definitions for Gemini
 export const functionTools = [
@@ -31,14 +32,14 @@ export const functionTools = [
       },
       {
         name: "set_reminder",
-        description: "Set a reminder for the user.",
+        description: "Set a reminder for the user. YOU MUST calculate the absolute target time based on the user's request and current time.",
         parameters: {
           type: "OBJECT",
           properties: {
             message: { type: "STRING", description: "What to remind about" },
-            time: { type: "STRING", description: "Time description (e.g. 'tomorrow at 5pm', 'in 2 hours')" }
+            datetime: { type: "STRING", description: "ISO 8601 formatted absolute timestamp (e.g. 2024-12-31T15:00:00) when the reminder should fire." }
           },
-          required: ["message", "time"]
+          required: ["message", "datetime"]
         }
       },
       {
@@ -103,11 +104,46 @@ export async function executeFunctionCalls(calls, userId, guildId) {
           break;
 
         case 'set_reminder':
-            // Simply acknowledge. The bot will parse the text response to confirm to user, 
-            // but here we might want to actually hook into the reminder system.
-            // For simplicity in this 'small changes' request, we return success 
-            // and let the bot confirm textually, or you can hook `state.reminders` here.
-            response = { result: `Reminder logic triggered for ${args.time}: ${args.message}` };
+            try {
+              const timeDate = new Date(args.datetime);
+              if (isNaN(timeDate.getTime())) {
+                  throw new Error("Invalid datetime format.");
+              }
+
+              const reminder = {
+                  id: `${userId}_${Date.now()}`,
+                  type: 'once',
+                  message: args.message,
+                  time: {
+                      year: timeDate.getFullYear(),
+                      month: timeDate.getMonth() + 1,
+                      day: timeDate.getDate(),
+                      hour: timeDate.getHours(),
+                      minute: timeDate.getMinutes()
+                  },
+                  location: 'dm', // Default to DM for tool-created reminders
+                  guildId: null,
+                  active: true,
+                  createdAt: Date.now()
+              };
+
+              if (!state.reminders) state.reminders = {};
+              if (!state.reminders[userId]) state.reminders[userId] = [];
+              
+              state.reminders[userId].push(reminder);
+              await db.saveReminder(userId, reminder);
+              await saveStateToFile();
+              
+              // Schedule the reminder immediately
+              scheduleReminder(client, reminder);
+              
+              // Invalidate cache so bot knows about the new reminder immediately
+              memorySystem.invalidatePersonalDataCache(userId);
+              
+              response = { result: `Reminder successfully set for ${timeDate.toLocaleString()} to: ${args.message}` };
+            } catch (err) {
+              response = { error: `Failed to set reminder: ${err.message}` };
+            }
             break;
 
         case 'set_birthday':
@@ -140,4 +176,4 @@ export async function executeFunctionCalls(calls, userId, guildId) {
   }));
 
   return results;
-                           }
+      }
