@@ -127,7 +127,8 @@ return null; // No available keys
 /**
 * Switches to the next available API key, skipping those on cooldown or rate limited.
 */
-function switchToNextKey(error) {
+export function switchToNextKey(error) {
+  
   const oldIdx = currentKeyIdx;
 
   // More accurate rate limit detection
