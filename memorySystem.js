@@ -121,7 +121,49 @@ class MemorySystem {
  invalidatePersonalDataCache(userId) {
    this.personalDataCache.delete(userId);
  }
+async addPersonalData(userId, fact) {
+   try {
+     await db.saveUserFact(userId, fact);
+     this.invalidatePersonalDataCache(userId);
+     return true;
+   } catch (error) {
+     console.error('Failed to add personal data:', error);
+     return false;
+   }
+ }
 
+ async removePersonalData(userId, factKeyword) {
+   try {
+     const deletedCount = await db.deleteUserFact(userId, factKeyword);
+     this.invalidatePersonalDataCache(userId);
+     return deletedCount > 0;
+   } catch (error) {
+     console.error('Failed to remove personal data:', error);
+     return false;
+   }
+ }
+
+ async searchMemory(userId, guildId, query) {
+   try {
+     const queryEmbedding = await this.generateEmbedding(query, 'RETRIEVAL_QUERY');
+     if (!queryEmbedding) return [];
+
+     const historyId = guildId || userId;
+     const results = await db.findSimilarMemories(historyId, queryEmbedding, 5);
+     
+     if (!results || results.length === 0) return [];
+
+     return results.map(entry => {
+       const text = this.extractTextFromMessage({ content: entry.messages[0].content });
+       return `[Memory] ${text}`;
+     });
+   } catch (error) {
+     console.error('Memory search failed:', error);
+     return [];
+   }
+ }
+
+ async getRelevantContext(historyId, currentQuery, allHistory, userId = null, guildId = null, maxRelevant = 5) {
  /**
   * Fetch and embed user's personal data (timezone, birthday, reminders, facts, etc.)
   */
