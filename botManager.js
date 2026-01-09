@@ -164,7 +164,6 @@ if (error) {
     timestamp: new Date().toISOString()
   };
 }
-}
 
 async function withRetry(apiCall) {
   let attempts = 0;
