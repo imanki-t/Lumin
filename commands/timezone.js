@@ -1,5 +1,6 @@
 import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { state, saveStateToFile } from '../botManager.js';
+import { memorySystem } from '../memorySystem.js';
 import * as db from '../database.js';
 
 export const timezoneCommand = {
@@ -77,6 +78,9 @@ export async function handleTimezoneCustomModal(interaction) {
     const validTimezone = resolvedOptions.timeZone;
 
     await saveTimezone(userId, validTimezone);
+    
+    // Invalidate cache immediately after saving
+    memorySystem.invalidatePersonalDataCache(userId);
     
     const currentTime = new Date().toLocaleString('en-US', { 
       timeZone: validTimezone,
