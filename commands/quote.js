@@ -1,5 +1,6 @@
 import { EmbedBuilder, MessageFlags, StringSelectMenuBuilder, ActionRowBuilder, ChannelSelectMenuBuilder, ChannelType } from 'discord.js';
 import { state, saveStateToFile, genAI } from '../botManager.js';
+import { memorySystem } from '../memorySystem.js';
 import * as db from '../database.js';
 import { getUserTime } from './timezone.js';
 
@@ -348,6 +349,9 @@ async function finalizeQuoteSetup(interaction, category, time, location, channel
   await db.saveDailyQuote(quoteKey, state.dailyQuotes[quoteKey]);
   await saveStateToFile();
   
+  // Invalidate cache since daily quotes are part of personal data
+  memorySystem.invalidatePersonalDataCache(userId);
+  
   const locationText = location === 'dm' 
     ? 'your DMs' 
     : `<#${channelId}>`;
@@ -479,6 +483,8 @@ export async function handleQuoteRemoveSelect(interaction) {
   delete state.dailyQuotes[quoteKey];
   await db.deleteDailyQuote(quoteKey);
   await saveStateToFile();
+  
+  memorySystem.invalidatePersonalDataCache(interaction.user.id);
   
   const userId = interaction.user.id;
   const remaining = Object.keys(state.dailyQuotes).filter(key => 
