@@ -29,7 +29,7 @@ const MAX_RAG_RESULTS = 3;
 const MIN_SIMILARITY_THRESHOLD = 0.65;
 
 /** Time gap in milliseconds that triggers a "TIME ELAPSED" marker (30 minutes) */
-const TIME_GAP_THRESHOLD_MS = 30 * 60 * 1000;
+const TIME_GAP_THRESHOLD_MS = 1 * 30 * 1000;
 
 /** Cache TTL for personal data (5 minutes) */
 const PERSONAL_DATA_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -38,7 +38,7 @@ const PERSONAL_DATA_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_EMBEDDING_CACHE_SIZE = 1000;
 
 /** Interval for generating fresh summaries (every N messages) */
-const SUMMARY_GENERATION_INTERVAL = 25;
+const SUMMARY_GENERATION_INTERVAL = 30;
 
 /** Maximum context file size before using file upload (characters) */
 const MAX_INLINE_CONTEXT_SIZE = 1500;
