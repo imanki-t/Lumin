@@ -506,50 +506,48 @@ class MemorySystem {
   /**
    * Generate or retrieve cached summary of old messages
    */
-  async generateSummary(messages, model, historyId) {
+    async generateSummary(messages, model, historyId) {
     if (messages.length <= 5) return null;
 
     try {
       const messageCount = messages.length;
       const cached = this.summaryCache.get(historyId);
 
-      // Reuse cached summary if recent enough
       const currentInterval = Math.floor(messageCount / SUMMARY_GENERATION_INTERVAL);
       const cachedInterval = cached ? Math.floor(cached.messageCount / SUMMARY_GENERATION_INTERVAL) : -1;
 
       if (cached && currentInterval === cachedInterval) {
-        console.log(`♻️ Reusing cached summary (${cached.messageCount} msgs, current: ${messageCount})`);
         return {
           role: 'user',
-          parts: [{
-            text: `[METADATA: Summary of previous ${cached.messageCount} messages]\n${cached.summary}`
-          }],
+          parts: [{ text: `[METADATA: Conversation Summary]\n${cached.summary}` }],
           timestamp: cached.generatedAt
         };
       }
 
-      console.log(`📝 Generating new summary for ${messageCount} messages`);
+      // If we have 2000+ messages, we only summarize the NEW ones and merge with the OLD summary
+      const newMessagesToSummarize = cached 
+        ? messages.slice(cached.messageCount) 
+        : messages;
+
+      const conversationText = newMessagesToSummarize.map(msg => {
+        const role = msg.role === 'assistant' ? 'Assistant' : 'User';
+        return `${role}: ${this.extractTextFromMessage(msg)}`;
+      }).join('\n\n');
 
       const chat = genAI.chats.create({
         model: model,
         config: {
-          systemInstruction: "Create a concise summary of the conversation that preserves key information, decisions, and context. Focus on facts and important details.",
-          temperature: 0.3,
-          topP: 0.95
+          systemInstruction: "Update the existing summary by incorporating the new conversation details. Keep it extremely concise and focused on standing facts.",
+          temperature: 0.3
         }
       });
 
-      const conversationText = messages.map((msg, idx) => {
-        const role = msg.role === 'user' ? 'User' : 'Assistant';
-        const text = this.extractTextFromMessage(msg);
-        return `${role}: ${text}`;
-      }).join('\n\n');
+      const prompt = cached 
+        ? `Existing Summary: ${cached.summary}\n\nNew messages to add to summary:\n${conversationText}`
+        : `Summarize this conversation:\n\n${conversationText}`;
 
-      const result = await chat.sendMessage({
-        message: `Summarize this conversation:\n\n${conversationText}`
-      });
-
-      const summary = result.text || conversationText.slice(0, 500);
+      const result = await chat.sendMessage({ message: prompt });
+      const summary = result.text || "Context continues...";
 
       this.summaryCache.set(historyId, {
         summary,
@@ -559,16 +557,15 @@ class MemorySystem {
 
       return {
         role: 'user',
-        parts: [{
-          text: `[METADATA: Summary of previous ${messageCount} messages]\n${summary}`
-        }],
+        parts: [{ text: `[METADATA: Conversation Summary]\n${summary}` }],
         timestamp: Date.now()
       };
     } catch (error) {
       console.error('Summary generation failed:', error.message);
       return null;
     }
-  }
+          }
+  
 
   // ==========================================================================
   // MAIN HISTORY OPTIMIZATION
