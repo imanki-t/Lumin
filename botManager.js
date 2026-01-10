@@ -382,7 +382,8 @@ function findAvailableModel(currentModelName) {
 function findAvailableKey() {
   const now = Date.now();
   
-  for (let i = 0; i < apiKeys.length; i++) {
+  // FIX: Start at i = 1 to check the NEXT key first
+  for (let i = 1; i <= apiKeys.length; i++) {
     const testIdx = (currentKeyIdx + i) % apiKeys.length;
     
     // Check key-level cooldown
