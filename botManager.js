@@ -65,7 +65,7 @@ const RETRY_STRATEGY = {
   MAX_ATTEMPTS_PER_KEY: 3,
   
   /** Max total attempts across all keys */
-  MAX_TOTAL_ATTEMPTS: 90, // Default, will be updated after apiKeys loads
+  MAX_TOTAL_ATTEMPTS: 3, // Default, will be updated after apiKeys loads
   
   /** Rotate keys aggressively on all errors, not just rate limits */
   AGGRESSIVE_ROTATION: true
@@ -201,8 +201,8 @@ function validateApiKey(key) {
 /** Array of Google Gemini API keys */
 const apiKeys = loadApiKeys();
 // Update MAX_TOTAL_ATTEMPTS now that apiKeys is loaded
-   RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS = Math.max(90, apiKeys.length * 3);
-   console.log(`✅ Retry strategy configured: ${RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS} total attempts (${apiKeys.length} keys × 3)`);
+RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS = Math.max(3, apiKeys.length * 3); // Changed from Math.max(90, ...)
+console.log(`✅ Retry strategy configured: ${RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS} total attempts (${apiKeys.length} keys × 3)`);
 
 /** Current active API key index */
 let currentKeyIdx = 0;
