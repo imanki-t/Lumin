@@ -58,6 +58,20 @@ const RATE_LIMIT_CONFIG = {
 };
 
 /**
+ * Retry strategy for key rotation
+ */
+const RETRY_STRATEGY = {
+  /** Max attempts per key before forcing rotation */
+  MAX_ATTEMPTS_PER_KEY: 3,
+  
+  /** Max total attempts across all keys */
+  MAX_TOTAL_ATTEMPTS: Math.max(90, apiKeys.length * 3), // For 30 keys = 90 attempts
+  
+  /** Rotate keys aggressively on all errors, not just rate limits */
+  AGGRESSIVE_ROTATION: true
+};
+
+/**
  * Resource management configuration
  */
 const RESOURCE_CONFIG = {
@@ -496,46 +510,57 @@ export function switchToNextKey(error) {
  * @throws {Error} If all retry attempts fail
  */
 async function withRetryPerModel(apiCall, initialModelName) {
-  let attempts = 0;
-  const maxAttempts = Math.max(RATE_LIMIT_CONFIG.MAX_RETRY_ATTEMPTS, apiKeys.length);
+  let totalAttempts = 0;
+  const maxTotalAttempts = RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS;
   let currentModel = initialModelName;
+  
+  const attemptsPerKey = new Map();
+  apiKeys.forEach((_, idx) => attemptsPerKey.set(idx, 0));
 
-  while (attempts < maxAttempts) {
+  while (totalAttempts < maxTotalAttempts) {
+    const currentKey = currentKeyIdx;
+    const keyAttempts = attemptsPerKey.get(currentKey) || 0;
+    
     try {
-      // Pre-flight check: is this model rate limited?
       if (isModelRateLimited(currentKeyIdx, currentModel)) {
-        console.warn(`⏱️ Key ${currentKeyIdx + 1} / Model ${currentModel} hit rate limit (${RATE_LIMIT_CONFIG.REQUESTS_PER_MINUTE} req/min)`);
+        console.warn(`⏱️ Key ${currentKeyIdx + 1} / Model ${currentModel} hit rate limit`);
         
-        const switchResult = switchToNextKeyOrModel(
-          { message: 'Rate limit pre-check failed' },
-          currentModel
-        );
+        const nextModel = findAvailableModel(currentModel);
         
-        if (switchResult.modelChanged && switchResult.newModel) {
-          currentModel = switchResult.newModel;
-          console.log(`🔄 Pre-flight switched to model: ${currentModel}`);
-        } else if (switchResult.keyRotated) {
-          console.log(`🔄 Pre-flight switched to Key ${currentKeyIdx + 1}`);
+        if (nextModel) {
+          currentModel = nextModel;
+          console.log(`🔄 Switched to fallback model: ${currentModel} (staying on Key ${currentKeyIdx + 1})`);
+          totalAttempts++;
+          continue;
+        } else {
+          console.log(`⚠️ All models exhausted on Key ${currentKeyIdx + 1}, rotating key...`);
+          const nextKeyIdx = findAvailableKey();
+          
+          if (nextKeyIdx !== null && nextKeyIdx !== currentKeyIdx) {
+            currentKeyIdx = nextKeyIdx;
+            currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
+            currentModel = initialModelName;
+            attemptsPerKey.set(currentKeyIdx, 0);
+            console.log(`✅ Rotated to Key ${currentKeyIdx + 1}, using model: ${currentModel}`);
+            totalAttempts++;
+            continue;
+          }
         }
         
-        attempts++;
+        totalAttempts++;
         continue;
       }
 
-      // Update usage stats
       const stats = keyUsageStats.get(currentKeyIdx);
       if (stats) {
         stats.requests++;
         stats.lastUsed = Date.now();
       }
 
-      // Increment rate limit counter for this specific model
       incrementModelRateLimit(currentKeyIdx, currentModel);
 
-      // Execute the API call
       const result = await apiCall(currentModel);
 
-      // Update success stats
       if (stats) {
         stats.successfulRequests++;
       }
@@ -543,31 +568,92 @@ async function withRetryPerModel(apiCall, initialModelName) {
       return result;
 
     } catch (error) {
-      // Update error stats
+      totalAttempts++;
+      attemptsPerKey.set(currentKey, keyAttempts + 1);
+      
       const stats = keyUsageStats.get(currentKeyIdx);
       if (stats) {
         stats.errors++;
       }
 
-      console.warn(`API call failed (Key: ${currentKeyIdx + 1}, Model: ${currentModel}, Attempt: ${attempts + 1}): ${error.message}`);
+      console.warn(`API call failed (Key: ${currentKeyIdx + 1}/${apiKeys.length}, Model: ${currentModel}, Attempt: ${totalAttempts}/${maxTotalAttempts}): ${error.message}`);
       
-      // Try to switch key or model
-      const switchResult = switchToNextKeyOrModel(error, currentModel);
-      
-      if (switchResult.modelChanged && switchResult.newModel) {
-        currentModel = switchResult.newModel;
-        console.log(`🔄 Switched to fallback model: ${currentModel}`);
-      } else if (switchResult.keyRotated) {
-        console.log(`🔄 Switched to Key ${currentKeyIdx + 1}`);
-      }
-      
-      attempts++;
+      const isRateLimit = 
+        error?.status === 429 ||
+        error?.code === 'RESOURCE_EXHAUSTED' ||
+        (error?.message?.includes('429') && !error?.message?.includes('File')) ||
+        error?.message?.includes('RESOURCE_EXHAUSTED') ||
+        error?.message?.includes('quota');
 
-      if (attempts >= maxAttempts) {
-        throw new Error(`All retry attempts exhausted (${maxAttempts} attempts). Last error: ${error.message}`);
+      const isFileError = 
+        (error?.status === 403 || error?.code === 403 || error?.message?.includes('403')) &&
+        (error?.message?.includes('File') || 
+         error?.message?.includes('file') || 
+         error?.message?.includes('PERMISSION_DENIED'));
+
+      if (isFileError) {
+        console.warn(`📁 File permission error - NOT rotating (files are key-specific)`);
+        
+        if (totalAttempts >= maxTotalAttempts) {
+          throw new Error(`File permission error persists: ${error.message}`);
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+
+      if (isRateLimit) {
+        const nextModel = findAvailableModel(currentModel);
+        
+        if (nextModel) {
+          currentModel = nextModel;
+          console.log(`🔄 Rate limit: Switched to fallback model: ${currentModel} (staying on Key ${currentKeyIdx + 1})`);
+        } else {
+          console.log(`⚠️ All models rate limited on Key ${currentKeyIdx + 1}, attempting key rotation...`);
+          
+          const nextKeyIdx = findAvailableKey();
+          
+          if (nextKeyIdx !== null && nextKeyIdx !== currentKeyIdx) {
+            currentKeyIdx = nextKeyIdx;
+            currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
+            currentModel = initialModelName;
+            attemptsPerKey.set(currentKeyIdx, 0);
+            console.log(`✅ Rotated to Key ${currentKeyIdx + 1}, retrying with model: ${currentModel}`);
+          } else {
+            console.warn(`⚠️ ALL keys exhausted! Trying fallback model as last resort...`);
+            const fallbackIdx = (MODEL_FALLBACK_CHAIN.indexOf(currentModel) + 1) % MODEL_FALLBACK_CHAIN.length;
+            currentModel = MODEL_FALLBACK_CHAIN[fallbackIdx];
+          }
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_CONFIG.RETRY_DELAYS.RATE_LIMIT));
+        continue;
+      }
+
+      let shouldRotate = false;
+      
+      if (RETRY_STRATEGY.AGGRESSIVE_ROTATION && keyAttempts >= RETRY_STRATEGY.MAX_ATTEMPTS_PER_KEY - 1) {
+        console.log(`🔄 Forcing key rotation after ${keyAttempts + 1} attempts on Key ${currentKey + 1}`);
+        shouldRotate = true;
       }
       
-      // Apply delay based on error type
+      if (shouldRotate) {
+        const nextKeyIdx = findAvailableKey();
+        
+        if (nextKeyIdx !== null && nextKeyIdx !== currentKeyIdx) {
+          currentKeyIdx = nextKeyIdx;
+          currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
+          attemptsPerKey.set(currentKeyIdx, 0);
+          console.log(`✅ Rotated to Key ${currentKeyIdx + 1}`);
+        } else {
+          console.warn(`⚠️ No available keys to rotate to`);
+        }
+      }
+      
+      if (totalAttempts >= maxTotalAttempts) {
+        throw new Error(`All retry attempts exhausted (${maxTotalAttempts} attempts). Last error: ${error.message}`);
+      }
+      
       const errorMessage = error.message || '';
       let delay = RATE_LIMIT_CONFIG.RETRY_DELAYS.DEFAULT;
       
@@ -579,11 +665,13 @@ async function withRetryPerModel(apiCall, initialModelName) {
         delay = RATE_LIMIT_CONFIG.RETRY_DELAYS.SERVER_ERROR;
       }
       
+      delay += Math.random() * 500;
+      
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 
-  throw new Error(`Retry loop exited unexpectedly after ${attempts} attempts`);
+  throw new Error(`Retry loop exited unexpectedly after ${totalAttempts} attempts`);
 }
 
 /**
