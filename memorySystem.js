@@ -29,7 +29,7 @@ const MAX_RAG_RESULTS = 3;
 const MIN_SIMILARITY_THRESHOLD = 0.65;
 
 /** Time gap in milliseconds that triggers a "TIME ELAPSED" marker (30 minutes) */
-const TIME_GAP_THRESHOLD_MS = 30 * 1000;
+const TIME_GAP_THRESHOLD_MS = 30 * 60 * 1000;
 
 /** Cache TTL for personal data (5 minutes) */
 const PERSONAL_DATA_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -44,7 +44,38 @@ const SUMMARY_GENERATION_INTERVAL = 30;
 const MAX_INLINE_CONTEXT_SIZE = 1500;
 
 // ============================================================================
-// MEMORY SYSTEM CLASS
+// CLUSTERING CONFIGURATION CONSTANTS
+// ============================================================================
+
+/** Number of clusters to create per history (k-means parameter) */
+const NUM_CLUSTERS = 8;
+
+/** Minimum memories required before clustering is enabled */
+const MIN_MEMORIES_FOR_CLUSTERING = 24;
+
+/** Number of top clusters to search within */
+const TOP_CLUSTERS_TO_SEARCH = 3;
+
+/** Minimum cluster similarity threshold to consider a cluster relevant */
+const MIN_CLUSTER_SIMILARITY = 0.45;
+
+/** Reclustering interval - rebuild clusters every N new memories */
+const RECLUSTERING_INTERVAL = 20;
+
+/** Maximum k-means iterations to prevent infinite loops */
+const MAX_KMEANS_ITERATIONS = 15;
+
+/** Convergence threshold for k-means (centroid movement) */
+const KMEANS_CONVERGENCE_THRESHOLD = 0.001;
+
+/** Cache TTL for cluster data (10 minutes) */
+const CLUSTER_CACHE_TTL_MS = 10 * 60 * 1000;
+
+/** Maximum number of memories to search within a cluster */
+const MAX_MEMORIES_PER_CLUSTER = 10;
+
+// ============================================================================
+// MEMORY SYSTEM CLASS WITH CLUSTERING
 // ============================================================================
 
 class MemorySystem {
@@ -53,6 +84,10 @@ class MemorySystem {
     this.lastIndexedCount = new Map();
     this.summaryCache = new Map();
     this.personalDataCache = new Map();
+    
+    // Clustering-specific caches
+    this.clusterCache = new Map(); // historyId -> { clusters, centroids, lastUpdate, memoryCount }
+    this.lastClusterUpdate = new Map(); // historyId -> memoryCount at last clustering
   }
 
   // ==========================================================================
@@ -115,6 +150,400 @@ class MemorySystem {
     }
 
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  // ==========================================================================
+  // CLUSTERING ALGORITHMS
+  // ==========================================================================
+
+  /**
+   * Initialize cluster centroids using k-means++
+   * Better initial centroids lead to faster convergence
+   */
+  initializeCentroids(embeddings, k) {
+    const centroids = [];
+    const n = embeddings.length;
+
+    // First centroid: random selection
+    centroids.push([...embeddings[Math.floor(Math.random() * n)]]);
+
+    // Remaining centroids: k-means++ initialization
+    for (let i = 1; i < k; i++) {
+      const distances = embeddings.map(emb => {
+        const minDist = Math.min(...centroids.map(c => {
+          const sim = this.cosineSimilarity(emb, c);
+          return 1 - sim; // Convert similarity to distance
+        }));
+        return minDist * minDist; // Square the distance
+      });
+
+      const totalDist = distances.reduce((sum, d) => sum + d, 0);
+      let threshold = Math.random() * totalDist;
+
+      for (let j = 0; j < n; j++) {
+        threshold -= distances[j];
+        if (threshold <= 0) {
+          centroids.push([...embeddings[j]]);
+          break;
+        }
+      }
+    }
+
+    return centroids;
+  }
+
+  /**
+   * Assign memories to nearest cluster centroid
+   */
+  assignToClusters(memories, centroids) {
+    const clusters = Array.from({ length: centroids.length }, () => []);
+
+    for (let i = 0; i < memories.length; i++) {
+      const embedding = memories[i].embedding;
+      let maxSim = -1;
+      let bestCluster = 0;
+
+      for (let j = 0; j < centroids.length; j++) {
+        const sim = this.cosineSimilarity(embedding, centroids[j]);
+        if (sim > maxSim) {
+          maxSim = sim;
+          bestCluster = j;
+        }
+      }
+
+      clusters[bestCluster].push(i);
+    }
+
+    return clusters;
+  }
+
+  /**
+   * Recalculate cluster centroids as mean of assigned embeddings
+   */
+  updateCentroids(memories, clusters, embeddingDim) {
+    const newCentroids = [];
+
+    for (const cluster of clusters) {
+      if (cluster.length === 0) {
+        // Empty cluster: reinitialize randomly
+        const randomIdx = Math.floor(Math.random() * memories.length);
+        newCentroids.push([...memories[randomIdx].embedding]);
+        continue;
+      }
+
+      const centroid = new Array(embeddingDim).fill(0);
+      
+      for (const memIdx of cluster) {
+        const embedding = memories[memIdx].embedding;
+        for (let i = 0; i < embeddingDim; i++) {
+          centroid[i] += embedding[i];
+        }
+      }
+
+      for (let i = 0; i < embeddingDim; i++) {
+        centroid[i] /= cluster.length;
+      }
+
+      newCentroids.push(centroid);
+    }
+
+    return newCentroids;
+  }
+
+  /**
+   * Check if centroids have converged
+   */
+  hasConverged(oldCentroids, newCentroids) {
+    let maxMovement = 0;
+
+    for (let i = 0; i < oldCentroids.length; i++) {
+      const movement = 1 - this.cosineSimilarity(oldCentroids[i], newCentroids[i]);
+      if (movement > maxMovement) {
+        maxMovement = movement;
+      }
+    }
+
+    return maxMovement < KMEANS_CONVERGENCE_THRESHOLD;
+  }
+
+  /**
+   * Perform k-means clustering on memory embeddings
+   */
+  performKMeansClustering(memories, k) {
+    if (memories.length < k) {
+      k = Math.max(2, Math.floor(memories.length / 3));
+    }
+
+    const embeddingDim = memories[0].embedding.length;
+    let centroids = this.initializeCentroids(
+      memories.map(m => m.embedding),
+      k
+    );
+
+    let iteration = 0;
+    let converged = false;
+
+    while (iteration < MAX_KMEANS_ITERATIONS && !converged) {
+      const clusters = this.assignToClusters(memories, centroids);
+      const newCentroids = this.updateCentroids(memories, clusters, embeddingDim);
+      
+      converged = this.hasConverged(centroids, newCentroids);
+      centroids = newCentroids;
+      iteration++;
+    }
+
+    const finalClusters = this.assignToClusters(memories, centroids);
+
+    console.log(`✅ K-means converged in ${iteration} iterations for k=${k}`);
+
+    return {
+      centroids,
+      clusters: finalClusters,
+      iterations: iteration
+    };
+  }
+
+  /**
+   * Build or update clusters for a history
+   */
+  async buildClusters(historyId) {
+    try {
+      const memories = await db.getMemoryEntries(historyId, 1000);
+
+      if (!memories || memories.length < MIN_MEMORIES_FOR_CLUSTERING) {
+        console.log(`ℹ️ Not enough memories for clustering (${memories.length}/${MIN_MEMORIES_FOR_CLUSTERING})`);
+        return null;
+      }
+
+      const validMemories = memories.filter(m => 
+        m.embedding && Array.isArray(m.embedding) && m.embedding.length > 0
+      );
+
+      if (validMemories.length < MIN_MEMORIES_FOR_CLUSTERING) {
+        console.log(`ℹ️ Not enough valid embeddings for clustering`);
+        return null;
+      }
+
+      console.log(`🔨 Building clusters for ${historyId} (${validMemories.length} memories)`);
+
+      const k = Math.min(NUM_CLUSTERS, Math.floor(validMemories.length / 3));
+      const clusterResult = this.performKMeansClustering(validMemories, k);
+
+      const clusterData = {
+        centroids: clusterResult.centroids,
+        clusters: clusterResult.clusters.map(cluster => 
+          cluster.map(idx => validMemories[idx]._id || idx)
+        ),
+        lastUpdate: Date.now(),
+        memoryCount: validMemories.length,
+        iterations: clusterResult.iterations
+      };
+
+      this.clusterCache.set(historyId, clusterData);
+      this.lastClusterUpdate.set(historyId, validMemories.length);
+
+      return clusterData;
+    } catch (error) {
+      console.error('Clustering failed:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Get clusters for a history (cached or build new)
+   */
+  async getClusters(historyId) {
+    const cached = this.clusterCache.get(historyId);
+    const now = Date.now();
+
+    // Check if cache is valid
+    if (cached && (now - cached.lastUpdate) < CLUSTER_CACHE_TTL_MS) {
+      return cached;
+    }
+
+    // Check if we need to recluster
+    const currentMemories = await db.getMemoryEntries(historyId, 1);
+    const memoryCount = currentMemories.length;
+    const lastUpdate = this.lastClusterUpdate.get(historyId) || 0;
+
+    if (memoryCount - lastUpdate >= RECLUSTERING_INTERVAL || !cached) {
+      return await this.buildClusters(historyId);
+    }
+
+    return cached;
+  }
+
+  // ==========================================================================
+  // HIERARCHICAL SEARCH (CLUSTER -> MEMORY)
+  // ==========================================================================
+
+  /**
+   * Find top relevant clusters for a query
+   */
+  findRelevantClusters(queryEmbedding, centroids) {
+    const clusterScores = centroids.map((centroid, idx) => ({
+      clusterId: idx,
+      similarity: this.cosineSimilarity(queryEmbedding, centroid)
+    }));
+
+    return clusterScores
+      .filter(c => c.similarity >= MIN_CLUSTER_SIMILARITY)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, TOP_CLUSTERS_TO_SEARCH);
+  }
+
+  /**
+   * Search within specific clusters for relevant memories
+   */
+  async searchWithinClusters(historyId, queryEmbedding, relevantClusters, allMemories) {
+    const results = [];
+
+    for (const cluster of relevantClusters) {
+      const clusterMemories = allMemories.filter((_, idx) => 
+        cluster.memoryIndices.includes(idx)
+      );
+
+      const scoredMemories = clusterMemories
+        .map(memory => ({
+          ...memory,
+          similarity: this.cosineSimilarity(queryEmbedding, memory.embedding),
+          clusterId: cluster.clusterId
+        }))
+        .filter(m => m.similarity >= MIN_SIMILARITY_THRESHOLD)
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, MAX_MEMORIES_PER_CLUSTER);
+
+      results.push(...scoredMemories);
+    }
+
+    results.sort((a, b) => b.similarity - a.similarity);
+    return results.slice(0, MAX_RAG_RESULTS);
+  }
+
+  /**
+   * Hierarchical clustered search (main search method)
+   */
+  async clusterSearch(historyId, queryEmbedding, cutoffTimestamp) {
+    try {
+      const clusterData = await this.getClusters(historyId);
+
+      if (!clusterData) {
+        // Fallback to standard vector search
+        console.log(`ℹ️ No clusters available, using standard search`);
+        return await this.standardVectorSearch(historyId, queryEmbedding, cutoffTimestamp);
+      }
+
+      console.log(`🔍 Searching ${clusterData.centroids.length} clusters`);
+
+      // Phase 1: Find relevant clusters
+      const relevantClusters = this.findRelevantClusters(
+        queryEmbedding, 
+        clusterData.centroids
+      );
+
+      if (relevantClusters.length === 0) {
+        console.log(`ℹ️ No relevant clusters found`);
+        return [];
+      }
+
+      console.log(`✅ Found ${relevantClusters.length} relevant clusters`);
+
+      // Phase 2: Get memories from relevant clusters only
+      const allMemories = await db.getMemoryEntries(historyId, 1000);
+      const validMemories = allMemories.filter(m => 
+        m.embedding && 
+        Array.isArray(m.embedding) &&
+        (m.timestamp || 0) < cutoffTimestamp
+      );
+
+      // Map cluster IDs to memory indices
+      const clustersWithIndices = relevantClusters.map(cluster => ({
+        clusterId: cluster.clusterId,
+        similarity: cluster.similarity,
+        memoryIndices: clusterData.clusters[cluster.clusterId] || []
+      }));
+
+      // Phase 3: Search within selected clusters
+      const results = await this.searchWithinClusters(
+        historyId,
+        queryEmbedding,
+        clustersWithIndices,
+        validMemories
+      );
+
+      console.log(`✅ Found ${results.length} relevant memories from clusters`);
+
+      return results.map(r => ({
+        messages: r.messages,
+        score: r.similarity,
+        source: 'conversation-history',
+        timestamp: r.timestamp,
+        clusterId: r.clusterId
+      }));
+
+    } catch (error) {
+      console.error('Cluster search failed:', error.message);
+      return await this.standardVectorSearch(historyId, queryEmbedding, cutoffTimestamp);
+    }
+  }
+
+  /**
+   * Standard vector search (fallback when clustering unavailable)
+   */
+  async standardVectorSearch(historyId, queryEmbedding, cutoffTimestamp) {
+    try {
+      // Try database vector search first
+      const dbResults = await db.findSimilarMemories(
+        historyId, 
+        queryEmbedding, 
+        MAX_RAG_RESULTS * 2
+      );
+
+      if (dbResults && dbResults.length > 0) {
+        return dbResults
+          .filter(entry => (entry.timestamp || 0) < cutoffTimestamp)
+          .filter(entry => entry.score >= MIN_SIMILARITY_THRESHOLD)
+          .slice(0, MAX_RAG_RESULTS)
+          .map(entry => ({
+            messages: entry.messages,
+            score: entry.score,
+            source: 'conversation-history',
+            timestamp: entry.timestamp
+          }));
+      }
+
+      // Fallback to local cosine similarity
+      const memoryEntries = await db.getMemoryEntries(historyId);
+
+      if (!memoryEntries || memoryEntries.length === 0) {
+        return [];
+      }
+
+      const scoredEntries = memoryEntries
+        .filter(entry => 
+          entry.embedding && 
+          Array.isArray(entry.embedding) &&
+          (entry.timestamp || 0) < cutoffTimestamp
+        )
+        .map(entry => ({
+          ...entry,
+          similarity: this.cosineSimilarity(queryEmbedding, entry.embedding)
+        }))
+        .filter(entry => entry.similarity >= MIN_SIMILARITY_THRESHOLD)
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, MAX_RAG_RESULTS);
+
+      return scoredEntries.map(entry => ({
+        messages: entry.messages,
+        score: entry.similarity,
+        source: 'conversation-history',
+        timestamp: entry.timestamp
+      }));
+
+    } catch (error) {
+      console.error('Standard vector search failed:', error.message);
+      return [];
+    }
   }
 
   // ==========================================================================
@@ -271,7 +700,7 @@ class MemorySystem {
   }
 
   // ==========================================================================
-  // MEMORY SEARCH & RETRIEVAL
+  // MEMORY SEARCH & RETRIEVAL (WITH CLUSTERING)
   // ==========================================================================
 
   /**
@@ -283,7 +712,9 @@ class MemorySystem {
       if (!queryEmbedding) return [];
 
       const historyId = guildId || userId;
-      const results = await db.findSimilarMemories(historyId, queryEmbedding, 5);
+      
+      // Use clustered search
+      const results = await this.clusterSearch(historyId, queryEmbedding, Date.now());
 
       if (!results || results.length === 0) return [];
 
@@ -298,7 +729,7 @@ class MemorySystem {
   }
 
   /**
-   * Get relevant historical context via RAG (excludes recent messages)
+   * Get relevant historical context via RAG with clustering
    */
   async getRelevantContext(historyId, currentQuery, recentMessageTimestamps, userId = null, guildId = null) {
     try {
@@ -318,56 +749,11 @@ class MemorySystem {
       const relevantMessages = [];
       const cutoffTimestamp = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
 
-      // 1. Search conversation history (exclude recent messages by timestamp)
-      const dbResults = await db.findSimilarMemories(historyId, queryEmbedding, MAX_RAG_RESULTS * 2);
+      // 1. Clustered search on conversation history (FASTER!)
+      const conversationResults = await this.clusterSearch(historyId, queryEmbedding, cutoffTimestamp);
+      relevantMessages.push(...conversationResults);
 
-      if (dbResults && dbResults.length > 0) {
-        const filteredResults = dbResults
-          .filter(entry => {
-            const entryTimestamp = entry.timestamp || 0;
-            return entryTimestamp < cutoffTimestamp;
-          })
-          .filter(entry => entry.score >= MIN_SIMILARITY_THRESHOLD)
-          .slice(0, MAX_RAG_RESULTS);
-
-        relevantMessages.push(...filteredResults.map(entry => ({
-          messages: entry.messages,
-          score: entry.score,
-          source: 'conversation-history',
-          timestamp: entry.timestamp
-        })));
-      }
-
-      // 2. Fallback to manual cosine similarity if DB search failed
-      if (relevantMessages.length === 0) {
-        console.log(`ℹ️ Using local vector search for ${historyId}`);
-        const memoryEntries = await db.getMemoryEntries(historyId);
-
-        if (memoryEntries && memoryEntries.length > 0) {
-          const scoredEntries = memoryEntries
-            .filter(entry => entry.embedding && Array.isArray(entry.embedding))
-            .filter(entry => {
-              const entryTimestamp = entry.timestamp || 0;
-              return entryTimestamp < cutoffTimestamp;
-            })
-            .map(entry => ({
-              ...entry,
-              similarity: this.cosineSimilarity(queryEmbedding, entry.embedding)
-            }))
-            .filter(entry => entry.similarity >= MIN_SIMILARITY_THRESHOLD)
-            .sort((a, b) => b.similarity - a.similarity)
-            .slice(0, MAX_RAG_RESULTS);
-
-          relevantMessages.push(...scoredEntries.map(entry => ({
-            messages: entry.messages,
-            score: entry.similarity,
-            source: 'conversation-history',
-            timestamp: entry.timestamp
-          })));
-        }
-      }
-
-      // 3. Cross-RAG: Search server context if this is a user query in a server
+      // 2. Cross-RAG: Search server context if this is a user query in a server
       if (userId && guildId && historyId !== guildId && relevantMessages.length < MAX_RAG_RESULTS) {
         const serverResults = await db.findSimilarMemoriesWithFilter(guildId, queryEmbedding, 1, { userId });
         if (serverResults && serverResults.length > 0) {
@@ -385,16 +771,11 @@ class MemorySystem {
         }
       }
 
-      // 4. Cross-RAG: Search user context if this is a server query
+      // 3. Cross-RAG: Search user context if this is a server query
       if (guildId && historyId === guildId && userId && relevantMessages.length < MAX_RAG_RESULTS) {
-        const userResults = await db.findSimilarMemories(userId, queryEmbedding, 1);
+        const userResults = await this.clusterSearch(userId, queryEmbedding, cutoffTimestamp);
         if (userResults && userResults.length > 0) {
-          const filtered = userResults.filter(entry => {
-            const entryTimestamp = entry.timestamp || 0;
-            return entryTimestamp < cutoffTimestamp && entry.score >= MIN_SIMILARITY_THRESHOLD;
-          });
-
-          relevantMessages.push(...filtered.map(entry => ({
+          relevantMessages.push(...userResults.map(entry => ({
             messages: entry.messages.slice(-6),
             score: entry.score * 0.75,
             source: 'user-context',
@@ -506,7 +887,7 @@ class MemorySystem {
   /**
    * Generate or retrieve cached summary of old messages
    */
-    async generateSummary(messages, model, historyId) {
+  async generateSummary(messages, model, historyId) {
     if (messages.length <= 5) return null;
 
     try {
@@ -524,7 +905,6 @@ class MemorySystem {
         };
       }
 
-      // If we have 2000+ messages, we only summarize the NEW ones and merge with the OLD summary
       const newMessagesToSummarize = cached 
         ? messages.slice(cached.messageCount) 
         : messages;
@@ -564,26 +944,22 @@ class MemorySystem {
       console.error('Summary generation failed:', error.message);
       return null;
     }
-          }
-  
+  }
 
   // ==========================================================================
   // MAIN HISTORY OPTIMIZATION
   // ==========================================================================
 
   /**
-   * Get optimized conversation history with RAG
-   * This is the main entry point for retrieving history
+   * Get optimized conversation history with RAG and clustering
    */
   async getOptimizedHistory(historyId, currentQuery, model, userId = null, guildId = null) {
     try {
-      // Step 1: Load full history from database
       const allHistory = await db.getChatHistory(historyId);
       if (!allHistory) {
         return [];
       }
 
-      // Step 2: Convert to flat array
       const historyArray = [];
       for (const messagesId in allHistory) {
         if (allHistory.hasOwnProperty(messagesId)) {
@@ -593,26 +969,20 @@ class MemorySystem {
 
       if (historyArray.length === 0) return [];
 
-      // Step 3: Sort by timestamp to ensure chronological order
       historyArray.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
-      // Step 4: Keep most recent messages in full (never compress these)
       const recentMessages = historyArray.slice(-RECENT_MESSAGE_WINDOW);
       const oldMessages = historyArray.slice(0, -RECENT_MESSAGE_WINDOW);
 
-      // Step 5: Get recent message timestamps for filtering RAG results
       const recentTimestamps = recentMessages.map(msg => msg.timestamp || Date.now());
 
-      // Step 6: Background indexing (non-blocking)
       this.checkAndIndexMessages(historyId, allHistory, userId, guildId)
         .catch(() => { });
 
-      // If we have few messages, just return them all formatted
       if (historyArray.length <= RECENT_MESSAGE_WINDOW) {
         return this.formatHistoryForAPI(recentMessages);
       }
 
-      // Step 7: Get relevant historical context and personal data in parallel
       const [ragResults, summary] = await Promise.all([
         this.getRelevantContext(historyId, currentQuery, recentTimestamps, userId, guildId),
         oldMessages.length > COMPRESSION_THRESHOLD ?
@@ -622,10 +992,8 @@ class MemorySystem {
 
       const { messages: relevantMemories, personalData } = ragResults;
 
-      // Step 8: Build context sections
       const contextSections = [];
 
-      // Add summary if we have one
       if (summary) {
         contextSections.push({
           type: 'summary',
@@ -633,7 +1001,6 @@ class MemorySystem {
           timestamp: summary.timestamp
         });
       } else if (oldMessages.length > 0) {
-        // Add sampled old messages if no summary
         const sampledOld = oldMessages.slice(-8);
         contextSections.push({
           type: 'previous-conversation',
@@ -646,7 +1013,6 @@ class MemorySystem {
         });
       }
 
-      // Add RAG retrieved memories
       if (relevantMemories.length > 0) {
         for (const memory of relevantMemories) {
           const memoryText = memory.messages.map(msg => {
@@ -659,12 +1025,12 @@ class MemorySystem {
             type: memory.source,
             content: memoryText,
             score: memory.score,
-            timestamp: memory.timestamp
+            timestamp: memory.timestamp,
+            clusterId: memory.clusterId
           });
         }
       }
 
-      // Add personal data if relevant
       if (personalData && personalData.embedding) {
         const queryEmbedding = await this.generateEmbedding(currentQuery, 'RETRIEVAL_QUERY');
         if (queryEmbedding) {
@@ -680,13 +1046,9 @@ class MemorySystem {
         }
       }
 
-      // Step 9: Format context for API
       const formattedContext = this.buildContextMessage(contextSections);
-
-      // Step 10: Format recent messages for API
       const formattedRecent = this.formatHistoryForAPI(recentMessages);
 
-      // Step 11: Combine everything
       if (formattedContext) {
         return [formattedContext, ...formattedRecent];
       } else {
@@ -714,13 +1076,13 @@ class MemorySystem {
     for (const section of sections) {
       const label = this.getContextLabel(section.type);
       const scoreText = section.score ? ` (Relevance: ${section.score.toFixed(2)})` : '';
+      const clusterText = section.clusterId !== undefined ? ` [Cluster ${section.clusterId}]` : '';
 
-      contextText += `[${label}${scoreText}]\n${section.content}\n\n`;
+      contextText += `[${label}${scoreText}${clusterText}]\n${section.content}\n\n`;
     }
 
-    // If context is huge, use file upload
     if (contextText.length > MAX_INLINE_CONTEXT_SIZE) {
-      return null; // Return null to trigger file upload in caller
+      return null;
     }
 
     return {
@@ -759,7 +1121,6 @@ class MemorySystem {
         parts: []
       };
 
-      // Add time gap marker if significant time passed
       if (previousTimestamp && entry.timestamp) {
         const timeDiff = entry.timestamp - previousTimestamp;
         if (timeDiff > TIME_GAP_THRESHOLD_MS) {
@@ -771,13 +1132,11 @@ class MemorySystem {
       }
       previousTimestamp = entry.timestamp;
 
-      // Process content parts
       let userInfoAdded = false;
       for (const part of entry.content) {
         if (part.text !== undefined && part.text !== '') {
           let textVal = part.text;
 
-          // Add user info to first text part for user messages
           if (!userInfoAdded && entry.role === 'user' && entry.username && entry.displayName) {
             textVal = `[${entry.displayName} (@${entry.username})]: ${textVal}`;
             userInfoAdded = true;
@@ -809,19 +1168,61 @@ class MemorySystem {
   // ==========================================================================
 
   /**
-   * Get current status of memory system
+   * Get current status of memory system including clustering
    */
   getQueueStatus() {
+    const clusterInfo = Array.from(this.clusterCache.entries()).map(([historyId, data]) => ({
+      historyId,
+      numClusters: data.centroids.length,
+      memoryCount: data.memoryCount,
+      lastUpdate: new Date(data.lastUpdate).toISOString(),
+      iterations: data.iterations
+    }));
+
     return {
       embeddingCacheSize: this.embeddingCache.size,
       trackedHistories: this.lastIndexedCount.size,
       summaryCacheSize: this.summaryCache.size,
       personalDataCacheSize: this.personalDataCache.size,
+      clusteredHistories: this.clusterCache.size,
+      clusterInfo: clusterInfo,
       entries: Array.from(this.lastIndexedCount.entries()).map(([id, count]) => ({
         historyId: id,
         lastIndexedMessageCount: count
       }))
     };
+  }
+
+  /**
+   * Force rebuild clusters for a history (for debugging/testing)
+   */
+  async forceRebuildClusters(historyId) {
+    try {
+      console.log(`🔨 Force rebuilding clusters for ${historyId}`);
+      
+      this.clusterCache.delete(historyId);
+      this.lastClusterUpdate.delete(historyId);
+      
+      const result = await this.buildClusters(historyId);
+      
+      if (result) {
+        return {
+          success: true,
+          message: `Rebuilt ${result.centroids.length} clusters`,
+          numClusters: result.centroids.length,
+          memoryCount: result.memoryCount,
+          iterations: result.iterations
+        };
+      } else {
+        return {
+          success: false,
+          message: 'Not enough memories for clustering'
+        };
+      }
+    } catch (error) {
+      console.error('Force cluster rebuild failed:', error.message);
+      return { success: false, message: error.message };
+    }
   }
 
   /**
