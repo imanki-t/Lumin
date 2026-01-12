@@ -1,21 +1,3 @@
-/**
- * @fileoverview Discord Bot Manager - Core bot management, API key rotation, and state management
- * @version 3.0.0
- * @module botManager
- * 
- * This module handles:
- * - Discord client initialization and configuration
- * - Google Gemini AI API key rotation and rate limiting (per-model tracking)
- * - Bot state management (chat histories, settings, user data)
- * - Database operations coordination
- * - Request queue management
- * - Resource lifecycle management
- * 
- * @requires discord.js ^14.16.3
- * @requires @google/genai ^1.0.1
- * @requires dotenv ^16.4.7
- */
-
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -27,112 +9,93 @@ import { fileURLToPath } from 'url';
 import config from './config.js';
 import * as db from './database.js';
 
-// ============================================================================
-// CONFIGURATION CONSTANTS
-// ============================================================================
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-/**
- * Rate limiting configuration
- * Adjust these values to control API usage patterns
- */
-const RATE_LIMIT_CONFIG = {
-  /** Requests per minute per model per API key */
+export const TEMP_DIR = path.join(__dirname, 'temp');
+
+const RATE_LIMIT_CONFIG = Object.freeze({
   REQUESTS_PER_MINUTE: 15,
-  
-  /** Time window for rate limiting in milliseconds */
   WINDOW_DURATION_MS: 60000,
-  
-  /** Cooldown duration when rate limit is hit */
   COOLDOWN_DURATION_MS: 60000,
-  
-  /** Maximum retry attempts for failed API calls */
   MAX_RETRY_ATTEMPTS: 3,
-  
-  /** Delay multipliers for different error types (ms) */
-  RETRY_DELAYS: {
+  RETRY_DELAYS: Object.freeze({
     FORBIDDEN: 3000,
     RATE_LIMIT: 2500,
     SERVER_ERROR: 1000,
     DEFAULT: 1000
-  }
-};
+  })
+});
 
-/**
- * Retry strategy for key rotation
- */
-const RETRY_STRATEGY = {
-  /** Max attempts per key before forcing rotation */
+const RETRY_STRATEGY = Object.freeze({
   MAX_ATTEMPTS_PER_KEY: 3,
-  
-  /** Max total attempts across all keys */
-  MAX_TOTAL_ATTEMPTS: 3, // Default, will be updated after apiKeys loads
-  
-  /** Rotate keys aggressively on all errors, not just rate limits */
   AGGRESSIVE_ROTATION: true
-};
+});
 
-/**
- * Resource management configuration
- */
-const RESOURCE_CONFIG = {
-  /** Interval for periodic state saves (ms) */
-  STATE_SAVE_INTERVAL: 300000, // 5 minutes
-  
-  /** Interval for API key statistics logging (ms) */
-  STATS_LOG_INTERVAL: 900000, // 15 minutes
-  
-  /** Maximum embedding cache size */
+const RESOURCE_CONFIG = Object.freeze({
+  STATE_SAVE_INTERVAL: 300000,
+  STATS_LOG_INTERVAL: 900000,
   MAX_CACHE_SIZE: 1000,
-  
-  /** File cleanup age threshold (ms) */
-  FILE_CLEANUP_AGE: 3600000, // 1 hour
-  
-  /** Daily reset time (UTC hours) */
+  FILE_CLEANUP_AGE: 3600000,
   DAILY_RESET_HOUR: 0
-};
+});
 
-/**
- * State management configuration
- */
-const STATE_CONFIG = {
-  /** Maximum messages to keep in chat history */
+const STATE_CONFIG = Object.freeze({
   MAX_MESSAGES: 50,
-  
-  /** Time threshold for context breaks (ms) */
-  CONTEXT_BREAK_THRESHOLD: 1800000, // 30 minutes
-  
-  /** Queue size limit per user */
+  CONTEXT_BREAK_THRESHOLD: 1800000,
   MAX_QUEUE_SIZE: 5
-};
+});
 
-/**
- * Model fallback chain
- * Models are tried in order when rate limits are hit
- */
-const MODEL_FALLBACK_CHAIN = [
+const MODEL_FALLBACK_CHAIN = Object.freeze([
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
   'gemini-2.0-flash-lite'
-];
+]);
 
-// ============================================================================
-// FILE SYSTEM SETUP
-// ============================================================================
+const DEFAULT_SERVER_SETTINGS = Object.freeze({
+  selectedModel: 'gemini-2.5-flash',
+  responseFormat: 'Normal',
+  showActionButtons: false,
+  continuousReply: false,
+  customPersonality: null,
+  embedColor: config.hexColour,
+  overrideUserSettings: true,
+  serverChatHistory: false,
+  allowedChannels: []
+});
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const DEFAULT_USER_SETTINGS = Object.freeze({
+  selectedModel: 'gemini-2.5-flash',
+  responseFormat: 'Normal',
+  showActionButtons: false,
+  continuousReply: true,
+  customPersonality: null,
+  embedColor: config.hexColour
+});
 
-/** Temporary directory for file operations */
-export const TEMP_DIR = path.join(__dirname, 'temp');
+const DEFAULT_IMAGE_USAGE = Object.freeze({
+  count: 0,
+  lastReset: Date.now(),
+  lastRequest: 0
+});
 
-// ============================================================================
-// DISCORD CLIENT INITIALIZATION
-// ============================================================================
+const DEFAULT_SUMMARY_USAGE = Object.freeze({
+  count: 0,
+  lastReset: Date.now()
+});
 
-/**
- * Discord client instance with required intents and partials
- * @type {Client}
- */
+const RATE_LIMITS = Object.freeze({
+  IMAGE_PER_DAY: 10,
+  IMAGE_PER_MINUTE: 60000,
+  SUMMARY_PER_DAY: 10
+});
+
+const TIME_CONSTANTS = Object.freeze({
+  ONE_DAY: 86400000,
+  ONE_HOUR: 3600000,
+  ONE_MINUTE: 60000
+});
+
 export const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -143,24 +106,12 @@ export const client = new Client({
   partials: [Partials.Channel],
 });
 
-/** Discord bot token from environment */
 export const token = process.env.DISCORD_BOT_TOKEN;
 
-// ============================================================================
-// API KEY MANAGEMENT
-// ============================================================================
-
-/**
- * Load and validate API keys from environment variables
- * Supports both indexed keys (GOOGLE_API_KEY1, GOOGLE_API_KEY2, etc.)
- * and a single GOOGLE_API_KEY
- * @returns {string[]} Array of valid API keys
- */
 function loadApiKeys() {
   const keys = [];
   let keyIndex = 1;
 
-  // Load indexed keys
   while (process.env[`GOOGLE_API_KEY${keyIndex}`]) {
     const key = process.env[`GOOGLE_API_KEY${keyIndex}`];
     if (validateApiKey(key)) {
@@ -171,7 +122,6 @@ function loadApiKeys() {
     keyIndex++;
   }
 
-  // Fallback to single key if no indexed keys found
   if (keys.length === 0 && process.env.GOOGLE_API_KEY) {
     const key = process.env.GOOGLE_API_KEY;
     if (validateApiKey(key)) {
@@ -185,68 +135,25 @@ function loadApiKeys() {
     throw new Error('No valid API keys found in environment variables');
   }
 
-  console.log(`✅ Loaded ${keys.length} API key(s)`);
   return keys;
 }
 
-/**
- * Validate API key format
- * @param {string} key - API key to validate
- * @returns {boolean} True if key is valid
- */
 function validateApiKey(key) {
   return typeof key === 'string' && key.length > 20 && !key.includes(' ');
 }
 
-/** Array of Google Gemini API keys */
 const apiKeys = loadApiKeys();
-// Update MAX_TOTAL_ATTEMPTS now that apiKeys is loaded
-RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS = Math.max(3, apiKeys.length * 3); // Changed from Math.max(90, ...)
-console.log(`✅ Retry strategy configured: ${RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS} total attempts (${apiKeys.length} keys × 3)`);
+const MAX_TOTAL_ATTEMPTS = Math.max(3, apiKeys.length * 3);
 
-/** Current active API key index */
 let currentKeyIdx = 0;
-
-/** Current Google AI client instance */
 let currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
 
-// ============================================================================
-// RATE LIMITING STATE
-// ============================================================================
-
-/**
- * Per-key usage statistics
- * @type {Map<number, {requests: number, lastUsed: number, errors: number, successfulRequests: number}>}
- */
 const keyUsageStats = new Map();
-
-/**
- * Per-key error tracking
- * @type {Map<number, {lastError: {message: string, timestamp: string}|null}>}
- */
 const keyErrorTracking = new Map();
-
-/**
- * Key-level cooldowns (for global key issues)
- * @type {Map<number, number>}
- */
 const keyCooldowns = new Map();
-
-/**
- * Per-model per-key rate limit tracking
- * Structure: Map<keyIdx, Map<modelName, {count: number, windowStart: number}>>
- * @type {Map<number, Map<string, {count: number, windowStart: number}>>}
- */
 const keyModelRateLimits = new Map();
-
-/**
- * Per-model per-key cooldown tracking
- * Structure: Map<keyIdx, Map<modelName, number>>
- * @type {Map<number, Map<string, number>>}
- */
 const keyModelCooldowns = new Map();
 
-// Initialize tracking for all keys
 apiKeys.forEach((_, idx) => {
   keyUsageStats.set(idx, { 
     requests: 0, 
@@ -259,16 +166,6 @@ apiKeys.forEach((_, idx) => {
   keyModelCooldowns.set(idx, new Map());
 });
 
-// ============================================================================
-// RATE LIMITING FUNCTIONS
-// ============================================================================
-
-/**
- * Check if a specific model on a specific key has exceeded its rate limit
- * @param {number} keyIdx - API key index
- * @param {string} modelName - Model identifier
- * @returns {boolean} True if rate limited
- */
 function isModelRateLimited(keyIdx, modelName) {
   const modelLimits = keyModelRateLimits.get(keyIdx);
   if (!modelLimits) return false;
@@ -279,7 +176,6 @@ function isModelRateLimited(keyIdx, modelName) {
   const now = Date.now();
   const elapsed = now - rateLimitData.windowStart;
 
-  // Reset window if more than 1 minute has passed
   if (elapsed >= RATE_LIMIT_CONFIG.WINDOW_DURATION_MS) {
     rateLimitData.count = 0;
     rateLimitData.windowStart = now;
@@ -290,23 +186,14 @@ function isModelRateLimited(keyIdx, modelName) {
   return rateLimitData.count >= RATE_LIMIT_CONFIG.REQUESTS_PER_MINUTE;
 }
 
-/**
- * Increment rate limit counter for a specific model on a specific key
- * @param {number} keyIdx - API key index
- * @param {string} modelName - Model identifier
- */
 function incrementModelRateLimit(keyIdx, modelName) {
   const modelLimits = keyModelRateLimits.get(keyIdx);
-  if (!modelLimits) {
-    console.error(`Rate limit tracking not initialized for key ${keyIdx}`);
-    return;
-  }
+  if (!modelLimits) return;
 
   let rateLimitData = modelLimits.get(modelName);
   const now = Date.now();
 
   if (!rateLimitData) {
-    // Initialize tracking for this model
     rateLimitData = { count: 1, windowStart: now };
     modelLimits.set(modelName, rateLimitData);
     return;
@@ -314,7 +201,6 @@ function incrementModelRateLimit(keyIdx, modelName) {
 
   const elapsed = now - rateLimitData.windowStart;
 
-  // Reset window if more than 1 minute has passed
   if (elapsed >= RATE_LIMIT_CONFIG.WINDOW_DURATION_MS) {
     rateLimitData.count = 1;
     rateLimitData.windowStart = now;
@@ -325,30 +211,14 @@ function incrementModelRateLimit(keyIdx, modelName) {
   modelLimits.set(modelName, rateLimitData);
 }
 
-/**
- * Set cooldown for a specific model on a specific key
- * @param {number} keyIdx - API key index
- * @param {string} modelName - Model identifier
- * @param {number} [cooldownMs] - Cooldown duration in milliseconds
- */
 function setModelCooldown(keyIdx, modelName, cooldownMs = RATE_LIMIT_CONFIG.COOLDOWN_DURATION_MS) {
   const modelCooldowns = keyModelCooldowns.get(keyIdx);
-  if (!modelCooldowns) {
-    console.error(`Cooldown tracking not initialized for key ${keyIdx}`);
-    return;
-  }
+  if (!modelCooldowns) return;
 
   const cooldownUntil = Date.now() + cooldownMs;
   modelCooldowns.set(modelName, cooldownUntil);
-  console.warn(`⏱️ Key ${keyIdx + 1} / Model ${modelName} on ${cooldownMs / 1000}s cooldown`);
 }
 
-/**
- * Check if a specific model on a specific key is on cooldown
- * @param {number} keyIdx - API key index
- * @param {string} modelName - Model identifier
- * @returns {boolean} True if on cooldown
- */
 function isModelOnCooldown(keyIdx, modelName) {
   const modelCooldowns = keyModelCooldowns.get(keyIdx);
   if (!modelCooldowns) return false;
@@ -357,56 +227,30 @@ function isModelOnCooldown(keyIdx, modelName) {
   return Date.now() < cooldownUntil;
 }
 
-/**
- * Find the next available model for the current key
- * Tries fallback models in order before giving up
- * @param {string} currentModelName - Current model that hit rate limit
- * @returns {string|null} Next available model name, or null if all exhausted
- */
 function findAvailableModel(currentModelName) {
-  const now = Date.now();
   const currentModelIdx = MODEL_FALLBACK_CHAIN.indexOf(currentModelName);
   
-  // Try each model in the fallback chain
   for (let i = 1; i < MODEL_FALLBACK_CHAIN.length; i++) {
     const testModelIdx = (currentModelIdx + i) % MODEL_FALLBACK_CHAIN.length;
     const testModelName = MODEL_FALLBACK_CHAIN[testModelIdx];
     
-    // Skip if this model is on cooldown for current key
-    if (isModelOnCooldown(currentKeyIdx, testModelName)) {
-      console.log(`⏭️ Model ${testModelName} on cooldown for Key ${currentKeyIdx + 1}`);
-      continue;
-    }
+    if (isModelOnCooldown(currentKeyIdx, testModelName)) continue;
+    if (isModelRateLimited(currentKeyIdx, testModelName)) continue;
     
-    // Skip if this model is rate limited for current key
-    if (isModelRateLimited(currentKeyIdx, testModelName)) {
-      console.log(`⏭️ Model ${testModelName} rate limited for Key ${currentKeyIdx + 1}`);
-      continue;
-    }
-    
-    console.log(`✅ Found available fallback model: ${testModelName} on Key ${currentKeyIdx + 1}`);
     return testModelName;
   }
   
   return null;
 }
 
-/**
- * Find next available API key (not on cooldown)
- * @returns {number|null} Key index, or null if all keys on cooldown
- */
 function findAvailableKey() {
   const now = Date.now();
   
-  // FIX: Start at i = 1 to check the NEXT key first
   for (let i = 1; i <= apiKeys.length; i++) {
     const testIdx = (currentKeyIdx + i) % apiKeys.length;
-    
-    // Check key-level cooldown
     const cooldownUntil = keyCooldowns.get(testIdx) || 0;
-    if (now < cooldownUntil) {
-      continue;
-    }
+    
+    if (now < cooldownUntil) continue;
     
     return testIdx;
   }
@@ -414,18 +258,9 @@ function findAvailableKey() {
   return null;
 }
 
-/**
- * Enhanced key/model switching with intelligent fallback
- * Tries fallback models before rotating keys
- * 
- * @param {Error} error - Error that triggered the switch
- * @param {string} currentModelName - Model that encountered the error
- * @returns {{keyRotated: boolean, modelChanged: boolean, newModel: string|null}}
- */
 export function switchToNextKeyOrModel(error, currentModelName) {
   const oldKeyIdx = currentKeyIdx;
   
-  // Detect error types
   const isRateLimit = 
     error?.status === 429 ||
     error?.code === 'RESOURCE_EXHAUSTED' ||
@@ -439,50 +274,32 @@ export function switchToNextKeyOrModel(error, currentModelName) {
      error?.message?.includes('file') || 
      error?.message?.includes('PERMISSION_DENIED'));
 
-  // CRITICAL: File permission errors should NOT trigger rotation
-  // Files are tied to the key that uploaded them
   if (isFileError) {
-    console.warn(`📁 File permission error - NOT rotating (files are key-specific)`);
-    console.warn(`📁 Error: ${error?.message || 'Unknown file error'}`);
     return { keyRotated: false, modelChanged: false, newModel: null };
   }
 
-  // Handle rate limit errors with intelligent fallback
   if (isRateLimit) {
-    // Set cooldown for the model that hit rate limit
     setModelCooldown(oldKeyIdx, currentModelName);
     
-    // STEP 1: Try to find another available model on the SAME key
     const nextModel = findAvailableModel(currentModelName);
     
     if (nextModel) {
-      console.log(`🔄 Switching to fallback model: ${nextModel} (staying on Key ${oldKeyIdx + 1})`);
       return { keyRotated: false, modelChanged: true, newModel: nextModel };
     }
-    
-    // STEP 2: All models on current key exhausted, try to rotate key
-    console.log(`⚠️ All models rate limited on Key ${oldKeyIdx + 1}, attempting key rotation...`);
     
     const nextKeyIdx = findAvailableKey();
     
     if (nextKeyIdx !== null && nextKeyIdx !== oldKeyIdx) {
       currentKeyIdx = nextKeyIdx;
       currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
-      console.log(`✅ Rotated to Key ${nextKeyIdx + 1}, retrying with model: ${currentModelName}`);
       return { keyRotated: true, modelChanged: false, newModel: currentModelName };
     }
     
-    // STEP 3: All keys exhausted, try fallback model on current key anyway as last resort
-    console.warn(`⚠️ ALL keys exhausted! Trying fallback model as last resort...`);
     const fallbackIdx = (MODEL_FALLBACK_CHAIN.indexOf(currentModelName) + 1) % MODEL_FALLBACK_CHAIN.length;
     const fallbackModel = MODEL_FALLBACK_CHAIN[fallbackIdx];
     return { keyRotated: false, modelChanged: true, newModel: fallbackModel };
   }
-
-  // For non-rate-limit errors, just log and don't change anything
-  console.log(`⚠️ Non-rate-limit error on Key ${oldKeyIdx + 1} / Model ${currentModelName}: ${error?.message || 'Unknown'}`);
   
-  // Track the error
   const tracking = keyErrorTracking.get(oldKeyIdx);
   if (tracking) {
     tracking.lastError = {
@@ -494,49 +311,31 @@ export function switchToNextKeyOrModel(error, currentModelName) {
   return { keyRotated: false, modelChanged: false, newModel: null };
 }
 
-/**
- * Backward compatibility wrapper for old switchToNextKey calls
- * @deprecated Use switchToNextKeyOrModel instead
- */
 export function switchToNextKey(error) {
   const result = switchToNextKeyOrModel(error, 'gemini-2.5-flash');
   return result.keyRotated || result.modelChanged;
 }
 
-/**
- * Execute an API call with automatic retry and intelligent fallback
- * Handles per-model rate limiting and key rotation
- * 
- * @param {Function} apiCall - Async function that takes model name and returns API result
- * @param {string} initialModelName - Initial model to try
- * @returns {Promise<any>} API call result
- * @throws {Error} If all retry attempts fail
- */
 async function withRetryPerModel(apiCall, initialModelName) {
   let totalAttempts = 0;
-  const maxTotalAttempts = RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS;
   let currentModel = initialModelName;
   
   const attemptsPerKey = new Map();
   apiKeys.forEach((_, idx) => attemptsPerKey.set(idx, 0));
 
-  while (totalAttempts < maxTotalAttempts) {
+  while (totalAttempts < MAX_TOTAL_ATTEMPTS) {
     const currentKey = currentKeyIdx;
     const keyAttempts = attemptsPerKey.get(currentKey) || 0;
     
     try {
       if (isModelRateLimited(currentKeyIdx, currentModel)) {
-        console.warn(`⏱️ Key ${currentKeyIdx + 1} / Model ${currentModel} hit rate limit`);
-        
         const nextModel = findAvailableModel(currentModel);
         
         if (nextModel) {
           currentModel = nextModel;
-          console.log(`🔄 Switched to fallback model: ${currentModel} (staying on Key ${currentKeyIdx + 1})`);
           totalAttempts++;
           continue;
         } else {
-          console.log(`⚠️ All models exhausted on Key ${currentKeyIdx + 1}, rotating key...`);
           const nextKeyIdx = findAvailableKey();
           
           if (nextKeyIdx !== null && nextKeyIdx !== currentKeyIdx) {
@@ -544,7 +343,6 @@ async function withRetryPerModel(apiCall, initialModelName) {
             currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
             currentModel = initialModelName;
             attemptsPerKey.set(currentKeyIdx, 0);
-            console.log(`✅ Rotated to Key ${currentKeyIdx + 1}, using model: ${currentModel}`);
             totalAttempts++;
             continue;
           }
@@ -579,8 +377,6 @@ async function withRetryPerModel(apiCall, initialModelName) {
         stats.errors++;
       }
 
-      console.warn(`API call failed (Key: ${currentKeyIdx + 1}/${apiKeys.length}, Model: ${currentModel}, Attempt: ${totalAttempts}/${maxTotalAttempts}): ${error.message}`);
-      
       const isRateLimit = 
         error?.status === 429 ||
         error?.code === 'RESOURCE_EXHAUSTED' ||
@@ -595,9 +391,7 @@ async function withRetryPerModel(apiCall, initialModelName) {
          error?.message?.includes('PERMISSION_DENIED'));
 
       if (isFileError) {
-        console.warn(`📁 File permission error - NOT rotating (files are key-specific)`);
-        
-        if (totalAttempts >= maxTotalAttempts) {
+        if (totalAttempts >= MAX_TOTAL_ATTEMPTS) {
           throw new Error(`File permission error persists: ${error.message}`);
         }
         
@@ -610,10 +404,7 @@ async function withRetryPerModel(apiCall, initialModelName) {
         
         if (nextModel) {
           currentModel = nextModel;
-          console.log(`🔄 Rate limit: Switched to fallback model: ${currentModel} (staying on Key ${currentKeyIdx + 1})`);
         } else {
-          console.log(`⚠️ All models rate limited on Key ${currentKeyIdx + 1}, attempting key rotation...`);
-          
           const nextKeyIdx = findAvailableKey();
           
           if (nextKeyIdx !== null && nextKeyIdx !== currentKeyIdx) {
@@ -621,9 +412,7 @@ async function withRetryPerModel(apiCall, initialModelName) {
             currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
             currentModel = initialModelName;
             attemptsPerKey.set(currentKeyIdx, 0);
-            console.log(`✅ Rotated to Key ${currentKeyIdx + 1}, retrying with model: ${currentModel}`);
           } else {
-            console.warn(`⚠️ ALL keys exhausted! Trying fallback model as last resort...`);
             const fallbackIdx = (MODEL_FALLBACK_CHAIN.indexOf(currentModel) + 1) % MODEL_FALLBACK_CHAIN.length;
             currentModel = MODEL_FALLBACK_CHAIN[fallbackIdx];
           }
@@ -636,7 +425,6 @@ async function withRetryPerModel(apiCall, initialModelName) {
       let shouldRotate = false;
       
       if (RETRY_STRATEGY.AGGRESSIVE_ROTATION && keyAttempts >= RETRY_STRATEGY.MAX_ATTEMPTS_PER_KEY - 1) {
-        console.log(`🔄 Forcing key rotation after ${keyAttempts + 1} attempts on Key ${currentKey + 1}`);
         shouldRotate = true;
       }
       
@@ -647,14 +435,11 @@ async function withRetryPerModel(apiCall, initialModelName) {
           currentKeyIdx = nextKeyIdx;
           currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
           attemptsPerKey.set(currentKeyIdx, 0);
-          console.log(`✅ Rotated to Key ${currentKeyIdx + 1}`);
-        } else {
-          console.warn(`⚠️ No available keys to rotate to`);
         }
       }
       
-      if (totalAttempts >= maxTotalAttempts) {
-        throw new Error(`All retry attempts exhausted (${maxTotalAttempts} attempts). Last error: ${error.message}`);
+      if (totalAttempts >= MAX_TOTAL_ATTEMPTS) {
+        throw new Error(`All retry attempts exhausted (${MAX_TOTAL_ATTEMPTS} attempts). Last error: ${error.message}`);
       }
       
       const errorMessage = error.message || '';
@@ -677,10 +462,6 @@ async function withRetryPerModel(apiCall, initialModelName) {
   throw new Error(`Retry loop exited unexpectedly after ${totalAttempts} attempts`);
 }
 
-/**
- * Legacy retry function for backward compatibility
- * @deprecated Use withRetryPerModel instead
- */
 async function withRetry(apiCall) {
   return withRetryPerModel(
     async (modelName) => await apiCall(),
@@ -688,15 +469,6 @@ async function withRetry(apiCall) {
   );
 }
 
-// ============================================================================
-// GEMINI AI CLIENT PROXY
-// ============================================================================
-
-/**
- * Proxied Gemini AI client that automatically handles retries and key rotation
- * All API calls go through withRetry for resilience
- * @type {Proxy}
- */
 export const genAI = new Proxy({}, {
   get(target, prop) {
     if (prop === 'models') {
@@ -745,12 +517,6 @@ export const genAI = new Proxy({}, {
   }
 });
 
-/**
- * Create a file URI part for Gemini API
- * @param {string} fileUri - File URI from upload
- * @param {string} mimeType - MIME type of the file
- * @returns {{fileData: {fileUri: string, mimeType: string}}}
- */
 export function createPartFromUri(fileUri, mimeType) {
   return {
     fileData: {
@@ -760,15 +526,6 @@ export function createPartFromUri(fileUri, mimeType) {
   };
 }
 
-// ============================================================================
-// API KEY STATISTICS
-// ============================================================================
-
-/**
- * Get comprehensive statistics for all API keys
- * Includes per-model rate limit information
- * @returns {{totalKeys: number, currentKey: number, rateLimit: string, keys: Array}}
- */
 export function getApiKeyStats() {
   const stats = [];
   const now = Date.now();
@@ -779,7 +536,6 @@ export function getApiKeyStats() {
     const cooldown = keyCooldowns.get(idx);
     const isOnCooldown = cooldown && now < cooldown;
 
-    // Get per-model stats for this key
     const modelStats = [];
     const modelLimits = keyModelRateLimits.get(idx);
     const modelCooldowns = keyModelCooldowns.get(idx);
@@ -791,7 +547,6 @@ export function getApiKeyStats() {
         const isModelCooldown = now < cooldownUntil;
         const isModelLimited = limitData && isModelRateLimited(idx, modelName);
         
-        // Calculate time until rate limit resets
         let secondsUntilReset = 0;
         if (limitData) {
           const timeUntilReset = Math.max(0, RATE_LIMIT_CONFIG.WINDOW_DURATION_MS - (now - limitData.windowStart));
@@ -838,30 +593,14 @@ export function getApiKeyStats() {
   };
 }
 
-// ============================================================================
-// REQUEST QUEUE MANAGEMENT
-// ============================================================================
-
-/**
- * Request queues for each user to prevent concurrent request processing
- * Structure: Map<userId, {queue: Array, isProcessing: boolean}>
- * @type {Map<string, {queue: Array, isProcessing: boolean}>}
- */
 export const requestQueues = new Map();
 
-/**
- * Mutex class for critical section protection
- */
 class Mutex {
   constructor() {
     this._locked = false;
     this._queue = [];
   }
 
-  /**
-   * Acquire the mutex lock
-   * @returns {Promise<void>}
-   */
   acquire() {
     return new Promise(resolve => {
       if (!this._locked) {
@@ -873,9 +612,6 @@ class Mutex {
     });
   }
 
-  /**
-   * Release the mutex lock
-   */
   release() {
     if (this._queue.length > 0) {
       const nextResolve = this._queue.shift();
@@ -885,11 +621,6 @@ class Mutex {
     }
   }
 
-  /**
-   * Execute a function with exclusive access
-   * @param {Function} callback - Async function to execute
-   * @returns {Promise<any>}
-   */
   async runExclusive(callback) {
     await this.acquire();
     try {
@@ -900,20 +631,8 @@ class Mutex {
   }
 }
 
-/**
- * Mutex for chat history operations
- * Prevents race conditions during concurrent history updates
- */
 export const chatHistoryLock = new Mutex();
 
-// ============================================================================
-// BOT STATE MANAGEMENT
-// ============================================================================
-
-/**
- * Central state object containing all bot data
- * Provides getters/setters for controlled access
- */
 class BotState {
   constructor() {
     this._chatHistories = {};
@@ -943,7 +662,6 @@ class BotState {
     this._summaryUsage = {};
   }
 
-  // Getters and setters for all state properties
   get chatHistories() { return this._chatHistories; }
   set chatHistories(v) { this._chatHistories = v; }
   
@@ -1022,27 +740,11 @@ class BotState {
   set summaryUsage(v) { this._summaryUsage = v; }
 }
 
-/**
- * Global bot state instance
- * @type {BotState}
- */
 export const state = new BotState();
 
-// ============================================================================
-// STATE PERSISTENCE
-// ============================================================================
-
-/** Flag to prevent concurrent save operations */
 let isSaving = false;
-
-/** Flag to indicate a save is pending */
 let savePending = false;
 
-/**
- * Save all bot state to database
- * Implements debouncing to prevent excessive writes
- * @returns {Promise<void>}
- */
 export async function saveStateToFile() {
   if (isSaving) {
     savePending = true;
@@ -1054,7 +756,6 @@ export async function saveStateToFile() {
   try {
     const savePromises = [];
 
-    // User settings
     for (const [userId, settings] of Object.entries(state.userSettings)) {
       savePromises.push(
         db.saveUserSettings(userId, settings).catch(err => 
@@ -1063,7 +764,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Server settings
     for (const [guildId, settings] of Object.entries(state.serverSettings)) {
       savePromises.push(
         db.saveServerSettings(guildId, settings).catch(err => 
@@ -1072,7 +772,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Chat histories
     for (const [id, history] of Object.entries(state.chatHistories)) {
       savePromises.push(
         db.saveChatHistory(id, history).catch(err => 
@@ -1081,7 +780,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Custom instructions
     for (const [id, instructions] of Object.entries(state.customInstructions)) {
       savePromises.push(
         db.saveCustomInstructions(id, instructions).catch(err => 
@@ -1090,7 +788,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Blacklisted users
     for (const [guildId, users] of Object.entries(state.blacklistedUsers)) {
       savePromises.push(
         db.saveBlacklistedUsers(guildId, users).catch(err => 
@@ -1099,7 +796,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Channel settings
     for (const [channelId, value] of Object.entries(state.alwaysRespondChannels)) {
       savePromises.push(
         db.saveChannelSetting(channelId, 'alwaysRespond', value).catch(err => 
@@ -1107,6 +803,7 @@ export async function saveStateToFile() {
         )
       );
     }
+    
     for (const [channelId, value] of Object.entries(state.channelWideChatHistory)) {
       savePromises.push(
         db.saveChannelSetting(channelId, 'wideChatHistory', value).catch(err => 
@@ -1114,6 +811,7 @@ export async function saveStateToFile() {
         )
       );
     }
+    
     for (const [channelId, value] of Object.entries(state.continuousReplyChannels)) {
       savePromises.push(
         db.saveChannelSetting(channelId, 'continuousReply', value).catch(err => 
@@ -1122,7 +820,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // User response preferences
     for (const [userId, preference] of Object.entries(state.userResponsePreference)) {
       savePromises.push(
         db.saveUserResponsePreference(userId, preference).catch(err => 
@@ -1131,7 +828,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Image usage
     for (const [userId, usage] of Object.entries(state.imageUsage)) {
       savePromises.push(
         db.saveImageUsage(userId, usage).catch(err => 
@@ -1140,7 +836,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Birthdays
     for (const [userId, data] of Object.entries(state.birthdays)) {
       savePromises.push(
         db.saveBirthday(userId, data).catch(err => 
@@ -1149,7 +844,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Roulette configurations
     for (const [channelId, config] of Object.entries(state.roulette)) {
       savePromises.push(
         db.saveRouletteConfig(channelId, config).catch(err => 
@@ -1158,7 +852,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Daily quotes
     for (const [userId, config] of Object.entries(state.dailyQuotes)) {
       savePromises.push(
         db.saveDailyQuote(userId, config).catch(err => 
@@ -1167,7 +860,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Compliment counts
     for (const [userId, count] of Object.entries(state.complimentCounts)) {
       savePromises.push(
         db.saveComplimentCount(userId, count).catch(err => 
@@ -1176,7 +868,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // User timezones
     for (const [userId, timezone] of Object.entries(state.userTimezones)) {
       savePromises.push(
         db.saveUserTimezone(userId, timezone).catch(err => 
@@ -1185,7 +876,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Server digests
     for (const [guildId, digest] of Object.entries(state.serverDigests)) {
       savePromises.push(
         db.saveServerDigest(guildId, digest).catch(err => 
@@ -1194,7 +884,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Quote usage
     for (const [userId, usage] of Object.entries(state.quoteUsage)) {
       savePromises.push(
         db.saveQuoteUsage(userId, usage).catch(err => 
@@ -1203,7 +892,6 @@ export async function saveStateToFile() {
       );
     }
 
-    // Realive configurations
     for (const [guildId, config] of Object.entries(state.realive)) {
       savePromises.push(
         db.saveRealiveConfig(guildId, config).catch(err => 
@@ -1212,7 +900,6 @@ export async function saveStateToFile() {
       );
     }
     
-    // Summary usage
     for (const [userId, usage] of Object.entries(state.summaryUsage)) {
       savePromises.push(
         db.saveSummaryUsage(userId, usage).catch(err => 
@@ -1221,14 +908,12 @@ export async function saveStateToFile() {
       );
     }
 
-    // Active users in channels
     savePromises.push(
       db.saveActiveUsersInChannels(state.activeUsersInChannels).catch(err => 
         console.error('Failed to save active users:', err.message)
       )
     );
 
-    // Execute all saves in parallel
     await Promise.all(savePromises);
     
   } catch (error) {
@@ -1236,25 +921,17 @@ export async function saveStateToFile() {
   } finally {
     isSaving = false;
     
-    // Process pending save if one was requested during this save
     if (savePending) {
       savePending = false;
-      // Use setImmediate to prevent stack overflow
       setImmediate(() => saveStateToFile());
     }
   }
 }
 
-/**
- * Load all bot state from database
- * @returns {Promise<void>}
- */
 async function loadStateFromDB() {
   try {
-    // Ensure temp directory exists
     await fs.mkdir(TEMP_DIR, { recursive: true });
 
-    // Load all state in parallel
     const [
       chatHistories,
       userSettings,
@@ -1297,7 +974,6 @@ async function loadStateFromDB() {
       db.getAllSummaryUsages()
     ]);
 
-    // Assign loaded data to state
     state.chatHistories = chatHistories;
     state.userSettings = userSettings;
     state.serverSettings = serverSettings;
@@ -1318,7 +994,6 @@ async function loadStateFromDB() {
     state.realive = realive;
     state.summaryUsage = summaryUsage;
 
-    // Load channel settings
     state.alwaysRespondChannels = await db.getAllChannelSettings('alwaysRespond');
     state.channelWideChatHistory = await db.getAllChannelSettings('wideChatHistory');
     state.continuousReplyChannels = await db.getAllChannelSettings('continuousReply');
@@ -1331,21 +1006,10 @@ async function loadStateFromDB() {
   }
 }
 
-// ============================================================================
-// HISTORY MANAGEMENT
-// ============================================================================
-
-/**
- * Get formatted chat history for a user/channel/guild
- * @param {string} id - User/channel/guild ID
- * @param {string|null} [guildId] - Optional guild ID for server-wide history
- * @returns {Array} Formatted history for Gemini API
- */
 export function getHistory(id, guildId = null) {
   const historyObject = state.chatHistories[id] || {};
   let combinedHistory = [];
 
-  // Include guild history if applicable
   if (guildId && state.chatHistories[guildId]) {
     const guildHistory = state.chatHistories[guildId] || {};
     for (const messagesId in guildHistory) {
@@ -1355,22 +1019,18 @@ export function getHistory(id, guildId = null) {
     }
   }
 
-  // Add user/channel specific history
   for (const messagesId in historyObject) {
     if (Object.prototype.hasOwnProperty.call(historyObject, messagesId)) {
       combinedHistory = [...combinedHistory, ...historyObject[messagesId]];
     }
   }
 
-  // Sort by timestamp
   combinedHistory.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
-  // Limit to maximum messages
   if (combinedHistory.length > STATE_CONFIG.MAX_MESSAGES) {
     combinedHistory = combinedHistory.slice(-STATE_CONFIG.MAX_MESSAGES);
   }
 
-  // Format for API
   const apiHistory = [];
   let previousTimestamp = null;
 
@@ -1380,7 +1040,6 @@ export function getHistory(id, guildId = null) {
       parts: []
     };
 
-    // Add time elapsed context if significant gap
     if (previousTimestamp) {
       const timeDiffMs = entry.timestamp - previousTimestamp;
       if (timeDiffMs > STATE_CONFIG.CONTEXT_BREAK_THRESHOLD) {
@@ -1399,7 +1058,6 @@ export function getHistory(id, guildId = null) {
         if (part.text !== undefined) {
           let textVal = part.text;
           
-          // Add user info to first text part
           if (!userInfoAdded && entry.role === 'user' && entry.username && entry.displayName) {
             textVal = `[${entry.displayName} (@${entry.username})]: ${textVal}`;
             userInfoAdded = true;
@@ -1427,14 +1085,6 @@ export function getHistory(id, guildId = null) {
   return apiHistory;
 }
 
-/**
- * Update chat history with new messages
- * @param {string} id - User/channel/guild ID
- * @param {Array} newHistory - New history entries
- * @param {string} messagesId - Message identifier
- * @param {string|null} [username] - Username
- * @param {string|null} [displayName] - Display name
- */
 export function updateChatHistory(id, newHistory, messagesId, username = null, displayName = null) {
   if (!state.chatHistories[id]) {
     state.chatHistories[id] = {};
@@ -1468,11 +1118,6 @@ export function updateChatHistory(id, newHistory, messagesId, username = null, d
   ];
 }
 
-/**
- * Format duration in human-readable form
- * @param {number} milliseconds - Duration in milliseconds
- * @returns {string} Formatted duration
- */
 function formatDuration(milliseconds) {
   const seconds = Math.floor(milliseconds / 1000);
   const minutes = Math.floor(seconds / 60);
@@ -1485,23 +1130,10 @@ function formatDuration(milliseconds) {
   return `${seconds} second${seconds > 1 ? 's' : ''}`;
 }
 
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
-
-/**
- * Get user's response format preference
- * @param {string} userId - User ID
- * @returns {string} Response format ('Normal' or 'Embedded')
- */
 export function getUserResponsePreference(userId) {
   return state.userResponsePreference[userId] || config.defaultResponseFormat;
 }
 
-/**
- * Initialize blacklist and default settings for a guild
- * @param {string} guildId - Guild ID
- */
 export function initializeBlacklistForGuild(guildId) {
   try {
     if (!state.blacklistedUsers[guildId]) {
@@ -1509,19 +1141,8 @@ export function initializeBlacklistForGuild(guildId) {
     }
     
     if (!state.serverSettings[guildId]) {
-      state.serverSettings[guildId] = {
-        selectedModel: 'gemini-2.5-flash',
-        responseFormat: 'Normal',
-        showActionButtons: false,
-        continuousReply: false,
-        customPersonality: null,
-        embedColor: config.hexColour,
-        overrideUserSettings: true,
-        serverChatHistory: false,
-        allowedChannels: []
-      };
+      state.serverSettings[guildId] = { ...DEFAULT_SERVER_SETTINGS };
     } else {
-      // Ensure all required fields exist
       if (!state.serverSettings[guildId].allowedChannels) {
         state.serverSettings[guildId].allowedChannels = [];
       }
@@ -1529,7 +1150,7 @@ export function initializeBlacklistForGuild(guildId) {
         state.serverSettings[guildId].showActionButtons = false;
       }
       if (state.serverSettings[guildId].continuousReply === undefined) {
-        state.serverSettings[guildId].continuousReply = true;
+        state.serverSettings[guildId].continuousReply = false;
       }
     }
   } catch (error) {
@@ -1537,70 +1158,46 @@ export function initializeBlacklistForGuild(guildId) {
   }
 }
 
-/**
- * Check if user has exceeded image generation rate limit
- * @param {string} userId - User ID
- * @returns {{allowed: boolean, message?: string}} Rate limit status
- */
 export function checkImageRateLimit(userId) {
   const now = Date.now();
-  const ONE_DAY = 24 * 60 * 60 * 1000;
-  const ONE_MINUTE = 60 * 1000;
 
   if (!state.imageUsage[userId]) {
-    state.imageUsage[userId] = {
-      count: 0,
-      lastReset: now,
-      lastRequest: 0
-    };
+    state.imageUsage[userId] = { ...DEFAULT_IMAGE_USAGE };
   }
 
   const usage = state.imageUsage[userId];
 
-  // Reset daily counter
-  if (now - usage.lastReset > ONE_DAY) {
+  if (now - usage.lastReset > TIME_CONSTANTS.ONE_DAY) {
     usage.count = 0;
     usage.lastReset = now;
   }
 
-  // Check per-minute rate limit
-  if (now - usage.lastRequest < ONE_MINUTE) {
-    const waitSeconds = Math.ceil((ONE_MINUTE - (now - usage.lastRequest)) / 1000);
+  if (now - usage.lastRequest < RATE_LIMITS.IMAGE_PER_MINUTE) {
+    const waitSeconds = Math.ceil((RATE_LIMITS.IMAGE_PER_MINUTE - (now - usage.lastRequest)) / 1000);
     return {
       allowed: false,
       message: `⏳ Please wait ${waitSeconds}s before generating another image.`
     };
   }
 
-  // Check daily limit
-  const limit = config.imageConfig?.maxPerDay || 10;
-  if (usage.count >= limit) {
+  if (usage.count >= RATE_LIMITS.IMAGE_PER_DAY) {
     return {
       allowed: false,
-      message: `🛑 You've reached your daily limit of ${limit} images. Limits reset daily.`
+      message: `🛑 You've reached your daily limit of ${RATE_LIMITS.IMAGE_PER_DAY} images. Limits reset daily.`
     };
   }
 
   return { allowed: true };
 }
 
-/**
- * Increment image usage counter for user
- * @param {string} userId - User ID
- */
 export function incrementImageUsage(userId) {
   const now = Date.now();
   
   if (!state.imageUsage[userId]) {
-    state.imageUsage[userId] = {
-      count: 0,
-      lastReset: now,
-      lastRequest: 0
-    };
+    state.imageUsage[userId] = { ...DEFAULT_IMAGE_USAGE };
   }
 
-  const ONE_DAY = 24 * 60 * 60 * 1000;
-  if (now - state.imageUsage[userId].lastReset > ONE_DAY) {
+  if (now - state.imageUsage[userId].lastReset > TIME_CONSTANTS.ONE_DAY) {
     state.imageUsage[userId].count = 0;
     state.imageUsage[userId].lastReset = now;
   }
@@ -1609,58 +1206,38 @@ export function incrementImageUsage(userId) {
   state.imageUsage[userId].lastRequest = now;
 }
 
-/**
- * Check if user has exceeded summary generation rate limit
- * @param {string} userId - User ID
- * @returns {{allowed: boolean, message?: string}} Rate limit status
- */
 export function checkSummaryRateLimit(userId) {
   const now = Date.now();
-  const ONE_DAY = 24 * 60 * 60 * 1000;
-  const LIMIT = 10;
 
   if (!state.summaryUsage[userId]) {
-    state.summaryUsage[userId] = {
-      count: 0,
-      lastReset: now
-    };
+    state.summaryUsage[userId] = { ...DEFAULT_SUMMARY_USAGE };
   }
 
   const usage = state.summaryUsage[userId];
 
-  // Reset daily counter
-  if (now - usage.lastReset > ONE_DAY) {
+  if (now - usage.lastReset > TIME_CONSTANTS.ONE_DAY) {
     usage.count = 0;
     usage.lastReset = now;
   }
 
-  // Check daily limit
-  if (usage.count >= LIMIT) {
+  if (usage.count >= RATE_LIMITS.SUMMARY_PER_DAY) {
     return {
       allowed: false,
-      message: `🛑 You've reached your daily limit of ${LIMIT} summaries. Limits reset daily.`
+      message: `🛑 You've reached your daily limit of ${RATE_LIMITS.SUMMARY_PER_DAY} summaries. Limits reset daily.`
     };
   }
 
   return { allowed: true };
 }
 
-/**
- * Increment summary usage counter for user
- * @param {string} userId - User ID
- */
 export function incrementSummaryUsage(userId) {
   const now = Date.now();
   
   if (!state.summaryUsage[userId]) {
-    state.summaryUsage[userId] = {
-      count: 0,
-      lastReset: now
-    };
+    state.summaryUsage[userId] = { ...DEFAULT_SUMMARY_USAGE };
   }
 
-  const ONE_DAY = 24 * 60 * 60 * 1000;
-  if (now - state.summaryUsage[userId].lastReset > ONE_DAY) {
+  if (now - state.summaryUsage[userId].lastReset > TIME_CONSTANTS.ONE_DAY) {
     state.summaryUsage[userId].count = 0;
     state.summaryUsage[userId].lastReset = now;
   }
@@ -1668,11 +1245,6 @@ export function incrementSummaryUsage(userId) {
   state.summaryUsage[userId].count++;
 }
 
-/**
- * Preserve attachment context in chat histories
- * Replaces file references with text descriptions to prevent 403 errors
- * @param {Object} histories - Chat histories object
- */
 function preserveAttachmentContext(histories) {
   try {
     Object.values(histories).forEach(subIdEntries => {
@@ -1709,9 +1281,6 @@ function preserveAttachmentContext(histories) {
   }
 }
 
-/**
- * Schedule daily reset for rate limits and usage counters
- */
 function scheduleDailyReset() {
   try {
     const now = new Date();
@@ -1726,133 +1295,74 @@ function scheduleDailyReset() {
 
     setTimeout(async () => {
       await chatHistoryLock.runExclusive(async () => {
-        console.log('🔄 Executing daily reset...');
-        
-        // Preserve attachment context before reset
         preserveAttachmentContext(state.chatHistories);
 
         const currentMs = Date.now();
         
-        // Reset image usage counters
         for (const userId in state.imageUsage) {
           state.imageUsage[userId].count = 0;
           state.imageUsage[userId].lastReset = currentMs;
         }
 
-        // Reset summary usage counters
         for (const userId in state.summaryUsage) {
           state.summaryUsage[userId].count = 0;
           state.summaryUsage[userId].lastReset = currentMs;
         }
 
         await saveStateToFile();
-        console.log('✅ Daily reset completed successfully');
       });
       
-      // Schedule next reset
       scheduleDailyReset();
     }, timeUntilNextReset);
 
-    console.log(`⏰ Daily reset scheduled for ${nextReset.toISOString()}`);
   } catch (error) {
     console.error('Error scheduling daily reset:', error);
   }
 }
 
-// ============================================================================
-// INITIALIZATION
-// ============================================================================
-
-/**
- * Initialize bot manager
- * - Connect to database
- * - Load state
- * - Schedule periodic tasks
- * - Set up cleanup handlers
- * @returns {Promise<void>}
- */
 export async function initialize() {
   try {
-    console.log('🚀 Initializing Bot Manager...');
-    
-    // Validate environment
     if (!token) {
       throw new Error('DISCORD_BOT_TOKEN not found in environment variables');
     }
 
-    // Connect to database
     await db.connectDB();
-    console.log('✅ Database connected');
-
-    // Load bot state
     await loadStateFromDB();
-    console.log('✅ State loaded');
-
-    // Schedule daily reset
+    
     scheduleDailyReset();
-    console.log('✅ Daily reset scheduled');
 
-    // Schedule periodic state saves
     setInterval(async () => {
       try {
         await saveStateToFile();
-        console.log('💾 Periodic state save completed');
       } catch (error) {
         console.error('❌ Periodic state save failed:', error);
       }
     }, RESOURCE_CONFIG.STATE_SAVE_INTERVAL);
 
-    // Schedule periodic statistics logging
     setInterval(() => {
-      console.log('📊 API Key Statistics Report');
-      console.table(getApiKeyStats().keys.map(k => ({
-        Key: k.keyNumber,
-        Status: k.status,
-        Requests: k.totalRequests,
-        Success: k.successfulRequests,
-        Errors: k.errors,
-        Current: k.isCurrent ? '⭐' : ''
-      })));
+      const stats = getApiKeyStats();
+      console.log(`\n📊 API Keys: ${stats.totalKeys} total, Current: Key ${stats.currentKey}, Capacity: ${stats.effectiveCapacity}`);
     }, RESOURCE_CONFIG.STATS_LOG_INTERVAL);
 
-    // Display startup statistics
-    console.log('📊 Startup Statistics:');
-    console.log(JSON.stringify(getApiKeyStats(), null, 2));
+    const initStats = getApiKeyStats();
+    console.log(`\n✅ Bot Manager Initialized\n📊 API Configuration: ${initStats.totalKeys} keys, ${initStats.rateLimit}, Total capacity: ${initStats.effectiveCapacity}`);
     
-    console.log('✅ Bot Manager initialized successfully');
   } catch (error) {
     console.error('❌ Critical error during initialization:', error);
     throw error;
   }
 }
 
-// ============================================================================
-// GRACEFUL SHUTDOWN
-// ============================================================================
-
-/**
- * Perform graceful shutdown
- * @param {string} signal - Signal that triggered shutdown
- */
 async function gracefulShutdown(signal) {
   console.log(`\n🛑 Received ${signal}, performing graceful shutdown...`);
   
   try {
-    // Save final state
-    console.log('💾 Saving final state...');
     await saveStateToFile();
-    console.log('✅ State saved successfully');
-    
-    // Close database connection
-    console.log('🔌 Closing database connection...');
     await db.closeDB();
-    console.log('✅ Database connection closed');
     
-    // Display final statistics
-    console.log('📊 Shutdown Statistics:');
-    console.log(JSON.stringify(getApiKeyStats(), null, 2));
+    const finalStats = getApiKeyStats();
+    console.log(`\n📊 Final Statistics: ${finalStats.keys.reduce((sum, k) => sum + k.totalRequests, 0)} total requests across ${finalStats.totalKeys} keys`);
     
-    console.log('✅ Graceful shutdown completed');
     process.exit(0);
   } catch (error) {
     console.error('❌ Error during graceful shutdown:', error);
@@ -1860,11 +1370,9 @@ async function gracefulShutdown(signal) {
   }
 }
 
-// Register shutdown handlers
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-// Handle uncaught errors
 process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
   gracefulShutdown('uncaughtException');
@@ -1874,10 +1382,6 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
   gracefulShutdown('unhandledRejection');
 });
-
-// ============================================================================
-// EXPORTS
-// ============================================================================
 
 export default {
   client,
