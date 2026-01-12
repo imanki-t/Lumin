@@ -5,74 +5,138 @@ import axios from 'axios';
 import { TEMP_DIR, client } from '../botManager.js';
 import config from '../config.js';
 
-const hexColour = config.hexColour;
+const DEFAULT_EMBED_COLOR = config.hexColour;
 
-export function updateEmbed(botMessage, finalResponse, message, groundingMetadata = null, urlContextMetadata = null, effectiveSettings) {
-  try {
-    const isGuild = message.guild !== null;
-    const embedColor = effectiveSettings.embedColor || hexColour;
-    const continuousReply = effectiveSettings.continuousReply || false;
+const EMBED_LIMITS = {
+  DESCRIPTION_MAX: 4096,
+  FIELD_NAME_MAX: 256,
+  FIELD_VALUE_MAX: 1024
+};
 
-    const embed = new EmbedBuilder()
-      .setColor(embedColor)
-      .setDescription(finalResponse.slice(0, 4096))
-      .setTimestamp();
+const METADATA_CONFIG = {
+  MAX_QUERIES: 3,
+  MAX_SOURCES: 5,
+  MAX_URLS: 3
+};
 
-    if (!continuousReply) {
-      embed.setAuthor({
-        name: `To ${message.author.displayName}`,
-        iconURL: message.author.displayAvatarURL()
-      });
-    }
+const FIELD_NAMES = {
+  SEARCH_QUERIES: '🔍 Search Queries',
+  SOURCES: '📚 Sources',
+  URL_CONTEXT: '🔗 URL Context'
+};
 
-    if (groundingMetadata && effectiveSettings.responseFormat === 'Embedded') {
-      addGroundingMetadataToEmbed(embed, groundingMetadata);
-    }
+const FIELD_PREFIXES = {
+  BULLET: '• ',
+  SOURCE_FALLBACK: 'Source'
+};
 
-    if (urlContextMetadata && effectiveSettings.responseFormat === 'Embedded') {
-      addUrlContextMetadataToEmbed(embed, urlContextMetadata);
-    }
+const URL_RETRIEVAL_STATUS = {
+  SUCCESS: 'URL_RETRIEVAL_STATUS_SUCCESS',
+  SUCCESS_EMOJI: '✅',
+  FAILURE_EMOJI: '❌'
+};
 
-    if (isGuild) {
-      embed.setFooter({
-        text: message.guild.name,
-        iconURL: message.guild.iconURL() || 'https://ai.google.dev/static/site-assets/images/share.png'
-      });
-    }
+const DEFAULT_ICONS = {
+  GOOGLE_AI: 'https://ai.google.dev/static/site-assets/images/share.png'
+};
 
-    botMessage.edit({
-      content: ' ',
-      embeds: [embed],
-      components: []
-    }).catch(() => {});
-  } catch (error) {
-    console.error("Error updating embed:", error.message);
+const FILE_CONFIG = {
+  RESPONSE_PREFIX: 'response-',
+  FILE_EXTENSION: '.txt'
+};
+
+const BUTTON_CONFIG = {
+  DOWNLOAD: {
+    CUSTOM_ID: 'download_message',
+    LABEL: 'Save',
+    EMOJI: '💾',
+    STYLE: ButtonStyle.Secondary
+  },
+  DELETE: {
+    CUSTOM_ID_PREFIX: 'delete_message-',
+    LABEL: 'Delete',
+    EMOJI: '🗑️',
+    STYLE: ButtonStyle.Danger
   }
+};
+
+const ACTION_ROW_LIMITS = {
+  MAX_COMPONENTS: 5
+};
+
+const MESSAGE_PREFIXES = {
+  INTERACTION: 'Here is the response:',
+  MESSAGE: 'Here is the response:'
+};
+
+function createBaseEmbed(color, description) {
+  return new EmbedBuilder()
+    .setColor(color)
+    .setDescription(description.slice(0, EMBED_LIMITS.DESCRIPTION_MAX))
+    .setTimestamp();
+}
+
+function addAuthorToEmbed(embed, user, prefix = '') {
+  const name = prefix ? `${prefix} ${user.displayName}` : user.displayName;
+  embed.setAuthor({
+    name: name,
+    iconURL: user.displayAvatarURL()
+  });
+  return embed;
+}
+
+function addFooterToEmbed(embed, guild) {
+  if (guild) {
+    embed.setFooter({
+      text: guild.name,
+      iconURL: guild.iconURL() || DEFAULT_ICONS.GOOGLE_AI
+    });
+  }
+  return embed;
+}
+
+function formatSearchQuery(query) {
+  return `${FIELD_PREFIXES.BULLET}${query}`;
+}
+
+function formatSource(chunk, index) {
+  if (chunk.web) {
+    const title = chunk.web.title || FIELD_PREFIXES.SOURCE_FALLBACK;
+    return `${FIELD_PREFIXES.BULLET}[${title}](${chunk.web.uri})`;
+  }
+  return `${FIELD_PREFIXES.BULLET}${FIELD_PREFIXES.SOURCE_FALLBACK} ${index + 1}`;
+}
+
+function formatUrlMetadata(urlData) {
+  const emoji = urlData.url_retrieval_status === URL_RETRIEVAL_STATUS.SUCCESS ? 
+    URL_RETRIEVAL_STATUS.SUCCESS_EMOJI : 
+    URL_RETRIEVAL_STATUS.FAILURE_EMOJI;
+  return `${emoji} ${urlData.retrieved_url}`;
 }
 
 function addGroundingMetadataToEmbed(embed, groundingMetadata) {
   try {
     if (groundingMetadata.webSearchQueries && groundingMetadata.webSearchQueries.length > 0) {
+      const queries = groundingMetadata.webSearchQueries
+        .slice(0, METADATA_CONFIG.MAX_QUERIES)
+        .map(formatSearchQuery)
+        .join('\n');
+
       embed.addFields({
-        name: '🔍 Search Queries',
-        value: groundingMetadata.webSearchQueries.slice(0, 3).map(query => `• ${query}`).join('\n'),
+        name: FIELD_NAMES.SEARCH_QUERIES,
+        value: queries,
         inline: false
       });
     }
 
     if (groundingMetadata.groundingChunks && groundingMetadata.groundingChunks.length > 0) {
       const chunks = groundingMetadata.groundingChunks
-        .slice(0, 5)
-        .map((chunk, index) => {
-          if (chunk.web) {
-            return `• [${chunk.web.title || 'Source'}](${chunk.web.uri})`;
-          }
-          return `• Source ${index + 1}`;
-        })
+        .slice(0, METADATA_CONFIG.MAX_SOURCES)
+        .map(formatSource)
         .join('\n');
 
       embed.addFields({
-        name: '📚 Sources',
+        name: FIELD_NAMES.SOURCES,
         value: chunks,
         inline: false
       });
@@ -86,15 +150,12 @@ function addUrlContextMetadataToEmbed(embed, urlContextMetadata) {
   try {
     if (urlContextMetadata.url_metadata && urlContextMetadata.url_metadata.length > 0) {
       const urlList = urlContextMetadata.url_metadata
-        .slice(0, 3)
-        .map(urlData => {
-          const emoji = urlData.url_retrieval_status === 'URL_RETRIEVAL_STATUS_SUCCESS' ? '✅' : '❌';
-          return `${emoji} ${urlData.retrieved_url}`;
-        })
+        .slice(0, METADATA_CONFIG.MAX_URLS)
+        .map(formatUrlMetadata)
         .join('\n');
 
       embed.addFields({
-        name: '🔗 URL Context',
+        name: FIELD_NAMES.URL_CONTEXT,
         value: urlList,
         inline: false
       });
@@ -104,13 +165,121 @@ function addUrlContextMetadataToEmbed(embed, urlContextMetadata) {
   }
 }
 
-export async function sendAsTextFile(text, messageOrInteraction, orgId, continuousReply = false) {
+function shouldShowMetadata(effectiveSettings) {
+  return effectiveSettings.responseFormat === 'Embedded';
+}
+
+export function updateEmbed(botMessage, finalResponse, message, groundingMetadata = null, urlContextMetadata = null, effectiveSettings) {
   try {
-    const filename = `response-${Date.now()}.txt`;
-    const tempFilePath = path.join(TEMP_DIR, filename);
+    const isGuild = message.guild !== null;
+    const embedColor = effectiveSettings.embedColor || DEFAULT_EMBED_COLOR;
+    const continuousReply = effectiveSettings.continuousReply || false;
+
+    const embed = createBaseEmbed(embedColor, finalResponse);
+
+    if (!continuousReply) {
+      addAuthorToEmbed(embed, message.author, 'To');
+    }
+
+    if (groundingMetadata && shouldShowMetadata(effectiveSettings)) {
+      addGroundingMetadataToEmbed(embed, groundingMetadata);
+    }
+
+    if (urlContextMetadata && shouldShowMetadata(effectiveSettings)) {
+      addUrlContextMetadataToEmbed(embed, urlContextMetadata);
+    }
+
+    if (isGuild) {
+      addFooterToEmbed(embed, message.guild);
+    }
+
+    botMessage.edit({
+      content: ' ',
+      embeds: [embed],
+      components: []
+    }).catch(() => {});
+  } catch (error) {
+    console.error("Error updating embed:", error.message);
+  }
+}
+
+export function updateEmbedForInteraction(interaction, botMessage, finalResponse, groundingMetadata, urlContextMetadata, effectiveSettings) {
+  try {
+    const isGuild = interaction.guild !== null;
+    const embedColor = effectiveSettings.embedColor || DEFAULT_EMBED_COLOR;
+
+    const embed = createBaseEmbed(embedColor, finalResponse);
+    addAuthorToEmbed(embed, interaction.user, 'To');
+
+    if (groundingMetadata && shouldShowMetadata(effectiveSettings)) {
+      addGroundingMetadataToEmbed(embed, groundingMetadata);
+    }
+
+    if (urlContextMetadata && shouldShowMetadata(effectiveSettings)) {
+      addUrlContextMetadataToEmbed(embed, urlContextMetadata);
+    }
+
+    if (isGuild) {
+      addFooterToEmbed(embed, interaction.guild);
+    }
+
+    interaction.editReply({
+      content: ' ',
+      embeds: [embed]
+    }).catch(() => {});
+  } catch (error) {
+    console.error("Error updating interaction embed:", error.message);
+  }
+}
+
+function generateFileName() {
+  return `${FILE_CONFIG.RESPONSE_PREFIX}${Date.now()}${FILE_CONFIG.FILE_EXTENSION}`;
+}
+
+function getFilePath(filename) {
+  return path.join(TEMP_DIR, filename);
+}
+
+function extractUserIdFromMessageOrInteraction(messageOrInteraction) {
+  return messageOrInteraction.user?.id || messageOrInteraction.author?.id;
+}
+
+function buildMentionPrefix(userId, isInteraction, continuousReply) {
+  if (isInteraction) {
+    return `<@${userId}>, `;
+  }
+  return continuousReply ? '' : `<@${userId}>, `;
+}
+
+function buildFileContent(userId, isInteraction, continuousReply) {
+  const mention = buildMentionPrefix(userId, isInteraction, continuousReply);
+  return `${mention}${MESSAGE_PREFIXES.MESSAGE}`;
+}
+
+async function editMessageWithFile(message, content, filePath) {
+  return await message.edit({
+    content: content,
+    files: [filePath],
+    embeds: [],
+    components: []
+  });
+}
+
+async function sendMessageWithFile(channel, content, filePath) {
+  return await channel.send({
+    content: content,
+    files: [filePath]
+  });
+}
+
+export async function sendAsTextFile(text, messageOrInteraction, orgId, continuousReply = false) {
+  const filename = generateFileName();
+  const tempFilePath = getFilePath(filename);
+
+  try {
     await fs.writeFile(tempFilePath, text);
 
-    const userId = messageOrInteraction.user?.id || messageOrInteraction.author?.id;
+    const userId = extractUserIdFromMessageOrInteraction(messageOrInteraction);
     const channel = messageOrInteraction.channel;
 
     if (!userId || !channel) {
@@ -118,10 +287,9 @@ export async function sendAsTextFile(text, messageOrInteraction, orgId, continuo
     }
 
     const isInteraction = !!messageOrInteraction.isInteraction;
+    const content = buildFileContent(userId, isInteraction, continuousReply);
 
     let botMessage;
-    const mention = isInteraction ? `<@${userId}>, ` : (continuousReply ? '' : `<@${userId}>, `);
-    const content = `${mention}Here is the response:`;
 
     if (isInteraction) {
       botMessage = await messageOrInteraction.editReply({
@@ -131,19 +299,12 @@ export async function sendAsTextFile(text, messageOrInteraction, orgId, continuo
         components: []
       });
     } else {
-      let messageToEdit = await channel.messages.fetch(orgId).catch(() => null);
+      const messageToEdit = await channel.messages.fetch(orgId).catch(() => null);
+      
       if (messageToEdit) {
-        botMessage = await messageToEdit.edit({
-          content: content,
-          files: [tempFilePath],
-          embeds: [],
-          components: []
-        });
+        botMessage = await editMessageWithFile(messageToEdit, content, tempFilePath);
       } else {
-        botMessage = await channel.send({
-          content: content,
-          files: [tempFilePath]
-        });
+        botMessage = await sendMessageWithFile(channel, content, tempFilePath);
       }
     }
 
@@ -151,28 +312,55 @@ export async function sendAsTextFile(text, messageOrInteraction, orgId, continuo
     return botMessage;
   } catch (error) {
     console.error('Error sending as text file:', error);
-    await fs.unlink(path.join(TEMP_DIR, `response-${Date.now()}.txt`)).catch(() => {});
+    await fs.unlink(tempFilePath).catch(() => {});
     return null;
   }
+}
+
+function createDownloadButton() {
+  return new ButtonBuilder()
+    .setCustomId(BUTTON_CONFIG.DOWNLOAD.CUSTOM_ID)
+    .setLabel(BUTTON_CONFIG.DOWNLOAD.LABEL)
+    .setEmoji(BUTTON_CONFIG.DOWNLOAD.EMOJI)
+    .setStyle(BUTTON_CONFIG.DOWNLOAD.STYLE);
+}
+
+function createDeleteButton(msgId) {
+  return new ButtonBuilder()
+    .setCustomId(`${BUTTON_CONFIG.DELETE.CUSTOM_ID_PREFIX}${msgId}`)
+    .setLabel(BUTTON_CONFIG.DELETE.LABEL)
+    .setEmoji(BUTTON_CONFIG.DELETE.EMOJI)
+    .setStyle(BUTTON_CONFIG.DELETE.STYLE);
+}
+
+function getOrCreateActionRow(messageComponents) {
+  if (messageComponents.length > 0 && messageComponents[0].type === ComponentType.ActionRow) {
+    return ActionRowBuilder.from(messageComponents[0]);
+  }
+  return new ActionRowBuilder();
+}
+
+function hasSpaceForButton(components) {
+  return components.length < ACTION_ROW_LIMITS.MAX_COMPONENTS;
+}
+
+function createButtonRows(existingComponents, newButton) {
+  const primaryRow = new ActionRowBuilder();
+  const existingButtons = existingComponents.map(c => ButtonBuilder.from(c));
+  primaryRow.addComponents(existingButtons);
+  
+  const secondaryRow = new ActionRowBuilder().addComponents(newButton);
+  return [primaryRow, secondaryRow];
 }
 
 export async function addDownloadButton(botMessage) {
   try {
     const messageComponents = botMessage.components || [];
-    const downloadButton = new ButtonBuilder()
-      .setCustomId('download_message')
-      .setLabel('Save')
-      .setEmoji('💾')
-      .setStyle(ButtonStyle.Secondary);
-
-    let actionRow;
-    if (messageComponents.length > 0 && messageComponents[0].type === ComponentType.ActionRow) {
-      actionRow = ActionRowBuilder.from(messageComponents[0]);
-    } else {
-      actionRow = new ActionRowBuilder();
-    }
+    const downloadButton = createDownloadButton();
+    const actionRow = getOrCreateActionRow(messageComponents);
 
     actionRow.addComponents(downloadButton);
+    
     return await botMessage.edit({
       components: [actionRow]
     });
@@ -185,75 +373,33 @@ export async function addDownloadButton(botMessage) {
 export async function addDeleteButton(botMessage, msgId) {
   try {
     const messageComponents = botMessage.components || [];
-    const deleteButton = new ButtonBuilder()
-      .setCustomId(`delete_message-${msgId}`)
-      .setLabel('Delete')
-      .setEmoji('🗑️')
-      .setStyle(ButtonStyle.Danger);
+    const deleteButton = createDeleteButton(msgId);
 
-    let actionRow;
-    if (messageComponents.length > 0 && messageComponents[0].type === ComponentType.ActionRow && messageComponents[0].components.length < 5) {
-      actionRow = ActionRowBuilder.from(messageComponents[0]);
-    } else {
-      actionRow = new ActionRowBuilder();
-      if (messageComponents.length > 0) {
-        const existingComponents = messageComponents[0].components.map(c => ButtonBuilder.from(c));
-        actionRow.addComponents(existingComponents);
-      }
-    }
-
-    if (actionRow.components.length < 5) {
+    if (messageComponents.length > 0 && 
+        messageComponents[0].type === ComponentType.ActionRow && 
+        hasSpaceForButton(messageComponents[0].components)) {
+      const actionRow = ActionRowBuilder.from(messageComponents[0]);
       actionRow.addComponents(deleteButton);
-    } else {
-      const newRow = new ActionRowBuilder().addComponents(deleteButton);
+      
       return await botMessage.edit({
-        components: [actionRow, newRow]
+        components: [actionRow]
       });
     }
 
+    if (messageComponents.length > 0) {
+      const rows = createButtonRows(messageComponents[0].components, deleteButton);
+      return await botMessage.edit({
+        components: rows
+      });
+    }
+
+    const actionRow = new ActionRowBuilder().addComponents(deleteButton);
     return await botMessage.edit({
       components: [actionRow]
     });
+    
   } catch (error) {
     console.error('Error adding delete button:', error.message);
     return botMessage;
-  }
-}
-
-export function updateEmbedForInteraction(interaction, botMessage, finalResponse, groundingMetadata, urlContextMetadata, effectiveSettings) {
-  try {
-    const isGuild = interaction.guild !== null;
-    const embedColor = effectiveSettings.embedColor || hexColour;
-
-    const embed = new EmbedBuilder()
-      .setColor(embedColor)
-      .setDescription(finalResponse.slice(0, 4096))
-      .setTimestamp()
-      .setAuthor({
-        name: `To ${interaction.user.displayName}`,
-        iconURL: interaction.user.displayAvatarURL()
-      });
-
-    if (groundingMetadata && effectiveSettings.responseFormat === 'Embedded') {
-      addGroundingMetadataToEmbed(embed, groundingMetadata);
-    }
-
-    if (urlContextMetadata && effectiveSettings.responseFormat === 'Embedded') {
-      addUrlContextMetadataToEmbed(embed, urlContextMetadata);
-    }
-
-    if (isGuild) {
-      embed.setFooter({
-        text: interaction.guild.name,
-        iconURL: interaction.guild.iconURL() || 'https://ai.google.dev/static/site-assets/images/share.png'
-      });
-    }
-
-    interaction.editReply({
-      content: ' ',
-      embeds: [embed]
-    }).catch(() => {});
-  } catch (error) {
-    console.error("Error updating interaction embed:", error.message);
   }
 }
