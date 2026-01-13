@@ -115,6 +115,98 @@ const MODEL_FALLBACK_CHAIN = [
   'gemini-2.0-flash-lite'
 ];
 
+/**
+ * Default model used when no model is specified
+ */
+const DEFAULT_MODEL = 'gemini-2.5-flash';
+
+/**
+ * Default server settings
+ * Used when a guild doesn't have custom settings configured
+ */
+const DEFAULT_SERVER_SETTINGS = {
+  /** Default model for new servers */
+  SELECTED_MODEL: DEFAULT_MODEL,
+  
+  /** Default response format for servers */
+  RESPONSE_FORMAT: 'Normal',
+  
+  /** Default action buttons visibility */
+  SHOW_ACTION_BUTTONS: false,
+  
+  /** Default continuous reply mode */
+  CONTINUOUS_REPLY: false,
+  
+  /** Default custom personality (null = use default) */
+  CUSTOM_PERSONALITY: null,
+  
+  /** Default server override for user settings */
+  OVERRIDE_USER_SETTINGS: true,
+  
+  /** Default server-wide chat history setting */
+  SERVER_CHAT_HISTORY: false,
+  
+  /** Default allowed channels (empty = all channels) */
+  ALLOWED_CHANNELS: []
+};
+
+/**
+ * Default values for ensuring server settings fields exist
+ * Used when updating existing server configurations
+ */
+const SERVER_SETTINGS_DEFAULTS = {
+  /** Default for showActionButtons when undefined */
+  SHOW_ACTION_BUTTONS: false,
+  
+  /** Default for continuousReply when undefined */
+  CONTINUOUS_REPLY: true,
+  
+  /** Default for allowedChannels when missing */
+  ALLOWED_CHANNELS: []
+};
+
+/**
+ * Time constants
+ */
+const TIME_CONSTANTS = {
+  /** One minute in milliseconds */
+  ONE_MINUTE_MS: 60 * 1000,
+  
+  /** One hour in milliseconds */  
+  ONE_HOUR_MS: 60 * 60 * 1000,
+  
+  /** One day in milliseconds */
+  ONE_DAY_MS: 24 * 60 * 60 * 1000
+};
+
+/**
+ * Usage limits configuration
+ */
+const USAGE_LIMITS = {
+  /** Maximum daily image generation requests per user */
+  DAILY_IMAGE_LIMIT: 25,
+  
+  /** Maximum daily summary requests per user */
+  DAILY_SUMMARY_LIMIT: 10,
+  
+  /** Time period for usage limits in milliseconds (24 hours) */
+  LIMIT_PERIOD_MS: TIME_CONSTANTS.ONE_DAY_MS
+};
+
+/**
+ * Validation constants
+ */
+const VALIDATION_CONFIG = {
+  /** Minimum length for a valid API key */
+  MIN_API_KEY_LENGTH: 20,
+  
+  /** Exit codes for different shutdown scenarios */
+  EXIT_CODES: {
+    SUCCESS: 0,
+    ERROR: 1
+  }
+};
+
 // ============================================================================
 // FILE SYSTEM SETUP
 // ============================================================================
@@ -195,7 +287,7 @@ function loadApiKeys() {
  * @returns {boolean} True if key is valid
  */
 function validateApiKey(key) {
-  return typeof key === 'string' && key.length > 20 && !key.includes(' ');
+  return typeof key === 'string' && key.length > VALIDATION_CONFIG.MIN_API_KEY_LENGTH && !key.includes(' ');
 }
 
 /** Array of Google Gemini API keys */
@@ -499,7 +591,7 @@ export function switchToNextKeyOrModel(error, currentModelName) {
  * @deprecated Use switchToNextKeyOrModel instead
  */
 export function switchToNextKey(error) {
-  const result = switchToNextKeyOrModel(error, 'gemini-2.5-flash');
+  const result = switchToNextKeyOrModel(error, DEFAULT_MODEL);
   return result.keyRotated || result.modelChanged;
 }
 
@@ -678,7 +770,7 @@ async function withRetryPerModel(apiCall, initialModelName) {
 async function withRetry(apiCall) {
   return withRetryPerModel(
     async (modelName) => await apiCall(),
-    'gemini-2.5-flash'
+    DEFAULT_MODEL
   );
 }
 
@@ -701,7 +793,7 @@ export const genAI = new Proxy({}, {
               request.model = modelName;
               return currentClient.models.generateContent(request);
             },
-            request.model || 'gemini-2.5-flash'
+            request.model || DEFAULT_MODEL
           ),
         generateContentStream: (request) => 
           withRetryPerModel(
@@ -709,7 +801,7 @@ export const genAI = new Proxy({}, {
               request.model = modelName;
               return currentClient.models.generateContentStream(request);
             },
-            request.model || 'gemini-2.5-flash'
+            request.model || DEFAULT_MODEL
           ),
         embedContent: (request) => 
           withRetry(() => currentClient.models.embedContent(request))
@@ -1504,26 +1596,26 @@ export function initializeBlacklistForGuild(guildId) {
     
     if (!state.serverSettings[guildId]) {
       state.serverSettings[guildId] = {
-        selectedModel: 'gemini-2.5-flash',
-        responseFormat: 'Normal',
-        showActionButtons: false,
-        continuousReply: false,
-        customPersonality: null,
+        selectedModel: DEFAULT_SERVER_SETTINGS.SELECTED_MODEL,
+        responseFormat: DEFAULT_SERVER_SETTINGS.RESPONSE_FORMAT,
+        showActionButtons: DEFAULT_SERVER_SETTINGS.SHOW_ACTION_BUTTONS,
+        continuousReply: DEFAULT_SERVER_SETTINGS.CONTINUOUS_REPLY,
+        customPersonality: DEFAULT_SERVER_SETTINGS.CUSTOM_PERSONALITY,
         embedColor: config.hexColour,
-        overrideUserSettings: true,
-        serverChatHistory: false,
-        allowedChannels: []
+        overrideUserSettings: DEFAULT_SERVER_SETTINGS.OVERRIDE_USER_SETTINGS,
+        serverChatHistory: DEFAULT_SERVER_SETTINGS.SERVER_CHAT_HISTORY,
+        allowedChannels: [...DEFAULT_SERVER_SETTINGS.ALLOWED_CHANNELS]
       };
     } else {
       // Ensure all required fields exist
       if (!state.serverSettings[guildId].allowedChannels) {
-        state.serverSettings[guildId].allowedChannels = [];
+        state.serverSettings[guildId].allowedChannels = [...SERVER_SETTINGS_DEFAULTS.ALLOWED_CHANNELS];
       }
       if (state.serverSettings[guildId].showActionButtons === undefined) {
-        state.serverSettings[guildId].showActionButtons = false;
+        state.serverSettings[guildId].showActionButtons = SERVER_SETTINGS_DEFAULTS.SHOW_ACTION_BUTTONS;
       }
       if (state.serverSettings[guildId].continuousReply === undefined) {
-        state.serverSettings[guildId].continuousReply = true;
+        state.serverSettings[guildId].continuousReply = SERVER_SETTINGS_DEFAULTS.CONTINUOUS_REPLY;
       }
     }
   } catch (error) {
@@ -1538,8 +1630,6 @@ export function initializeBlacklistForGuild(guildId) {
  */
 export function checkImageRateLimit(userId) {
   const now = Date.now();
-  const ONE_DAY = 24 * 60 * 60 * 1000;
-  const ONE_MINUTE = 60 * 1000;
 
   if (!state.imageUsage[userId]) {
     state.imageUsage[userId] = {
@@ -1552,14 +1642,14 @@ export function checkImageRateLimit(userId) {
   const usage = state.imageUsage[userId];
 
   // Reset daily counter
-  if (now - usage.lastReset > ONE_DAY) {
+  if (now - usage.lastReset > USAGE_LIMITS.LIMIT_PERIOD_MS) {
     usage.count = 0;
     usage.lastReset = now;
   }
 
   // Check per-minute rate limit
-  if (now - usage.lastRequest < ONE_MINUTE) {
-    const waitSeconds = Math.ceil((ONE_MINUTE - (now - usage.lastRequest)) / 1000);
+  if (now - usage.lastRequest < TIME_CONSTANTS.ONE_MINUTE_MS) {
+    const waitSeconds = Math.ceil((TIME_CONSTANTS.ONE_MINUTE_MS - (now - usage.lastRequest)) / 1000);
     return {
       allowed: false,
       message: `⏳ Please wait ${waitSeconds}s before generating another image.`
@@ -1567,7 +1657,7 @@ export function checkImageRateLimit(userId) {
   }
 
   // Check daily limit
-  const limit = config.imageConfig?.maxPerDay || 10;
+  const limit = config.imageConfig?.maxPerDay || USAGE_LIMITS.DAILY_IMAGE_LIMIT;
   if (usage.count >= limit) {
     return {
       allowed: false,
@@ -1593,8 +1683,7 @@ export function incrementImageUsage(userId) {
     };
   }
 
-  const ONE_DAY = 24 * 60 * 60 * 1000;
-  if (now - state.imageUsage[userId].lastReset > ONE_DAY) {
+  if (now - state.imageUsage[userId].lastReset > USAGE_LIMITS.LIMIT_PERIOD_MS) {
     state.imageUsage[userId].count = 0;
     state.imageUsage[userId].lastReset = now;
   }
@@ -1610,8 +1699,6 @@ export function incrementImageUsage(userId) {
  */
 export function checkSummaryRateLimit(userId) {
   const now = Date.now();
-  const ONE_DAY = 24 * 60 * 60 * 1000;
-  const LIMIT = 10;
 
   if (!state.summaryUsage[userId]) {
     state.summaryUsage[userId] = {
@@ -1623,16 +1710,16 @@ export function checkSummaryRateLimit(userId) {
   const usage = state.summaryUsage[userId];
 
   // Reset daily counter
-  if (now - usage.lastReset > ONE_DAY) {
+  if (now - usage.lastReset > USAGE_LIMITS.LIMIT_PERIOD_MS) {
     usage.count = 0;
     usage.lastReset = now;
   }
 
   // Check daily limit
-  if (usage.count >= LIMIT) {
+  if (usage.count >= USAGE_LIMITS.DAILY_SUMMARY_LIMIT) {
     return {
       allowed: false,
-      message: `🛑 You've reached your daily limit of ${LIMIT} summaries. Limits reset daily.`
+      message: `🛑 You've reached your daily limit of ${USAGE_LIMITS.DAILY_SUMMARY_LIMIT} summaries. Limits reset daily.`
     };
   }
 
@@ -1653,8 +1740,7 @@ export function incrementSummaryUsage(userId) {
     };
   }
 
-  const ONE_DAY = 24 * 60 * 60 * 1000;
-  if (now - state.summaryUsage[userId].lastReset > ONE_DAY) {
+  if (now - state.summaryUsage[userId].lastReset > USAGE_LIMITS.LIMIT_PERIOD_MS) {
     state.summaryUsage[userId].count = 0;
     state.summaryUsage[userId].lastReset = now;
   }
@@ -1847,10 +1933,10 @@ async function gracefulShutdown(signal) {
     console.log(JSON.stringify(getApiKeyStats(), null, 2));
     
     console.log('✅ Graceful shutdown completed');
-    process.exit(0);
+    process.exit(VALIDATION_CONFIG.EXIT_CODES.SUCCESS);
   } catch (error) {
     console.error('❌ Error during graceful shutdown:', error);
-    process.exit(1);
+    process.exit(VALIDATION_CONFIG.EXIT_CODES.ERROR);
   }
 }
 
