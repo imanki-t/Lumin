@@ -291,6 +291,39 @@ function extractCustomEmojis(content) {
   return emojis;
 }
 
+async function replaceUserMentionsWithUsernames(content, message) {
+  const userMentionRegex = /<@!?(\d+)>/g;
+  let match;
+  const replacements = new Map();
+
+  while ((match = userMentionRegex.exec(content)) !== null) {
+    const userId = match[1];
+    const mentionText = match[0];
+    
+    if (!replacements.has(userId)) {
+      try {
+        const user = await client.users.fetch(userId).catch(() => null);
+        if (user) {
+          replacements.set(userId, `@${user.username}`);
+        } else {
+          replacements.set(userId, mentionText);
+        }
+      } catch (error) {
+        console.error(`Error fetching user ${userId}:`, error);
+        replacements.set(userId, mentionText);
+      }
+    }
+  }
+
+  let result = content;
+  for (const [userId, username] of replacements.entries()) {
+    const mentionRegex = new RegExp(`<@!?${userId}>`, 'g');
+    result = result.replace(mentionRegex, username);
+  }
+
+  return result;
+}
+
 async function processStickerAsAttachment(sticker) {
   try {
     const isAnimated = sticker.format === STICKER_FORMATS.APNG || 
@@ -347,7 +380,7 @@ async function processEmojiAsAttachment(emoji) {
   }
 }
 
-function extractForwardedContent(message) {
+async function extractForwardedContent(message) {
   let forwardedText = '';
   let forwardedAttachments = [];
   let forwardedStickers = [];
@@ -356,7 +389,8 @@ function extractForwardedContent(message) {
     const snapshot = message.messageSnapshots.first();
     
     if (snapshot.content) {
-      forwardedText = snapshot.content;
+      // Replace user mentions in forwarded content
+      forwardedText = await replaceUserMentionsWithUsernames(snapshot.content, message);
     }
     
     if (snapshot.embeds && snapshot.embeds.length > 0) {
@@ -684,6 +718,9 @@ async function handleTextMessage(message) {
     }
 
     let messageContent = message.content.replace(new RegExp(`<@!?${botId}>`), '').trim();
+    
+    // Replace user mentions with actual usernames
+    messageContent = await replaceUserMentionsWithUsernames(messageContent, message);
 
     const gifRegex = new RegExp(TENOR_GIPHY_REGEX);
     if (gifRegex.test(messageContent) && (!message.embeds || message.embeds.length === 0)) {
@@ -691,6 +728,8 @@ async function handleTextMessage(message) {
       try {
         message = await message.channel.messages.fetch(message.id);
         messageContent = message.content.replace(new RegExp(`<@!?${botId}>`), '').trim();
+        // Replace user mentions again after refetching message
+        messageContent = await replaceUserMentionsWithUsernames(messageContent, message);
       } catch (e) {}
     }
 
@@ -705,7 +744,9 @@ async function handleTextMessage(message) {
           let contextBuffer = `${CONTEXT_MARKERS.REPLY_PREFIX} ${repliedMsg.author.username}]:\n`;
 
           if (repliedMsg.content) {
-            contextBuffer += `${repliedMsg.content}\n`;
+            // Replace user mentions in replied message content
+            const repliedContent = await replaceUserMentionsWithUsernames(repliedMsg.content, message);
+            contextBuffer += `${repliedContent}\n`;
           }
 
           if (repliedMsg.embeds.length > 0) {
@@ -722,7 +763,10 @@ async function handleTextMessage(message) {
           }
 
           if (repliedMsg.attachments.size > 0) {
-            repliedAttachments = Array.from(repliedMsg.attachments.values());
+            repliedAttachments = Array.from(repliedMsg.attachments.values()).map(att => ({
+              ...att,
+              sourceContext: 'replied_message'
+            }));
             contextBuffer += `[Contains ${repliedMsg.attachments.size} attachment(s)]\n`;
           }
 
@@ -730,6 +774,25 @@ async function handleTextMessage(message) {
             repliedMsg.stickers.forEach(sticker => {
               contextBuffer += `[Sticker: ${sticker.name}]\n`;
             });
+          }
+
+          // Extract forwarded content from the replied message
+          const { forwardedText: repliedForwardedText, forwardedAttachments: repliedForwardedAttachments, forwardedStickers: repliedForwardedStickers } = await extractForwardedContent(repliedMsg);
+          
+          if (repliedForwardedText) {
+            contextBuffer += `${CONTEXT_MARKERS.FORWARDED}:\n${repliedForwardedText}\n`;
+            
+            if (repliedForwardedAttachments.length > 0) {
+              contextBuffer += `[Contains ${repliedForwardedAttachments.length} forwarded attachment(s)]\n`;
+            }
+          }
+          
+          if (repliedForwardedAttachments.length > 0) {
+            const taggedForwardedAttachments = repliedForwardedAttachments.map(att => ({
+              ...att,
+              sourceContext: 'replied_message_forwarded'
+            }));
+            repliedAttachments = [...repliedAttachments, ...taggedForwardedAttachments];
           }
 
           repliedMessageText = contextBuffer + "\n" + CONTEXT_MARKERS.SEPARATOR + "\n";
@@ -748,7 +811,7 @@ async function handleTextMessage(message) {
     messageContent = gifResult.messageContent;
     const gifLinkAttachments = gifResult.gifLinkAttachments;
 
-    const { forwardedText, forwardedAttachments, forwardedStickers } = extractForwardedContent(message);
+    const { forwardedText, forwardedAttachments, forwardedStickers } = await extractForwardedContent(message);
 
     if (forwardedText) {
       if (messageContent === '') {
@@ -756,7 +819,17 @@ async function handleTextMessage(message) {
       } else {
         messageContent = `${messageContent}\n\n${CONTEXT_MARKERS.FORWARDED}:\n${forwardedText}`;
       }
+      
+      if (forwardedAttachments.length > 0) {
+        messageContent += `\n[Contains ${forwardedAttachments.length} forwarded attachment(s)]`;
+      }
     }
+    
+    // Tag forwarded attachments from current message
+    const taggedForwardedAttachments = forwardedAttachments.map(att => ({
+      ...att,
+      sourceContext: 'current_message_forwarded'
+    }));
 
     const currentStickers = message.stickers ? Array.from(message.stickers.values()) : [];
     const allStickers = [...currentStickers, ...forwardedStickers];
@@ -793,12 +866,15 @@ async function handleTextMessage(message) {
       }
     }
 
-    const regularAttachments = Array.from(message.attachments.values());
+    const regularAttachments = Array.from(message.attachments.values()).map(att => ({
+      ...att,
+      sourceContext: 'current_message'
+    }));
 
     const allAttachments = [
       ...repliedAttachments,
       ...regularAttachments,
-      ...forwardedAttachments,
+      ...taggedForwardedAttachments,
       ...stickerAttachments,
       ...emojiAttachments,
       ...gifLinkAttachments
