@@ -188,16 +188,60 @@ const DEFAULT_SERVER_SETTINGS = {
 /**
  * Default values for ensuring server settings fields exist
  * Used when updating existing server configurations
+ * These values are applied when a field is missing or undefined
  */
 const SERVER_SETTINGS_DEFAULTS = {
+  /** Default model when undefined */
+  SELECTED_MODEL: DEFAULT_MODEL,
+  
+  /** Default response format when undefined */
+  RESPONSE_FORMAT: DEFAULT_RESPONSE_FORMAT,
+  
   /** Default for showActionButtons when undefined */
   SHOW_ACTION_BUTTONS: false,
   
   /** Default for continuousReply when undefined */
   CONTINUOUS_REPLY: true,
   
+  /** Default custom personality when undefined */
+  CUSTOM_PERSONALITY: null,
+  
+  /** Default embed color when undefined */
+  EMBED_COLOR: EMBED_COLOR,
+  
+  /** Default override user settings when undefined */
+  OVERRIDE_USER_SETTINGS: true,
+  
+  /** Default server chat history when undefined */
+  SERVER_CHAT_HISTORY: false,
+  
   /** Default for allowedChannels when missing */
   ALLOWED_CHANNELS: []
+};
+
+/**
+ * Default values for ensuring user settings fields exist
+ * Used when updating existing user configurations
+ * These values are applied when a field is missing or undefined
+ */
+const USER_SETTINGS_DEFAULTS = {
+  /** Default model when undefined */
+  SELECTED_MODEL: DEFAULT_MODEL,
+  
+  /** Default response format when undefined */
+  RESPONSE_FORMAT: DEFAULT_RESPONSE_FORMAT,
+  
+  /** Default for showActionButtons when undefined */
+  SHOW_ACTION_BUTTONS: false,
+  
+  /** Default for continuousReply when undefined */
+  CONTINUOUS_REPLY: true,
+  
+  /** Default custom personality when undefined */
+  CUSTOM_PERSONALITY: null,
+  
+  /** Default embed color when undefined */
+  EMBED_COLOR: EMBED_COLOR
 };
 
 /**
@@ -1654,27 +1698,46 @@ export function initializeBlacklistForGuild(guildId) {
     }
     
     if (!state.serverSettings[guildId]) {
+      // Create new server settings with all default values
       state.serverSettings[guildId] = {
         selectedModel: DEFAULT_SERVER_SETTINGS.SELECTED_MODEL,
         responseFormat: DEFAULT_SERVER_SETTINGS.RESPONSE_FORMAT,
         showActionButtons: DEFAULT_SERVER_SETTINGS.SHOW_ACTION_BUTTONS,
         continuousReply: DEFAULT_SERVER_SETTINGS.CONTINUOUS_REPLY,
         customPersonality: DEFAULT_SERVER_SETTINGS.CUSTOM_PERSONALITY,
-        embedColor: EMBED_COLOR,
+        embedColor: DEFAULT_SERVER_SETTINGS.EMBED_COLOR,
         overrideUserSettings: DEFAULT_SERVER_SETTINGS.OVERRIDE_USER_SETTINGS,
         serverChatHistory: DEFAULT_SERVER_SETTINGS.SERVER_CHAT_HISTORY,
         allowedChannels: [...DEFAULT_SERVER_SETTINGS.ALLOWED_CHANNELS]
       };
     } else {
-      // Ensure all required fields exist
-      if (!state.serverSettings[guildId].allowedChannels) {
-        state.serverSettings[guildId].allowedChannels = [...SERVER_SETTINGS_DEFAULTS.ALLOWED_CHANNELS];
+      // Ensure all required fields exist for existing server settings
+      if (state.serverSettings[guildId].selectedModel === undefined) {
+        state.serverSettings[guildId].selectedModel = SERVER_SETTINGS_DEFAULTS.SELECTED_MODEL;
+      }
+      if (state.serverSettings[guildId].responseFormat === undefined) {
+        state.serverSettings[guildId].responseFormat = SERVER_SETTINGS_DEFAULTS.RESPONSE_FORMAT;
       }
       if (state.serverSettings[guildId].showActionButtons === undefined) {
         state.serverSettings[guildId].showActionButtons = SERVER_SETTINGS_DEFAULTS.SHOW_ACTION_BUTTONS;
       }
       if (state.serverSettings[guildId].continuousReply === undefined) {
         state.serverSettings[guildId].continuousReply = SERVER_SETTINGS_DEFAULTS.CONTINUOUS_REPLY;
+      }
+      if (state.serverSettings[guildId].customPersonality === undefined) {
+        state.serverSettings[guildId].customPersonality = SERVER_SETTINGS_DEFAULTS.CUSTOM_PERSONALITY;
+      }
+      if (state.serverSettings[guildId].embedColor === undefined) {
+        state.serverSettings[guildId].embedColor = SERVER_SETTINGS_DEFAULTS.EMBED_COLOR;
+      }
+      if (state.serverSettings[guildId].overrideUserSettings === undefined) {
+        state.serverSettings[guildId].overrideUserSettings = SERVER_SETTINGS_DEFAULTS.OVERRIDE_USER_SETTINGS;
+      }
+      if (state.serverSettings[guildId].serverChatHistory === undefined) {
+        state.serverSettings[guildId].serverChatHistory = SERVER_SETTINGS_DEFAULTS.SERVER_CHAT_HISTORY;
+      }
+      if (!state.serverSettings[guildId].allowedChannels) {
+        state.serverSettings[guildId].allowedChannels = [...SERVER_SETTINGS_DEFAULTS.ALLOWED_CHANNELS];
       }
     }
   } catch (error) {
@@ -1689,6 +1752,7 @@ export function initializeBlacklistForGuild(guildId) {
 export function initializeUserSettings(userId) {
   try {
     if (!state.userSettings[userId]) {
+      // Create new user settings with all default values
       state.userSettings[userId] = {
         selectedModel: DEFAULT_USER_SETTINGS.SELECTED_MODEL,
         responseFormat: DEFAULT_USER_SETTINGS.RESPONSE_FORMAT,
@@ -1697,6 +1761,26 @@ export function initializeUserSettings(userId) {
         customPersonality: DEFAULT_USER_SETTINGS.CUSTOM_PERSONALITY,
         embedColor: DEFAULT_USER_SETTINGS.EMBED_COLOR
       };
+    } else {
+      // Ensure all required fields exist for existing user settings
+      if (state.userSettings[userId].selectedModel === undefined) {
+        state.userSettings[userId].selectedModel = USER_SETTINGS_DEFAULTS.SELECTED_MODEL;
+      }
+      if (state.userSettings[userId].responseFormat === undefined) {
+        state.userSettings[userId].responseFormat = USER_SETTINGS_DEFAULTS.RESPONSE_FORMAT;
+      }
+      if (state.userSettings[userId].showActionButtons === undefined) {
+        state.userSettings[userId].showActionButtons = USER_SETTINGS_DEFAULTS.SHOW_ACTION_BUTTONS;
+      }
+      if (state.userSettings[userId].continuousReply === undefined) {
+        state.userSettings[userId].continuousReply = USER_SETTINGS_DEFAULTS.CONTINUOUS_REPLY;
+      }
+      if (state.userSettings[userId].customPersonality === undefined) {
+        state.userSettings[userId].customPersonality = USER_SETTINGS_DEFAULTS.CUSTOM_PERSONALITY;
+      }
+      if (state.userSettings[userId].embedColor === undefined) {
+        state.userSettings[userId].embedColor = USER_SETTINGS_DEFAULTS.EMBED_COLOR;
+      }
     }
   } catch (error) {
     console.error(`Error initializing user ${userId}:`, error);
