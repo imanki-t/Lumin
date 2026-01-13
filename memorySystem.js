@@ -29,8 +29,8 @@ const MAX_RAG_RESULTS = 3;
 /** Minimum cosine similarity score for relevance */
 const MIN_SIMILARITY_THRESHOLD = 0.65;
 
-/** Time gap threshold for "TIME ELAPSED" marker (30 minutes) */
-const TIME_GAP_THRESHOLD_MS = 30 * 60 * 1000;
+/** Time gap threshold for "TIME ELAPSED" marker (30 seconds) */
+const TIME_GAP_THRESHOLD_MS = 30 * 1000;
 
 /** Cache TTL for personal data (5 minutes) */
 const PERSONAL_DATA_CACHE_TTL_MS = 5 * 60 * 1000;
