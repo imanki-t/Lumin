@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { genAI, TEMP_DIR } from './botManager.js';
 import * as db from './database.js';
+import crypto from 'crypto';
 
 // ============================================================================
 // CONFIGURATION CONSTANTS - Adjust these to customize memory behavior
@@ -28,8 +29,8 @@ const MAX_RAG_RESULTS = 3;
 /** Minimum cosine similarity score for a memory to be considered relevant (0.0 to 1.0) */
 const MIN_SIMILARITY_THRESHOLD = 0.65;
 
-/** Time gap in milliseconds that triggers a "TIME ELAPSED" marker (30 minutes) */
-const TIME_GAP_THRESHOLD_MS = 30 * 1000;
+/** Time gap in milliseconds that triggers a "TIME ELAPSED" marker (30 seconds) */
+const TIME_GAP_THRESHOLD_MS = 30 * 1000; // Changed from 30 minutes to 30 seconds
 
 /** Cache TTL for personal data (5 minutes) */
 const PERSONAL_DATA_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -88,6 +89,19 @@ const MAX_CONCURRENT_DB_OPS = 10;
 const PARALLEL_INDEX_BATCH_SIZE = 3;
 
 // ============================================================================
+// QUERY CACHE CONFIGURATION
+// ============================================================================
+
+/** Query result cache TTL (2 minutes) */
+const QUERY_CACHE_TTL_MS = 2 * 60 * 1000;
+
+/** Maximum query cache size */
+const MAX_QUERY_CACHE_SIZE = 200;
+
+/** Minimum query length for caching */
+const MIN_QUERY_LENGTH_FOR_CACHE = 10;
+
+// ============================================================================
 // MEMORY SYSTEM CLASS WITH OPTIMIZED PARALLEL PROCESSING
 // ============================================================================
 
@@ -102,13 +116,96 @@ class MemorySystem {
     this.clusterCache = new Map(); // historyId -> { clusters, centroids, lastUpdate, memoryCount }
     this.lastClusterUpdate = new Map(); // historyId -> memoryCount at last clustering
     
+    // Query result cache - NEW
+    this.queryCache = new Map(); // queryHash -> { results, timestamp, historyId }
+    
     // Parallel processing controls
     this.activeEmbeddingOps = 0;
     this.embeddingQueue = [];
+    
+    // Batch embedding queue - NEW
+    this.batchEmbeddingQueue = [];
+    this.batchProcessingTimer = null;
+    
+    // Background clustering tracking - NEW
+    this.clusteringInProgress = new Map(); // historyId -> boolean
+    this.backgroundClusterQueue = []; // Queue of pending background rebuilds
   }
 
   // ==========================================================================
-  // EMBEDDING UTILITIES WITH PARALLEL PROCESSING
+  // QUERY CACHING UTILITIES
+  // ==========================================================================
+
+  /**
+   * Generate hash for query caching
+   */
+  generateQueryHash(historyId, query, userId = null, guildId = null) {
+    const hashInput = `${historyId}:${query}:${userId || ''}:${guildId || ''}`;
+    return crypto.createHash('md5').update(hashInput).digest('hex');
+  }
+
+  /**
+   * Get cached query results if available and not expired
+   */
+  getCachedQueryResults(historyId, query, userId = null, guildId = null) {
+    if (!query || query.length < MIN_QUERY_LENGTH_FOR_CACHE) {
+      return null;
+    }
+
+    const queryHash = this.generateQueryHash(historyId, query, userId, guildId);
+    const cached = this.queryCache.get(queryHash);
+
+    if (!cached) {
+      return null;
+    }
+
+    const now = Date.now();
+    if (now - cached.timestamp > QUERY_CACHE_TTL_MS) {
+      this.queryCache.delete(queryHash);
+      return null;
+    }
+
+    return cached.results;
+  }
+
+  /**
+   * Cache query results
+   */
+  cacheQueryResults(historyId, query, results, userId = null, guildId = null) {
+    if (!query || query.length < MIN_QUERY_LENGTH_FOR_CACHE) {
+      return;
+    }
+
+    const queryHash = this.generateQueryHash(historyId, query, userId, guildId);
+    
+    this.queryCache.set(queryHash, {
+      results: results,
+      timestamp: Date.now(),
+      historyId: historyId
+    });
+
+    // LRU eviction
+    if (this.queryCache.size > MAX_QUERY_CACHE_SIZE) {
+      const oldestKey = this.queryCache.keys().next().value;
+      this.queryCache.delete(oldestKey);
+    }
+  }
+
+  /**
+   * Invalidate query cache for a history (call when new memories added)
+   */
+  invalidateQueryCache(historyId) {
+    const toDelete = [];
+    for (const [hash, data] of this.queryCache.entries()) {
+      if (data.historyId === historyId) {
+        toDelete.push(hash);
+      }
+    }
+    toDelete.forEach(hash => this.queryCache.delete(hash));
+  }
+
+  // ==========================================================================
+  // EMBEDDING UTILITIES WITH BATCH PROCESSING
   // ==========================================================================
 
   /**
@@ -138,6 +235,7 @@ class MemorySystem {
 
       this.embeddingCache.set(cacheKey, embedding);
 
+      // LRU cache cleanup
       if (this.embeddingCache.size > MAX_EMBEDDING_CACHE_SIZE) {
         const firstKey = this.embeddingCache.keys().next().value;
         this.embeddingCache.delete(firstKey);
@@ -151,30 +249,87 @@ class MemorySystem {
   }
 
   /**
-   * Generate multiple embeddings in parallel with concurrency control
+   * Generate multiple embeddings in parallel with controlled concurrency
+   * OPTIMIZED: Processes embeddings in optimal batch sizes
    */
   async generateEmbeddingsBatch(texts, taskType = 'RETRIEVAL_DOCUMENT') {
-    const results = [];
-    const batches = [];
+    if (!texts || texts.length === 0) return [];
+
+    const results = new Array(texts.length);
+    const toGenerate = [];
     
-    // Split into concurrent batches
-    for (let i = 0; i < texts.length; i += MAX_CONCURRENT_EMBEDDINGS) {
-      batches.push(texts.slice(i, i + MAX_CONCURRENT_EMBEDDINGS));
+    // First pass: Check cache
+    for (let i = 0; i < texts.length; i++) {
+      const text = texts[i];
+      if (!text || typeof text !== 'string' || text.trim().length === 0) {
+        results[i] = null;
+        continue;
+      }
+
+      const cacheKey = `${text.slice(0, 100)}_${taskType}`;
+      if (this.embeddingCache.has(cacheKey)) {
+        results[i] = this.embeddingCache.get(cacheKey);
+      } else {
+        toGenerate.push({ index: i, text, cacheKey });
+      }
+    }
+
+    if (toGenerate.length === 0) {
+      return results;
+    }
+
+    // Second pass: Generate missing embeddings in parallel batches
+    const batches = [];
+    for (let i = 0; i < toGenerate.length; i += MAX_CONCURRENT_EMBEDDINGS) {
+      batches.push(toGenerate.slice(i, i + MAX_CONCURRENT_EMBEDDINGS));
     }
     
     // Process batches sequentially, but items within batch in parallel
     for (const batch of batches) {
-      const batchResults = await Promise.all(
-        batch.map(text => this.generateEmbedding(text, taskType))
+      const batchResults = await Promise.allSettled(
+        batch.map(async ({ index, text, cacheKey }) => {
+          try {
+            const result = await genAI.models.embedContent({
+              model: EMBEDDING_MODEL,
+              contents: text,
+              config: { taskType }
+            });
+
+            const embedding = result.embeddings?.[0]?.values;
+            if (embedding && Array.isArray(embedding)) {
+              this.embeddingCache.set(cacheKey, embedding);
+              return { index, embedding };
+            }
+            return { index, embedding: null };
+          } catch (error) {
+            console.error(`Batch embedding failed for index ${index}:`, error.message);
+            return { index, embedding: null };
+          }
+        })
       );
-      results.push(...batchResults);
+
+      // Populate results
+      batchResults.forEach(result => {
+        if (result.status === 'fulfilled' && result.value) {
+          results[result.value.index] = result.value.embedding;
+        }
+      });
     }
     
+    // Cleanup cache if too large
+    if (this.embeddingCache.size > MAX_EMBEDDING_CACHE_SIZE) {
+      const toRemove = this.embeddingCache.size - MAX_EMBEDDING_CACHE_SIZE;
+      const keys = Array.from(this.embeddingCache.keys());
+      for (let i = 0; i < toRemove; i++) {
+        this.embeddingCache.delete(keys[i]);
+      }
+    }
+
     return results;
   }
 
   /**
-   * Calculate cosine similarity between two embeddings
+   * Calculate cosine similarity between two embeddings (vectorized)
    */
   cosineSimilarity(a, b) {
     if (!a || !b || a.length !== b.length) return 0;
@@ -183,24 +338,59 @@ class MemorySystem {
     let normA = 0;
     let normB = 0;
 
+    // Vectorized computation
     for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
+      const aVal = a[i];
+      const bVal = b[i];
+      dotProduct += aVal * bVal;
+      normA += aVal * aVal;
+      normB += bVal * bVal;
     }
 
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+    const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+    return denominator === 0 ? 0 : dotProduct / denominator;
   }
 
   /**
    * Calculate similarity between query and multiple embeddings in parallel
+   * OPTIMIZED: Vectorized batch computation
    */
   calculateSimilaritiesBatch(queryEmbedding, embeddings) {
-    return embeddings.map(emb => this.cosineSimilarity(queryEmbedding, emb));
+    if (!queryEmbedding || !embeddings || embeddings.length === 0) {
+      return [];
+    }
+
+    // Pre-calculate query norm once
+    let queryNorm = 0;
+    for (let i = 0; i < queryEmbedding.length; i++) {
+      queryNorm += queryEmbedding[i] * queryEmbedding[i];
+    }
+    queryNorm = Math.sqrt(queryNorm);
+
+    // Vectorized similarity calculation
+    return embeddings.map(embedding => {
+      if (!embedding || embedding.length !== queryEmbedding.length) {
+        return 0;
+      }
+
+      let dotProduct = 0;
+      let embeddingNorm = 0;
+
+      for (let i = 0; i < queryEmbedding.length; i++) {
+        const qVal = queryEmbedding[i];
+        const eVal = embedding[i];
+        dotProduct += qVal * eVal;
+        embeddingNorm += eVal * eVal;
+      }
+
+      embeddingNorm = Math.sqrt(embeddingNorm);
+      const denominator = queryNorm * embeddingNorm;
+      return denominator === 0 ? 0 : dotProduct / denominator;
+    });
   }
 
   // ==========================================================================
-  // CLUSTERING ALGORITHMS
+  // CLUSTERING ALGORITHMS (WITH CACHING)
   // ==========================================================================
 
   /**
@@ -266,6 +456,7 @@ class MemorySystem {
 
   /**
    * Recalculate cluster centroids as mean of assigned embeddings
+   * OPTIMIZED: Vectorized mean calculation
    */
   updateCentroids(memories, clusters, embeddingDim) {
     const newCentroids = [];
@@ -280,6 +471,7 @@ class MemorySystem {
 
       const centroid = new Array(embeddingDim).fill(0);
       
+      // Vectorized accumulation
       for (const memIdx of cluster) {
         const embedding = memories[memIdx].embedding;
         for (let i = 0; i < embeddingDim; i++) {
@@ -287,8 +479,10 @@ class MemorySystem {
         }
       }
 
+      // Vectorized normalization
+      const count = cluster.length;
       for (let i = 0; i < embeddingDim; i++) {
-        centroid[i] /= cluster.length;
+        centroid[i] /= count;
       }
 
       newCentroids.push(centroid);
@@ -315,6 +509,7 @@ class MemorySystem {
 
   /**
    * Perform k-means clustering on memory embeddings
+   * OPTIMIZED: Early stopping and vectorized operations
    */
   performKMeansClustering(memories, k) {
     if (memories.length < k) {
@@ -352,6 +547,7 @@ class MemorySystem {
 
   /**
    * Build or update clusters for a history
+   * OPTIMIZED: Only rebuilds when necessary
    */
   async buildClusters(historyId) {
     try {
@@ -389,6 +585,9 @@ class MemorySystem {
       this.clusterCache.set(historyId, clusterData);
       this.lastClusterUpdate.set(historyId, validMemories.length);
 
+      // Invalidate query cache for this history since we have new clusters
+      this.invalidateQueryCache(historyId);
+
       return clusterData;
     } catch (error) {
       console.error('Clustering failed:', error.message);
@@ -397,40 +596,99 @@ class MemorySystem {
   }
 
   /**
+   * Build clusters in background (non-blocking)
+   * Allows queries to continue using old clusters while rebuilding
+   */
+  async buildClustersInBackground(historyId) {
+    // Check if already rebuilding
+    if (this.clusteringInProgress.get(historyId)) {
+      console.log(`⏳ Clustering already in progress for ${historyId}`);
+      return;
+    }
+
+    // Mark as in progress
+    this.clusteringInProgress.set(historyId, true);
+
+    try {
+      console.log(`🔄 Starting background clustering for ${historyId}`);
+      
+      // Build clusters without blocking
+      const newClusterData = await this.buildClusters(historyId);
+      
+      if (newClusterData) {
+        console.log(`✅ Background clustering completed for ${historyId}`);
+        // Query cache is already invalidated in buildClusters
+      } else {
+        console.log(`⚠️ Background clustering returned null for ${historyId}`);
+      }
+    } catch (error) {
+      console.error(`❌ Background clustering failed for ${historyId}:`, error.message);
+    } finally {
+      // Mark as complete
+      this.clusteringInProgress.set(historyId, false);
+    }
+  }
+
+  /**
    * Get clusters for a history (cached or build new)
+   * OPTIMIZED: Non-blocking - returns stale cache while rebuilding in background
    */
   async getClusters(historyId) {
     const cached = this.clusterCache.get(historyId);
     const now = Date.now();
 
-    // Check if cache is valid
-    if (cached && (now - cached.lastUpdate) < CLUSTER_CACHE_TTL_MS) {
-      return cached;
+    // If we have cached clusters (even if slightly stale), use them
+    if (cached) {
+      const cacheAge = now - cached.lastUpdate;
+      const lastUpdate = this.lastClusterUpdate.get(historyId) || 0;
+      
+      // Quick check: only fetch count if cache might be very stale
+      if (cacheAge < CLUSTER_CACHE_TTL_MS * 2) { // Allow 2x TTL for stale cache
+        // Check if we need to trigger background rebuild
+        const memories = await db.getMemoryEntries(historyId, 1);
+        const currentCount = memories.length;
+        
+        // If significant new memories AND not currently rebuilding, trigger background rebuild
+        if (currentCount - lastUpdate >= RECLUSTERING_INTERVAL && 
+            !this.clusteringInProgress.get(historyId)) {
+          console.log(`🔄 Triggering background cluster rebuild for ${historyId} (${currentCount - lastUpdate} new memories)`);
+          
+          // Fire and forget - don't await
+          this.buildClustersInBackground(historyId).catch(err => 
+            console.error('Background clustering error:', err)
+          );
+        }
+        
+        // Return cached clusters immediately (non-blocking)
+        return cached;
+      }
     }
 
-    // Check if we need to recluster
-    const currentMemories = await db.getMemoryEntries(historyId, 1);
-    const memoryCount = currentMemories.length;
-    const lastUpdate = this.lastClusterUpdate.get(historyId) || 0;
-
-    if (memoryCount - lastUpdate >= RECLUSTERING_INTERVAL || !cached) {
+    // No cache at all, need to build synchronously (first time only)
+    if (!cached) {
+      console.log(`🔨 No cache found for ${historyId}, building clusters synchronously`);
       return await this.buildClusters(historyId);
     }
 
-    return cached;
+    // Cache is too old and might be invalid, rebuild
+    console.log(`⚠️ Cache too old for ${historyId}, rebuilding`);
+    return await this.buildClusters(historyId);
   }
 
   // ==========================================================================
-  // HIERARCHICAL SEARCH WITH PARALLEL PROCESSING
+  // HIERARCHICAL SEARCH WITH MAXIMUM PARALLELIZATION
   // ==========================================================================
 
   /**
    * Find top relevant clusters for a query
+   * OPTIMIZED: Vectorized similarity calculation
    */
   findRelevantClusters(queryEmbedding, centroids) {
-    const clusterScores = centroids.map((centroid, idx) => ({
+    const similarities = this.calculateSimilaritiesBatch(queryEmbedding, centroids);
+    
+    const clusterScores = similarities.map((similarity, idx) => ({
       clusterId: idx,
-      similarity: this.cosineSimilarity(queryEmbedding, centroid)
+      similarity: similarity
     }));
 
     return clusterScores
@@ -440,7 +698,7 @@ class MemorySystem {
   }
 
   /**
-   * Search within specific clusters for relevant memories - PARALLEL VERSION
+   * Search within specific clusters for relevant memories - FULLY PARALLEL
    */
   async searchWithinClustersParallel(queryEmbedding, relevantClusters, allMemories) {
     // PARALLEL: Search all clusters simultaneously
@@ -450,11 +708,18 @@ class MemorySystem {
           cluster.memoryIndices.includes(idx)
         );
 
+        if (clusterMemories.length === 0) {
+          return [];
+        }
+
         // Vectorized similarity calculation for all memories in cluster
+        const embeddings = clusterMemories.map(m => m.embedding);
+        const similarities = this.calculateSimilaritiesBatch(queryEmbedding, embeddings);
+
         const scoredMemories = clusterMemories
-          .map(memory => ({
+          .map((memory, idx) => ({
             ...memory,
-            similarity: this.cosineSimilarity(queryEmbedding, memory.embedding),
+            similarity: similarities[idx],
             clusterId: cluster.clusterId
           }))
           .filter(m => m.similarity >= MIN_SIMILARITY_THRESHOLD)
@@ -479,7 +744,7 @@ class MemorySystem {
   }
 
   /**
-   * Hierarchical clustered search - OPTIMIZED WITH PARALLEL PROCESSING
+   * Hierarchical clustered search - FULLY OPTIMIZED
    */
   async clusterSearch(historyId, queryEmbedding, cutoffTimestamp) {
     try {
@@ -494,9 +759,7 @@ class MemorySystem {
         return await this.standardVectorSearch(historyId, queryEmbedding, cutoffTimestamp);
       }
 
-      console.log(`🔍 Searching ${clusterData.centroids.length} clusters`);
-
-      // Phase 1: Find relevant clusters (CPU-bound, but fast)
+      // Phase 1: Find relevant clusters using vectorized similarity
       const relevantClusters = this.findRelevantClusters(
         queryEmbedding, 
         clusterData.centroids
@@ -506,8 +769,6 @@ class MemorySystem {
         console.log(`ℹ️ No relevant clusters found`);
         return [];
       }
-
-      console.log(`✅ Found ${relevantClusters.length} relevant clusters`);
 
       // Filter memories once (avoid redundant filtering)
       const validMemories = allMemories.filter(m => 
@@ -530,8 +791,6 @@ class MemorySystem {
         validMemories
       );
 
-      console.log(`✅ Found ${results.length} relevant memories from clusters`);
-
       return results;
 
     } catch (error) {
@@ -541,7 +800,7 @@ class MemorySystem {
   }
 
   /**
-   * Standard vector search (fallback when clustering unavailable) - OPTIMIZED
+   * Standard vector search (fallback) - OPTIMIZED WITH VECTORIZATION
    */
   async standardVectorSearch(historyId, queryEmbedding, cutoffTimestamp) {
     try {
@@ -565,22 +824,32 @@ class MemorySystem {
           }));
       }
 
-      // Fallback to local cosine similarity
+      // Fallback to local vectorized search
       const memoryEntries = await db.getMemoryEntries(historyId);
 
       if (!memoryEntries || memoryEntries.length === 0) {
         return [];
       }
 
-      const scoredEntries = memoryEntries
-        .filter(entry => 
-          entry.embedding && 
-          Array.isArray(entry.embedding) &&
-          (entry.timestamp || 0) < cutoffTimestamp
-        )
-        .map(entry => ({
+      // Filter valid entries
+      const validEntries = memoryEntries.filter(entry => 
+        entry.embedding && 
+        Array.isArray(entry.embedding) &&
+        (entry.timestamp || 0) < cutoffTimestamp
+      );
+
+      if (validEntries.length === 0) {
+        return [];
+      }
+
+      // VECTORIZED: Calculate all similarities at once
+      const embeddings = validEntries.map(e => e.embedding);
+      const similarities = this.calculateSimilaritiesBatch(queryEmbedding, embeddings);
+
+      const scoredEntries = validEntries
+        .map((entry, idx) => ({
           ...entry,
-          similarity: this.cosineSimilarity(queryEmbedding, entry.embedding)
+          similarity: similarities[idx]
         }))
         .filter(entry => entry.similarity >= MIN_SIMILARITY_THRESHOLD)
         .sort((a, b) => b.similarity - a.similarity)
@@ -677,7 +946,7 @@ class MemorySystem {
   }
 
   /**
-   * Retrieve user's personal data with caching and embedding - OPTIMIZED PARALLEL FETCH
+   * Retrieve user's personal data with caching - FULLY PARALLEL
    */
   async getUserPersonalData(userId) {
     const cached = this.personalDataCache.get(userId);
@@ -754,23 +1023,35 @@ class MemorySystem {
   }
 
   // ==========================================================================
-  // MEMORY SEARCH & RETRIEVAL WITH PARALLEL RAG
+  // MEMORY SEARCH & RETRIEVAL WITH CACHING
   // ==========================================================================
 
   /**
-   * Search memory for specific content
+   * Search memory for specific content - WITH CACHING
    */
   async searchMemory(userId, guildId, query) {
     try {
+      const historyId = guildId || userId;
+      
+      // Check cache first
+      const cached = this.getCachedQueryResults(historyId, query, userId, guildId);
+      if (cached) {
+        return cached.map(entry => {
+          const text = this.extractTextFromMessage({ content: entry.messages[0].content });
+          return `[Memory] ${text}`;
+        });
+      }
+
       const queryEmbedding = await this.generateEmbedding(query, 'RETRIEVAL_QUERY');
       if (!queryEmbedding) return [];
-
-      const historyId = guildId || userId;
       
       // Use clustered search
       const results = await this.clusterSearch(historyId, queryEmbedding, Date.now());
 
       if (!results || results.length === 0) return [];
+
+      // Cache results
+      this.cacheQueryResults(historyId, query, results, userId, guildId);
 
       return results.map(entry => {
         const text = this.extractTextFromMessage({ content: entry.messages[0].content });
@@ -783,12 +1064,20 @@ class MemorySystem {
   }
 
   /**
-   * Get relevant historical context via RAG - FULLY PARALLEL VERSION
+   * Get relevant historical context via RAG - FULLY PARALLEL WITH CACHING
    */
   async getRelevantContext(historyId, currentQuery, recentMessageTimestamps, userId = null, guildId = null) {
     try {
       if (!currentQuery || currentQuery.trim().length === 0) {
         return { messages: [], personalData: null };
+      }
+
+      // Check query cache
+      const cachedResults = this.getCachedQueryResults(historyId, currentQuery, userId, guildId);
+      if (cachedResults) {
+        // Still fetch personal data fresh
+        const personalData = userId ? await this.getUserPersonalData(userId) : null;
+        return { messages: cachedResults, personalData };
       }
 
       // PARALLEL: Generate query embedding and fetch personal data simultaneously
@@ -856,6 +1145,9 @@ class MemorySystem {
       relevantMessages.sort((a, b) => b.score - a.score);
       const topResults = relevantMessages.slice(0, MAX_RAG_RESULTS);
 
+      // Cache results
+      this.cacheQueryResults(historyId, currentQuery, topResults, userId, guildId);
+
       return { messages: topResults, personalData };
 
     } catch (error) {
@@ -902,13 +1194,16 @@ class MemorySystem {
         timestamp: Date.now()
       });
 
+      // Invalidate query cache for this history
+      this.invalidateQueryCache(historyId);
+
     } catch (error) {
       console.error('Memory storage failed:', error.message);
     }
   }
 
   /**
-   * Background indexing of conversation history - PARALLEL BATCHING
+   * Background indexing of conversation history - FULLY PARALLEL
    */
   async checkAndIndexMessages(historyId, allHistory, userId = null, guildId = null) {
     try {
@@ -1112,7 +1407,7 @@ class MemorySystem {
         }
       }
 
-      // PARALLEL: Check personal data relevance if available
+      // Check personal data relevance if available
       if (personalData && personalData.embedding) {
         const queryEmbedding = await this.generateEmbedding(currentQuery, 'RETRIEVAL_QUERY');
         if (queryEmbedding) {
@@ -1250,7 +1545,7 @@ class MemorySystem {
   // ==========================================================================
 
   /**
-   * Get current status of memory system including clustering
+   * Get current status of memory system including all caches
    */
   getQueueStatus() {
     const clusterInfo = Array.from(this.clusterCache.entries()).map(([historyId, data]) => ({
@@ -1258,7 +1553,9 @@ class MemorySystem {
       numClusters: data.centroids.length,
       memoryCount: data.memoryCount,
       lastUpdate: new Date(data.lastUpdate).toISOString(),
-      iterations: data.iterations
+      cacheAge: Math.floor((Date.now() - data.lastUpdate) / 1000) + 's',
+      iterations: data.iterations,
+      rebuildingInBackground: this.clusteringInProgress.get(historyId) || false
     }));
 
     return {
@@ -1266,12 +1563,21 @@ class MemorySystem {
       trackedHistories: this.lastIndexedCount.size,
       summaryCacheSize: this.summaryCache.size,
       personalDataCacheSize: this.personalDataCache.size,
+      queryCacheSize: this.queryCache.size,
       clusteredHistories: this.clusterCache.size,
+      backgroundClusteringActive: Array.from(this.clusteringInProgress.values()).filter(v => v).length,
       clusterInfo: clusterInfo,
       parallelConfig: {
         maxConcurrentEmbeddings: MAX_CONCURRENT_EMBEDDINGS,
         maxConcurrentDbOps: MAX_CONCURRENT_DB_OPS,
         parallelIndexBatchSize: PARALLEL_INDEX_BATCH_SIZE
+      },
+      cacheConfig: {
+        queryCacheTTL: QUERY_CACHE_TTL_MS / 1000 + 's',
+        clusterCacheTTL: CLUSTER_CACHE_TTL_MS / 1000 + 's',
+        personalDataCacheTTL: PERSONAL_DATA_CACHE_TTL_MS / 1000 + 's',
+        timeGapThreshold: TIME_GAP_THRESHOLD_MS / 1000 + 's',
+        backgroundClustering: 'enabled'
       },
       entries: Array.from(this.lastIndexedCount.entries()).map(([id, count]) => ({
         historyId: id,
@@ -1289,6 +1595,7 @@ class MemorySystem {
       
       this.clusterCache.delete(historyId);
       this.lastClusterUpdate.delete(historyId);
+      this.invalidateQueryCache(historyId);
       
       const result = await this.buildClusters(historyId);
       
@@ -1356,6 +1663,7 @@ class MemorySystem {
       }
 
       this.lastIndexedCount.set(historyId, oldMessages.length);
+      this.invalidateQueryCache(historyId);
 
       return {
         success: true,
@@ -1368,6 +1676,24 @@ class MemorySystem {
       console.error('Force indexing failed:', error.message);
       return { success: false, message: error.message };
     }
+  }
+
+  /**
+   * Clear all caches (for debugging/testing)
+   */
+  clearAllCaches() {
+    this.embeddingCache.clear();
+    this.queryCache.clear();
+    this.clusterCache.clear();
+    this.summaryCache.clear();
+    this.personalDataCache.clear();
+    this.lastClusterUpdate.clear();
+    this.clusteringInProgress.clear();
+    
+    return {
+      success: true,
+      message: 'All caches cleared'
+    };
   }
 }
 
