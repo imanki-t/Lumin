@@ -121,6 +121,38 @@ const MODEL_FALLBACK_CHAIN = [
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 
 /**
+ * Default embed color for bot messages
+ */
+const EMBED_COLOR = '#5B7C99'; // Soft Nordic blue
+
+/**
+ * Default response format for messages
+ */
+const DEFAULT_RESPONSE_FORMAT = 'Normal';
+
+/**
+ * Bot behavior in DMs
+ */
+const WORK_IN_DMS = true;
+
+/**
+ * Poll configuration
+ */
+const POLL_CONFIG = {
+  /** Maximum polls per minute */
+  MAX_POLLS_PER_MINUTE: 3,
+  
+  /** Maximum results per minute */
+  MAX_RESULTS_PER_MINUTE: 5,
+  
+  /** Auto respond to polls */
+  AUTO_RESPOND_TO_POLLS: true,
+  
+  /** Minimum votes for analysis */
+  MIN_VOTES_FOR_ANALYSIS: 1
+};
+
+/**
  * Default server settings
  * Used when a guild doesn't have custom settings configured
  */
@@ -129,7 +161,7 @@ const DEFAULT_SERVER_SETTINGS = {
   SELECTED_MODEL: DEFAULT_MODEL,
   
   /** Default response format for servers */
-  RESPONSE_FORMAT: 'Normal',
+  RESPONSE_FORMAT: DEFAULT_RESPONSE_FORMAT,
   
   /** Default action buttons visibility */
   SHOW_ACTION_BUTTONS: false,
@@ -139,6 +171,9 @@ const DEFAULT_SERVER_SETTINGS = {
   
   /** Default custom personality (null = use default) */
   CUSTOM_PERSONALITY: null,
+  
+  /** Default embed color for servers */
+  EMBED_COLOR: EMBED_COLOR,
   
   /** Default server override for user settings */
   OVERRIDE_USER_SETTINGS: true,
@@ -163,6 +198,30 @@ const SERVER_SETTINGS_DEFAULTS = {
   
   /** Default for allowedChannels when missing */
   ALLOWED_CHANNELS: []
+};
+
+/**
+ * Default user settings
+ * Used when a user doesn't have custom preferences configured
+ */
+const DEFAULT_USER_SETTINGS = {
+  /** Default model for new users */
+  SELECTED_MODEL: DEFAULT_MODEL,
+  
+  /** Default response format for users */
+  RESPONSE_FORMAT: DEFAULT_RESPONSE_FORMAT,
+  
+  /** Default action buttons visibility for users */
+  SHOW_ACTION_BUTTONS: false,
+  
+  /** Default continuous reply mode for users */
+  CONTINUOUS_REPLY: true,
+  
+  /** Default custom personality for users (null = use default) */
+  CUSTOM_PERSONALITY: null,
+  
+  /** Default embed color for users */
+  EMBED_COLOR: EMBED_COLOR
 };
 
 /**
@@ -1581,7 +1640,7 @@ function formatDuration(milliseconds) {
  * @returns {string} Response format ('Normal' or 'Embedded')
  */
 export function getUserResponsePreference(userId) {
-  return state.userResponsePreference[userId] || config.defaultResponseFormat;
+  return state.userResponsePreference[userId] || DEFAULT_USER_SETTINGS.RESPONSE_FORMAT;
 }
 
 /**
@@ -1601,7 +1660,7 @@ export function initializeBlacklistForGuild(guildId) {
         showActionButtons: DEFAULT_SERVER_SETTINGS.SHOW_ACTION_BUTTONS,
         continuousReply: DEFAULT_SERVER_SETTINGS.CONTINUOUS_REPLY,
         customPersonality: DEFAULT_SERVER_SETTINGS.CUSTOM_PERSONALITY,
-        embedColor: config.hexColour,
+        embedColor: EMBED_COLOR,
         overrideUserSettings: DEFAULT_SERVER_SETTINGS.OVERRIDE_USER_SETTINGS,
         serverChatHistory: DEFAULT_SERVER_SETTINGS.SERVER_CHAT_HISTORY,
         allowedChannels: [...DEFAULT_SERVER_SETTINGS.ALLOWED_CHANNELS]
@@ -1620,6 +1679,27 @@ export function initializeBlacklistForGuild(guildId) {
     }
   } catch (error) {
     console.error(`Error initializing guild ${guildId}:`, error);
+  }
+}
+
+/**
+ * Initialize default settings for a user
+ * @param {string} userId - User ID
+ */
+export function initializeUserSettings(userId) {
+  try {
+    if (!state.userSettings[userId]) {
+      state.userSettings[userId] = {
+        selectedModel: DEFAULT_USER_SETTINGS.SELECTED_MODEL,
+        responseFormat: DEFAULT_USER_SETTINGS.RESPONSE_FORMAT,
+        showActionButtons: DEFAULT_USER_SETTINGS.SHOW_ACTION_BUTTONS,
+        continuousReply: DEFAULT_USER_SETTINGS.CONTINUOUS_REPLY,
+        customPersonality: DEFAULT_USER_SETTINGS.CUSTOM_PERSONALITY,
+        embedColor: DEFAULT_USER_SETTINGS.EMBED_COLOR
+      };
+    }
+  } catch (error) {
+    console.error(`Error initializing user ${userId}:`, error);
   }
 }
 
@@ -1978,6 +2058,7 @@ export default {
   createPartFromUri,
   getUserResponsePreference,
   initializeBlacklistForGuild,
+  initializeUserSettings,
   chatHistoryLock,
   requestQueues,
   TEMP_DIR
