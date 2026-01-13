@@ -115,201 +115,6 @@ const MODEL_FALLBACK_CHAIN = [
   'gemini-2.0-flash-lite'
 ];
 
-/**
- * Default model used when no model is specified
- */
-const DEFAULT_MODEL = 'gemini-2.5-flash';
-
-/**
- * Default embed color for bot messages
- */
-const EMBED_COLOR = '#5B7C99'; // Soft Nordic blue
-
-/**
- * Default response format for messages
- */
-const DEFAULT_RESPONSE_FORMAT = 'Normal';
-
-/**
- * Bot behavior in DMs
- */
-const WORK_IN_DMS = true;
-
-/**
- * Poll configuration
- */
-const POLL_CONFIG = {
-  /** Maximum polls per minute */
-  MAX_POLLS_PER_MINUTE: 3,
-  
-  /** Maximum results per minute */
-  MAX_RESULTS_PER_MINUTE: 5,
-  
-  /** Auto respond to polls */
-  AUTO_RESPOND_TO_POLLS: true,
-  
-  /** Minimum votes for analysis */
-  MIN_VOTES_FOR_ANALYSIS: 1
-};
-
-/**
- * Default server settings
- * Used when a guild doesn't have custom settings configured
- */
-const DEFAULT_SERVER_SETTINGS = {
-  /** Default model for new servers */
-  SELECTED_MODEL: DEFAULT_MODEL,
-  
-  /** Default response format for servers */
-  RESPONSE_FORMAT: DEFAULT_RESPONSE_FORMAT,
-  
-  /** Default action buttons visibility */
-  SHOW_ACTION_BUTTONS: false,
-  
-  /** Default continuous reply mode */
-  CONTINUOUS_REPLY: false,
-  
-  /** Default custom personality (null = use default) */
-  CUSTOM_PERSONALITY: null,
-  
-  /** Default embed color for servers */
-  EMBED_COLOR: EMBED_COLOR,
-  
-  /** Default server override for user settings */
-  OVERRIDE_USER_SETTINGS: true,
-  
-  /** Default server-wide chat history setting */
-  SERVER_CHAT_HISTORY: false,
-  
-  /** Default allowed channels (empty = all channels) */
-  ALLOWED_CHANNELS: []
-};
-
-/**
- * Default values for ensuring server settings fields exist
- * Used when updating existing server configurations
- * These values are applied when a field is missing or undefined
- */
-const SERVER_SETTINGS_DEFAULTS = {
-  /** Default model when undefined */
-  SELECTED_MODEL: DEFAULT_MODEL,
-  
-  /** Default response format when undefined */
-  RESPONSE_FORMAT: DEFAULT_RESPONSE_FORMAT,
-  
-  /** Default for showActionButtons when undefined */
-  SHOW_ACTION_BUTTONS: false,
-  
-  /** Default for continuousReply when undefined */
-  CONTINUOUS_REPLY: true,
-  
-  /** Default custom personality when undefined */
-  CUSTOM_PERSONALITY: null,
-  
-  /** Default embed color when undefined */
-  EMBED_COLOR: EMBED_COLOR,
-  
-  /** Default override user settings when undefined */
-  OVERRIDE_USER_SETTINGS: true,
-  
-  /** Default server chat history when undefined */
-  SERVER_CHAT_HISTORY: false,
-  
-  /** Default for allowedChannels when missing */
-  ALLOWED_CHANNELS: []
-};
-
-/**
- * Default values for ensuring user settings fields exist
- * Used when updating existing user configurations
- * These values are applied when a field is missing or undefined
- */
-const USER_SETTINGS_DEFAULTS = {
-  /** Default model when undefined */
-  SELECTED_MODEL: DEFAULT_MODEL,
-  
-  /** Default response format when undefined */
-  RESPONSE_FORMAT: DEFAULT_RESPONSE_FORMAT,
-  
-  /** Default for showActionButtons when undefined */
-  SHOW_ACTION_BUTTONS: false,
-  
-  /** Default for continuousReply when undefined */
-  CONTINUOUS_REPLY: true,
-  
-  /** Default custom personality when undefined */
-  CUSTOM_PERSONALITY: null,
-  
-  /** Default embed color when undefined */
-  EMBED_COLOR: EMBED_COLOR
-};
-
-/**
- * Default user settings
- * Used when a user doesn't have custom preferences configured
- */
-const DEFAULT_USER_SETTINGS = {
-  /** Default model for new users */
-  SELECTED_MODEL: DEFAULT_MODEL,
-  
-  /** Default response format for users */
-  RESPONSE_FORMAT: DEFAULT_RESPONSE_FORMAT,
-  
-  /** Default action buttons visibility for users */
-  SHOW_ACTION_BUTTONS: false,
-  
-  /** Default continuous reply mode for users */
-  CONTINUOUS_REPLY: true,
-  
-  /** Default custom personality for users (null = use default) */
-  CUSTOM_PERSONALITY: null,
-  
-  /** Default embed color for users */
-  EMBED_COLOR: EMBED_COLOR
-};
-
-/**
- * Time constants
- */
-const TIME_CONSTANTS = {
-  /** One minute in milliseconds */
-  ONE_MINUTE_MS: 60 * 1000,
-  
-  /** One hour in milliseconds */  
-  ONE_HOUR_MS: 60 * 60 * 1000,
-  
-  /** One day in milliseconds */
-  ONE_DAY_MS: 24 * 60 * 60 * 1000
-};
-
-/**
- * Usage limits configuration
- */
-const USAGE_LIMITS = {
-  /** Maximum daily image generation requests per user */
-  DAILY_IMAGE_LIMIT: 25,
-  
-  /** Maximum daily summary requests per user */
-  DAILY_SUMMARY_LIMIT: 10,
-  
-  /** Time period for usage limits in milliseconds (24 hours) */
-  LIMIT_PERIOD_MS: TIME_CONSTANTS.ONE_DAY_MS
-};
-
-/**
- * Validation constants
- */
-const VALIDATION_CONFIG = {
-  /** Minimum length for a valid API key */
-  MIN_API_KEY_LENGTH: 20,
-  
-  /** Exit codes for different shutdown scenarios */
-  EXIT_CODES: {
-    SUCCESS: 0,
-    ERROR: 1
-  }
-};
-
 // ============================================================================
 // FILE SYSTEM SETUP
 // ============================================================================
@@ -390,7 +195,7 @@ function loadApiKeys() {
  * @returns {boolean} True if key is valid
  */
 function validateApiKey(key) {
-  return typeof key === 'string' && key.length > VALIDATION_CONFIG.MIN_API_KEY_LENGTH && !key.includes(' ');
+  return typeof key === 'string' && key.length > 20 && !key.includes(' ');
 }
 
 /** Array of Google Gemini API keys */
@@ -694,7 +499,7 @@ export function switchToNextKeyOrModel(error, currentModelName) {
  * @deprecated Use switchToNextKeyOrModel instead
  */
 export function switchToNextKey(error) {
-  const result = switchToNextKeyOrModel(error, DEFAULT_MODEL);
+  const result = switchToNextKeyOrModel(error, 'gemini-2.5-flash');
   return result.keyRotated || result.modelChanged;
 }
 
@@ -873,7 +678,7 @@ async function withRetryPerModel(apiCall, initialModelName) {
 async function withRetry(apiCall) {
   return withRetryPerModel(
     async (modelName) => await apiCall(),
-    DEFAULT_MODEL
+    'gemini-2.5-flash'
   );
 }
 
@@ -896,7 +701,7 @@ export const genAI = new Proxy({}, {
               request.model = modelName;
               return currentClient.models.generateContent(request);
             },
-            request.model || DEFAULT_MODEL
+            request.model || 'gemini-2.5-flash'
           ),
         generateContentStream: (request) => 
           withRetryPerModel(
@@ -904,7 +709,7 @@ export const genAI = new Proxy({}, {
               request.model = modelName;
               return currentClient.models.generateContentStream(request);
             },
-            request.model || DEFAULT_MODEL
+            request.model || 'gemini-2.5-flash'
           ),
         embedContent: (request) => 
           withRetry(() => currentClient.models.embedContent(request))
@@ -1684,7 +1489,7 @@ function formatDuration(milliseconds) {
  * @returns {string} Response format ('Normal' or 'Embedded')
  */
 export function getUserResponsePreference(userId) {
-  return state.userResponsePreference[userId] || DEFAULT_USER_SETTINGS.RESPONSE_FORMAT;
+  return state.userResponsePreference[userId] || config.defaultResponseFormat;
 }
 
 /**
@@ -1698,92 +1503,31 @@ export function initializeBlacklistForGuild(guildId) {
     }
     
     if (!state.serverSettings[guildId]) {
-      // Create new server settings with all default values
       state.serverSettings[guildId] = {
-        selectedModel: DEFAULT_SERVER_SETTINGS.SELECTED_MODEL,
-        responseFormat: DEFAULT_SERVER_SETTINGS.RESPONSE_FORMAT,
-        showActionButtons: DEFAULT_SERVER_SETTINGS.SHOW_ACTION_BUTTONS,
-        continuousReply: DEFAULT_SERVER_SETTINGS.CONTINUOUS_REPLY,
-        customPersonality: DEFAULT_SERVER_SETTINGS.CUSTOM_PERSONALITY,
-        embedColor: DEFAULT_SERVER_SETTINGS.EMBED_COLOR,
-        overrideUserSettings: DEFAULT_SERVER_SETTINGS.OVERRIDE_USER_SETTINGS,
-        serverChatHistory: DEFAULT_SERVER_SETTINGS.SERVER_CHAT_HISTORY,
-        allowedChannels: [...DEFAULT_SERVER_SETTINGS.ALLOWED_CHANNELS]
+        selectedModel: 'gemini-2.5-flash',
+        responseFormat: 'Normal',
+        showActionButtons: false,
+        continuousReply: false,
+        customPersonality: null,
+        embedColor: config.hexColour,
+        overrideUserSettings: true,
+        serverChatHistory: false,
+        allowedChannels: []
       };
     } else {
-      // Ensure all required fields exist for existing server settings
-      if (state.serverSettings[guildId].selectedModel === undefined) {
-        state.serverSettings[guildId].selectedModel = SERVER_SETTINGS_DEFAULTS.SELECTED_MODEL;
-      }
-      if (state.serverSettings[guildId].responseFormat === undefined) {
-        state.serverSettings[guildId].responseFormat = SERVER_SETTINGS_DEFAULTS.RESPONSE_FORMAT;
+      // Ensure all required fields exist
+      if (!state.serverSettings[guildId].allowedChannels) {
+        state.serverSettings[guildId].allowedChannels = [];
       }
       if (state.serverSettings[guildId].showActionButtons === undefined) {
-        state.serverSettings[guildId].showActionButtons = SERVER_SETTINGS_DEFAULTS.SHOW_ACTION_BUTTONS;
+        state.serverSettings[guildId].showActionButtons = false;
       }
       if (state.serverSettings[guildId].continuousReply === undefined) {
-        state.serverSettings[guildId].continuousReply = SERVER_SETTINGS_DEFAULTS.CONTINUOUS_REPLY;
-      }
-      if (state.serverSettings[guildId].customPersonality === undefined) {
-        state.serverSettings[guildId].customPersonality = SERVER_SETTINGS_DEFAULTS.CUSTOM_PERSONALITY;
-      }
-      if (state.serverSettings[guildId].embedColor === undefined) {
-        state.serverSettings[guildId].embedColor = SERVER_SETTINGS_DEFAULTS.EMBED_COLOR;
-      }
-      if (state.serverSettings[guildId].overrideUserSettings === undefined) {
-        state.serverSettings[guildId].overrideUserSettings = SERVER_SETTINGS_DEFAULTS.OVERRIDE_USER_SETTINGS;
-      }
-      if (state.serverSettings[guildId].serverChatHistory === undefined) {
-        state.serverSettings[guildId].serverChatHistory = SERVER_SETTINGS_DEFAULTS.SERVER_CHAT_HISTORY;
-      }
-      if (!state.serverSettings[guildId].allowedChannels) {
-        state.serverSettings[guildId].allowedChannels = [...SERVER_SETTINGS_DEFAULTS.ALLOWED_CHANNELS];
+        state.serverSettings[guildId].continuousReply = true;
       }
     }
   } catch (error) {
     console.error(`Error initializing guild ${guildId}:`, error);
-  }
-}
-
-/**
- * Initialize default settings for a user
- * @param {string} userId - User ID
- */
-export function initializeUserSettings(userId) {
-  try {
-    if (!state.userSettings[userId]) {
-      // Create new user settings with all default values
-      state.userSettings[userId] = {
-        selectedModel: DEFAULT_USER_SETTINGS.SELECTED_MODEL,
-        responseFormat: DEFAULT_USER_SETTINGS.RESPONSE_FORMAT,
-        showActionButtons: DEFAULT_USER_SETTINGS.SHOW_ACTION_BUTTONS,
-        continuousReply: DEFAULT_USER_SETTINGS.CONTINUOUS_REPLY,
-        customPersonality: DEFAULT_USER_SETTINGS.CUSTOM_PERSONALITY,
-        embedColor: DEFAULT_USER_SETTINGS.EMBED_COLOR
-      };
-    } else {
-      // Ensure all required fields exist for existing user settings
-      if (state.userSettings[userId].selectedModel === undefined) {
-        state.userSettings[userId].selectedModel = USER_SETTINGS_DEFAULTS.SELECTED_MODEL;
-      }
-      if (state.userSettings[userId].responseFormat === undefined) {
-        state.userSettings[userId].responseFormat = USER_SETTINGS_DEFAULTS.RESPONSE_FORMAT;
-      }
-      if (state.userSettings[userId].showActionButtons === undefined) {
-        state.userSettings[userId].showActionButtons = USER_SETTINGS_DEFAULTS.SHOW_ACTION_BUTTONS;
-      }
-      if (state.userSettings[userId].continuousReply === undefined) {
-        state.userSettings[userId].continuousReply = USER_SETTINGS_DEFAULTS.CONTINUOUS_REPLY;
-      }
-      if (state.userSettings[userId].customPersonality === undefined) {
-        state.userSettings[userId].customPersonality = USER_SETTINGS_DEFAULTS.CUSTOM_PERSONALITY;
-      }
-      if (state.userSettings[userId].embedColor === undefined) {
-        state.userSettings[userId].embedColor = USER_SETTINGS_DEFAULTS.EMBED_COLOR;
-      }
-    }
-  } catch (error) {
-    console.error(`Error initializing user ${userId}:`, error);
   }
 }
 
@@ -1794,6 +1538,8 @@ export function initializeUserSettings(userId) {
  */
 export function checkImageRateLimit(userId) {
   const now = Date.now();
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+  const ONE_MINUTE = 60 * 1000;
 
   if (!state.imageUsage[userId]) {
     state.imageUsage[userId] = {
@@ -1806,14 +1552,14 @@ export function checkImageRateLimit(userId) {
   const usage = state.imageUsage[userId];
 
   // Reset daily counter
-  if (now - usage.lastReset > USAGE_LIMITS.LIMIT_PERIOD_MS) {
+  if (now - usage.lastReset > ONE_DAY) {
     usage.count = 0;
     usage.lastReset = now;
   }
 
   // Check per-minute rate limit
-  if (now - usage.lastRequest < TIME_CONSTANTS.ONE_MINUTE_MS) {
-    const waitSeconds = Math.ceil((TIME_CONSTANTS.ONE_MINUTE_MS - (now - usage.lastRequest)) / 1000);
+  if (now - usage.lastRequest < ONE_MINUTE) {
+    const waitSeconds = Math.ceil((ONE_MINUTE - (now - usage.lastRequest)) / 1000);
     return {
       allowed: false,
       message: `⏳ Please wait ${waitSeconds}s before generating another image.`
@@ -1821,7 +1567,7 @@ export function checkImageRateLimit(userId) {
   }
 
   // Check daily limit
-  const limit = config.imageConfig?.maxPerDay || USAGE_LIMITS.DAILY_IMAGE_LIMIT;
+  const limit = config.imageConfig?.maxPerDay || 10;
   if (usage.count >= limit) {
     return {
       allowed: false,
@@ -1847,7 +1593,8 @@ export function incrementImageUsage(userId) {
     };
   }
 
-  if (now - state.imageUsage[userId].lastReset > USAGE_LIMITS.LIMIT_PERIOD_MS) {
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+  if (now - state.imageUsage[userId].lastReset > ONE_DAY) {
     state.imageUsage[userId].count = 0;
     state.imageUsage[userId].lastReset = now;
   }
@@ -1863,6 +1610,8 @@ export function incrementImageUsage(userId) {
  */
 export function checkSummaryRateLimit(userId) {
   const now = Date.now();
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+  const LIMIT = 10;
 
   if (!state.summaryUsage[userId]) {
     state.summaryUsage[userId] = {
@@ -1874,16 +1623,16 @@ export function checkSummaryRateLimit(userId) {
   const usage = state.summaryUsage[userId];
 
   // Reset daily counter
-  if (now - usage.lastReset > USAGE_LIMITS.LIMIT_PERIOD_MS) {
+  if (now - usage.lastReset > ONE_DAY) {
     usage.count = 0;
     usage.lastReset = now;
   }
 
   // Check daily limit
-  if (usage.count >= USAGE_LIMITS.DAILY_SUMMARY_LIMIT) {
+  if (usage.count >= LIMIT) {
     return {
       allowed: false,
-      message: `🛑 You've reached your daily limit of ${USAGE_LIMITS.DAILY_SUMMARY_LIMIT} summaries. Limits reset daily.`
+      message: `🛑 You've reached your daily limit of ${LIMIT} summaries. Limits reset daily.`
     };
   }
 
@@ -1904,7 +1653,8 @@ export function incrementSummaryUsage(userId) {
     };
   }
 
-  if (now - state.summaryUsage[userId].lastReset > USAGE_LIMITS.LIMIT_PERIOD_MS) {
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+  if (now - state.summaryUsage[userId].lastReset > ONE_DAY) {
     state.summaryUsage[userId].count = 0;
     state.summaryUsage[userId].lastReset = now;
   }
@@ -2097,10 +1847,10 @@ async function gracefulShutdown(signal) {
     console.log(JSON.stringify(getApiKeyStats(), null, 2));
     
     console.log('✅ Graceful shutdown completed');
-    process.exit(VALIDATION_CONFIG.EXIT_CODES.SUCCESS);
+    process.exit(0);
   } catch (error) {
     console.error('❌ Error during graceful shutdown:', error);
-    process.exit(VALIDATION_CONFIG.EXIT_CODES.ERROR);
+    process.exit(1);
   }
 }
 
@@ -2142,7 +1892,6 @@ export default {
   createPartFromUri,
   getUserResponsePreference,
   initializeBlacklistForGuild,
-  initializeUserSettings,
   chatHistoryLock,
   requestQueues,
   TEMP_DIR

@@ -1,4 +1,7 @@
 export default {
+  defaultResponseFormat: "Normal",
+  hexColour: "#5B7C99", // Soft Nordic blue
+  workInDMs: true,
   coreSystemRules: `You are Lumin, a friendly companion chatting via Discord.
 
 CRITICAL RULES (ALWAYS FOLLOW):
@@ -165,5 +168,33 @@ You're the reliable, capable person everyone counts on, but you're also surprisi
     { name: "j-pop", type: "Listening" },
     { name: "big sister", type: "Playing" },
     { name: "over you", type: "Watching" }
-  ]
+  ],
+  
+  defaultServerSettings: {
+    selectedModel: "gemini-2.5-flash",
+    responseFormat: "Normal",
+    showActionButtons: false,
+    continuousReply: false,
+    customPersonality: null,
+    embedColor: "#5B7C99",
+    overrideUserSettings: true,
+    serverChatHistory: false,
+    allowedChannels: []
+  },
+  
+  defaultUserSettings: {
+    selectedModel: "gemini-2.5-flash",
+    responseFormat: "Normal",
+    showActionButtons: false,
+    continuousReply: true,
+    customPersonality: null,
+    embedColor: "#5B7C99"
+  },
+  
+  pollConfig: {
+    maxPollsPerMinute: 3,
+    maxResultsPerMinute: 5,
+    autoRespondToPolls: true,
+    minVotesForAnalysis: 1
+  }
 };
