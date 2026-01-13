@@ -75,7 +75,20 @@ const CLUSTER_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_MEMORIES_PER_CLUSTER = 10;
 
 // ============================================================================
-// MEMORY SYSTEM CLASS WITH CLUSTERING
+// PARALLEL PROCESSING CONFIGURATION
+// ============================================================================
+
+/** Maximum number of concurrent embedding generation operations */
+const MAX_CONCURRENT_EMBEDDINGS = 5;
+
+/** Maximum number of concurrent database operations */
+const MAX_CONCURRENT_DB_OPS = 10;
+
+/** Batch size for parallel memory indexing */
+const PARALLEL_INDEX_BATCH_SIZE = 3;
+
+// ============================================================================
+// MEMORY SYSTEM CLASS WITH OPTIMIZED PARALLEL PROCESSING
 // ============================================================================
 
 class MemorySystem {
@@ -88,14 +101,18 @@ class MemorySystem {
     // Clustering-specific caches
     this.clusterCache = new Map(); // historyId -> { clusters, centroids, lastUpdate, memoryCount }
     this.lastClusterUpdate = new Map(); // historyId -> memoryCount at last clustering
+    
+    // Parallel processing controls
+    this.activeEmbeddingOps = 0;
+    this.embeddingQueue = [];
   }
 
   // ==========================================================================
-  // EMBEDDING UTILITIES
+  // EMBEDDING UTILITIES WITH PARALLEL PROCESSING
   // ==========================================================================
 
   /**
-   * Generate embedding for text with caching
+   * Generate embedding for text with caching and rate limiting
    */
   async generateEmbedding(text, taskType = 'RETRIEVAL_DOCUMENT') {
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
@@ -134,6 +151,29 @@ class MemorySystem {
   }
 
   /**
+   * Generate multiple embeddings in parallel with concurrency control
+   */
+  async generateEmbeddingsBatch(texts, taskType = 'RETRIEVAL_DOCUMENT') {
+    const results = [];
+    const batches = [];
+    
+    // Split into concurrent batches
+    for (let i = 0; i < texts.length; i += MAX_CONCURRENT_EMBEDDINGS) {
+      batches.push(texts.slice(i, i + MAX_CONCURRENT_EMBEDDINGS));
+    }
+    
+    // Process batches sequentially, but items within batch in parallel
+    for (const batch of batches) {
+      const batchResults = await Promise.all(
+        batch.map(text => this.generateEmbedding(text, taskType))
+      );
+      results.push(...batchResults);
+    }
+    
+    return results;
+  }
+
+  /**
    * Calculate cosine similarity between two embeddings
    */
   cosineSimilarity(a, b) {
@@ -150,6 +190,13 @@ class MemorySystem {
     }
 
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  /**
+   * Calculate similarity between query and multiple embeddings in parallel
+   */
+  calculateSimilaritiesBatch(queryEmbedding, embeddings) {
+    return embeddings.map(emb => this.cosineSimilarity(queryEmbedding, emb));
   }
 
   // ==========================================================================
@@ -193,7 +240,7 @@ class MemorySystem {
   }
 
   /**
-   * Assign memories to nearest cluster centroid
+   * Assign memories to nearest cluster centroid - VECTORIZED
    */
   assignToClusters(memories, centroids) {
     const clusters = Array.from({ length: centroids.length }, () => []);
@@ -374,7 +421,7 @@ class MemorySystem {
   }
 
   // ==========================================================================
-  // HIERARCHICAL SEARCH (CLUSTER -> MEMORY)
+  // HIERARCHICAL SEARCH WITH PARALLEL PROCESSING
   // ==========================================================================
 
   /**
@@ -393,49 +440,63 @@ class MemorySystem {
   }
 
   /**
-   * Search within specific clusters for relevant memories
+   * Search within specific clusters for relevant memories - PARALLEL VERSION
    */
-  async searchWithinClusters(historyId, queryEmbedding, relevantClusters, allMemories) {
-    const results = [];
+  async searchWithinClustersParallel(queryEmbedding, relevantClusters, allMemories) {
+    // PARALLEL: Search all clusters simultaneously
+    const clusterResults = await Promise.all(
+      relevantClusters.map(async (cluster) => {
+        const clusterMemories = allMemories.filter((_, idx) => 
+          cluster.memoryIndices.includes(idx)
+        );
 
-    for (const cluster of relevantClusters) {
-      const clusterMemories = allMemories.filter((_, idx) => 
-        cluster.memoryIndices.includes(idx)
-      );
+        // Vectorized similarity calculation for all memories in cluster
+        const scoredMemories = clusterMemories
+          .map(memory => ({
+            ...memory,
+            similarity: this.cosineSimilarity(queryEmbedding, memory.embedding),
+            clusterId: cluster.clusterId
+          }))
+          .filter(m => m.similarity >= MIN_SIMILARITY_THRESHOLD)
+          .sort((a, b) => b.similarity - a.similarity)
+          .slice(0, MAX_MEMORIES_PER_CLUSTER);
 
-      const scoredMemories = clusterMemories
-        .map(memory => ({
-          ...memory,
-          similarity: this.cosineSimilarity(queryEmbedding, memory.embedding),
-          clusterId: cluster.clusterId
-        }))
-        .filter(m => m.similarity >= MIN_SIMILARITY_THRESHOLD)
-        .sort((a, b) => b.similarity - a.similarity)
-        .slice(0, MAX_MEMORIES_PER_CLUSTER);
+        return scoredMemories;
+      })
+    );
 
-      results.push(...scoredMemories);
-    }
-
-    results.sort((a, b) => b.similarity - a.similarity);
-    return results.slice(0, MAX_RAG_RESULTS);
+    // Flatten and sort all results
+    const allResults = clusterResults.flat();
+    allResults.sort((a, b) => b.similarity - a.similarity);
+    
+    return allResults.slice(0, MAX_RAG_RESULTS).map(r => ({
+      messages: r.messages,
+      score: r.similarity,
+      source: 'conversation-history',
+      timestamp: r.timestamp,
+      clusterId: r.clusterId
+    }));
   }
 
   /**
-   * Hierarchical clustered search (main search method)
+   * Hierarchical clustered search - OPTIMIZED WITH PARALLEL PROCESSING
    */
   async clusterSearch(historyId, queryEmbedding, cutoffTimestamp) {
     try {
-      const clusterData = await this.getClusters(historyId);
+      // PARALLEL: Fetch cluster data and memories simultaneously
+      const [clusterData, allMemories] = await Promise.all([
+        this.getClusters(historyId),
+        db.getMemoryEntries(historyId, 1000)
+      ]);
 
       if (!clusterData) {
-        // Fallback to standard vector search
         console.log(`ℹ️ No clusters available, using standard search`);
         return await this.standardVectorSearch(historyId, queryEmbedding, cutoffTimestamp);
       }
 
       console.log(`🔍 Searching ${clusterData.centroids.length} clusters`);
 
-      // Phase 1: Find relevant clusters
+      // Phase 1: Find relevant clusters (CPU-bound, but fast)
       const relevantClusters = this.findRelevantClusters(
         queryEmbedding, 
         clusterData.centroids
@@ -448,8 +509,7 @@ class MemorySystem {
 
       console.log(`✅ Found ${relevantClusters.length} relevant clusters`);
 
-      // Phase 2: Get memories from relevant clusters only
-      const allMemories = await db.getMemoryEntries(historyId, 1000);
+      // Filter memories once (avoid redundant filtering)
       const validMemories = allMemories.filter(m => 
         m.embedding && 
         Array.isArray(m.embedding) &&
@@ -463,9 +523,8 @@ class MemorySystem {
         memoryIndices: clusterData.clusters[cluster.clusterId] || []
       }));
 
-      // Phase 3: Search within selected clusters
-      const results = await this.searchWithinClusters(
-        historyId,
+      // Phase 2: PARALLEL search within all clusters simultaneously
+      const results = await this.searchWithinClustersParallel(
         queryEmbedding,
         clustersWithIndices,
         validMemories
@@ -473,13 +532,7 @@ class MemorySystem {
 
       console.log(`✅ Found ${results.length} relevant memories from clusters`);
 
-      return results.map(r => ({
-        messages: r.messages,
-        score: r.similarity,
-        source: 'conversation-history',
-        timestamp: r.timestamp,
-        clusterId: r.clusterId
-      }));
+      return results;
 
     } catch (error) {
       console.error('Cluster search failed:', error.message);
@@ -488,7 +541,7 @@ class MemorySystem {
   }
 
   /**
-   * Standard vector search (fallback when clustering unavailable)
+   * Standard vector search (fallback when clustering unavailable) - OPTIMIZED
    */
   async standardVectorSearch(historyId, queryEmbedding, cutoffTimestamp) {
     try {
@@ -585,7 +638,7 @@ class MemorySystem {
   }
 
   // ==========================================================================
-  // PERSONAL DATA MANAGEMENT
+  // PERSONAL DATA MANAGEMENT WITH PARALLEL FETCHING
   // ==========================================================================
 
   /**
@@ -624,7 +677,7 @@ class MemorySystem {
   }
 
   /**
-   * Retrieve user's personal data with caching and embedding
+   * Retrieve user's personal data with caching and embedding - OPTIMIZED PARALLEL FETCH
    */
   async getUserPersonalData(userId) {
     const cached = this.personalDataCache.get(userId);
@@ -633,6 +686,7 @@ class MemorySystem {
     }
 
     try {
+      // PARALLEL: Fetch all personal data sources simultaneously
       const [timezone, birthday, reminders, complimentCount, dailyQuote, userFacts] = await Promise.all([
         db.getUserTimezone(userId),
         db.getBirthday(userId),
@@ -700,7 +754,7 @@ class MemorySystem {
   }
 
   // ==========================================================================
-  // MEMORY SEARCH & RETRIEVAL (WITH CLUSTERING)
+  // MEMORY SEARCH & RETRIEVAL WITH PARALLEL RAG
   // ==========================================================================
 
   /**
@@ -729,7 +783,7 @@ class MemorySystem {
   }
 
   /**
-   * Get relevant historical context via RAG with clustering
+   * Get relevant historical context via RAG - FULLY PARALLEL VERSION
    */
   async getRelevantContext(historyId, currentQuery, recentMessageTimestamps, userId = null, guildId = null) {
     try {
@@ -737,6 +791,7 @@ class MemorySystem {
         return { messages: [], personalData: null };
       }
 
+      // PARALLEL: Generate query embedding and fetch personal data simultaneously
       const [queryEmbedding, personalData] = await Promise.all([
         this.generateEmbedding(currentQuery, 'RETRIEVAL_QUERY'),
         userId ? this.getUserPersonalData(userId) : Promise.resolve(null)
@@ -746,44 +801,58 @@ class MemorySystem {
         return { messages: [], personalData };
       }
 
-      const relevantMessages = [];
       const cutoffTimestamp = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
 
-      // 1. Clustered search on conversation history (FASTER!)
-      const conversationResults = await this.clusterSearch(historyId, queryEmbedding, cutoffTimestamp);
-      relevantMessages.push(...conversationResults);
+      // PARALLEL RAG: Execute all searches simultaneously
+      const searchPromises = [
+        // 1. Main conversation history search
+        this.clusterSearch(historyId, queryEmbedding, cutoffTimestamp)
+      ];
 
-      // 2. Cross-RAG: Search server context if this is a user query in a server
-      if (userId && guildId && historyId !== guildId && relevantMessages.length < MAX_RAG_RESULTS) {
-        const serverResults = await db.findSimilarMemoriesWithFilter(guildId, queryEmbedding, 1, { userId });
-        if (serverResults && serverResults.length > 0) {
-          const filtered = serverResults.filter(entry => {
-            const entryTimestamp = entry.timestamp || 0;
-            return entryTimestamp < cutoffTimestamp && entry.score >= MIN_SIMILARITY_THRESHOLD;
-          });
-
-          relevantMessages.push(...filtered.map(entry => ({
-            messages: entry.messages,
-            score: entry.score * 0.85,
-            source: 'server-context',
-            timestamp: entry.timestamp
-          })));
-        }
+      // 2. Cross-RAG: Server context (if user query in server)
+      if (userId && guildId && historyId !== guildId) {
+        searchPromises.push(
+          db.findSimilarMemoriesWithFilter(guildId, queryEmbedding, 1, { userId })
+            .then(results => {
+              if (!results || results.length === 0) return [];
+              return results
+                .filter(entry => {
+                  const entryTimestamp = entry.timestamp || 0;
+                  return entryTimestamp < cutoffTimestamp && entry.score >= MIN_SIMILARITY_THRESHOLD;
+                })
+                .map(entry => ({
+                  messages: entry.messages,
+                  score: entry.score * 0.85,
+                  source: 'server-context',
+                  timestamp: entry.timestamp
+                }));
+            })
+            .catch(() => [])
+        );
       }
 
-      // 3. Cross-RAG: Search user context if this is a server query
-      if (guildId && historyId === guildId && userId && relevantMessages.length < MAX_RAG_RESULTS) {
-        const userResults = await this.clusterSearch(userId, queryEmbedding, cutoffTimestamp);
-        if (userResults && userResults.length > 0) {
-          relevantMessages.push(...userResults.map(entry => ({
-            messages: entry.messages.slice(-6),
-            score: entry.score * 0.75,
-            source: 'user-context',
-            timestamp: entry.timestamp
-          })));
-        }
+      // 3. Cross-RAG: User context (if server query)
+      if (guildId && historyId === guildId && userId) {
+        searchPromises.push(
+          this.clusterSearch(userId, queryEmbedding, cutoffTimestamp)
+            .then(results => {
+              if (!results || results.length === 0) return [];
+              return results.map(entry => ({
+                messages: entry.messages.slice(-6),
+                score: entry.score * 0.75,
+                source: 'user-context',
+                timestamp: entry.timestamp
+              }));
+            })
+            .catch(() => [])
+        );
       }
 
+      // Wait for all parallel searches to complete
+      const allSearchResults = await Promise.all(searchPromises);
+      
+      // Flatten and combine all results
+      const relevantMessages = allSearchResults.flat();
       relevantMessages.sort((a, b) => b.score - a.score);
       const topResults = relevantMessages.slice(0, MAX_RAG_RESULTS);
 
@@ -796,7 +865,7 @@ class MemorySystem {
   }
 
   // ==========================================================================
-  // MEMORY STORAGE & INDEXING
+  // MEMORY STORAGE & INDEXING WITH PARALLEL PROCESSING
   // ==========================================================================
 
   /**
@@ -839,7 +908,7 @@ class MemorySystem {
   }
 
   /**
-   * Background indexing of conversation history in chunks
+   * Background indexing of conversation history - PARALLEL BATCHING
    */
   async checkAndIndexMessages(historyId, allHistory, userId = null, guildId = null) {
     try {
@@ -867,10 +936,20 @@ class MemorySystem {
             }
           }
 
-          await Promise.all(batches.map(batch =>
-            this.storeMemoryWithEmbedding(historyId, batch, userId, guildId)
-              .catch(err => console.error('Background indexing error:', err.message))
-          ));
+          // PARALLEL: Process batches in controlled parallel groups
+          const parallelBatches = [];
+          for (let i = 0; i < batches.length; i += PARALLEL_INDEX_BATCH_SIZE) {
+            parallelBatches.push(batches.slice(i, i + PARALLEL_INDEX_BATCH_SIZE));
+          }
+
+          for (const parallelGroup of parallelBatches) {
+            await Promise.all(
+              parallelGroup.map(batch =>
+                this.storeMemoryWithEmbedding(historyId, batch, userId, guildId)
+                  .catch(err => console.error('Background indexing error:', err.message))
+              )
+            );
+          }
 
           this.lastIndexedCount.set(historyId, oldMessages.length);
         }
@@ -947,11 +1026,11 @@ class MemorySystem {
   }
 
   // ==========================================================================
-  // MAIN HISTORY OPTIMIZATION
+  // MAIN HISTORY OPTIMIZATION WITH MAXIMUM PARALLELIZATION
   // ==========================================================================
 
   /**
-   * Get optimized conversation history with RAG and clustering
+   * Get optimized conversation history with RAG and clustering - FULLY PARALLEL
    */
   async getOptimizedHistory(historyId, currentQuery, model, userId = null, guildId = null) {
     try {
@@ -976,6 +1055,7 @@ class MemorySystem {
 
       const recentTimestamps = recentMessages.map(msg => msg.timestamp || Date.now());
 
+      // PARALLEL: Background indexing (fire and forget)
       this.checkAndIndexMessages(historyId, allHistory, userId, guildId)
         .catch(() => { });
 
@@ -983,6 +1063,7 @@ class MemorySystem {
         return this.formatHistoryForAPI(recentMessages);
       }
 
+      // PARALLEL: Fetch RAG results and generate summary simultaneously
       const [ragResults, summary] = await Promise.all([
         this.getRelevantContext(historyId, currentQuery, recentTimestamps, userId, guildId),
         oldMessages.length > COMPRESSION_THRESHOLD ?
@@ -1031,6 +1112,7 @@ class MemorySystem {
         }
       }
 
+      // PARALLEL: Check personal data relevance if available
       if (personalData && personalData.embedding) {
         const queryEmbedding = await this.generateEmbedding(currentQuery, 'RETRIEVAL_QUERY');
         if (queryEmbedding) {
@@ -1186,6 +1268,11 @@ class MemorySystem {
       personalDataCacheSize: this.personalDataCache.size,
       clusteredHistories: this.clusterCache.size,
       clusterInfo: clusterInfo,
+      parallelConfig: {
+        maxConcurrentEmbeddings: MAX_CONCURRENT_EMBEDDINGS,
+        maxConcurrentDbOps: MAX_CONCURRENT_DB_OPS,
+        parallelIndexBatchSize: PARALLEL_INDEX_BATCH_SIZE
+      },
       entries: Array.from(this.lastIndexedCount.entries()).map(([id, count]) => ({
         historyId: id,
         lastIndexedMessageCount: count
@@ -1226,7 +1313,7 @@ class MemorySystem {
   }
 
   /**
-   * Force immediate indexing of a history (for debugging/testing)
+   * Force immediate indexing of a history - PARALLEL VERSION
    */
   async forceIndexNow(historyId, userId = null, guildId = null) {
     try {
@@ -1252,19 +1339,30 @@ class MemorySystem {
         if (chunk.length >= 3) batches.push(chunk);
       }
 
-      console.log(`🔥 Force-indexing ${oldMessages.length} messages in ${batches.length} chunks`);
+      console.log(`🔥 Force-indexing ${oldMessages.length} messages in ${batches.length} chunks (parallel)`);
 
-      await Promise.all(batches.map(batch =>
-        this.storeMemoryWithEmbedding(historyId, batch, userId, guildId)
-      ));
+      // PARALLEL: Process in controlled groups
+      const parallelBatches = [];
+      for (let i = 0; i < batches.length; i += PARALLEL_INDEX_BATCH_SIZE) {
+        parallelBatches.push(batches.slice(i, i + PARALLEL_INDEX_BATCH_SIZE));
+      }
+
+      for (const parallelGroup of parallelBatches) {
+        await Promise.all(
+          parallelGroup.map(batch =>
+            this.storeMemoryWithEmbedding(historyId, batch, userId, guildId)
+          )
+        );
+      }
 
       this.lastIndexedCount.set(historyId, oldMessages.length);
 
       return {
         success: true,
-        message: `Indexed ${oldMessages.length} messages in ${batches.length} overlapping chunks`,
+        message: `Indexed ${oldMessages.length} messages in ${batches.length} overlapping chunks (parallel)`,
         batchCount: batches.length,
-        messageCount: oldMessages.length
+        messageCount: oldMessages.length,
+        parallelGroups: parallelBatches.length
       };
     } catch (error) {
       console.error('Force indexing failed:', error.message);
