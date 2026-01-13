@@ -324,6 +324,87 @@ async function replaceUserMentionsWithUsernames(content, message) {
   return result;
 }
 
+async function replaceChannelMentionsWithNames(content, message) {
+  const channelMentionRegex = /<#(\d+)>/g;
+  let match;
+  const replacements = new Map();
+
+  while ((match = channelMentionRegex.exec(content)) !== null) {
+    const channelId = match[1];
+    const mentionText = match[0];
+    
+    if (!replacements.has(channelId)) {
+      try {
+        const channel = await client.channels.fetch(channelId).catch(() => null);
+        if (channel && channel.name) {
+          replacements.set(channelId, `#${channel.name}`);
+        } else {
+          replacements.set(channelId, mentionText);
+        }
+      } catch (error) {
+        console.error(`Error fetching channel ${channelId}:`, error);
+        replacements.set(channelId, mentionText);
+      }
+    }
+  }
+
+  let result = content;
+  for (const [channelId, channelName] of replacements.entries()) {
+    const mentionRegex = new RegExp(`<#${channelId}>`, 'g');
+    result = result.replace(mentionRegex, channelName);
+  }
+
+  return result;
+}
+
+async function replaceRoleMentionsWithNames(content, message) {
+  const roleMentionRegex = /<@&(\d+)>/g;
+  let match;
+  const replacements = new Map();
+
+  while ((match = roleMentionRegex.exec(content)) !== null) {
+    const roleId = match[1];
+    const mentionText = match[0];
+    
+    if (!replacements.has(roleId)) {
+      try {
+        if (message.guild) {
+          const role = await message.guild.roles.fetch(roleId).catch(() => null);
+          if (role && role.name) {
+            replacements.set(roleId, `@${role.name}`);
+          } else {
+            replacements.set(roleId, mentionText);
+          }
+        } else {
+          replacements.set(roleId, mentionText);
+        }
+      } catch (error) {
+        console.error(`Error fetching role ${roleId}:`, error);
+        replacements.set(roleId, mentionText);
+      }
+    }
+  }
+
+  let result = content;
+  for (const [roleId, roleName] of replacements.entries()) {
+    const mentionRegex = new RegExp(`<@&${roleId}>`, 'g');
+    result = result.replace(mentionRegex, roleName);
+  }
+
+  return result;
+}
+
+async function replaceAllMentions(content, message) {
+  if (!content) return content;
+  
+  let result = content;
+  result = await replaceUserMentionsWithUsernames(result, message);
+  result = await replaceChannelMentionsWithNames(result, message);
+  result = await replaceRoleMentionsWithNames(result, message);
+  
+  return result;
+}
+
 async function processStickerAsAttachment(sticker) {
   try {
     const isAnimated = sticker.format === STICKER_FORMATS.APNG || 
@@ -389,23 +470,30 @@ async function extractForwardedContent(message) {
     const snapshot = message.messageSnapshots.first();
     
     if (snapshot.content) {
-      // Replace user mentions in forwarded content
-      forwardedText = await replaceUserMentionsWithUsernames(snapshot.content, message);
+      // Replace all mentions in forwarded content
+      forwardedText = await replaceAllMentions(snapshot.content, message);
     }
     
     if (snapshot.embeds && snapshot.embeds.length > 0) {
-      const embedTexts = snapshot.embeds
-        .map(embed => {
+      const embedTexts = await Promise.all(
+        snapshot.embeds.map(async (embed) => {
           let text = '';
-          if (embed.title) text += `**${embed.title}**\n`;
-          if (embed.description) text += embed.description;
+          if (embed.title) {
+            const cleanTitle = await replaceAllMentions(embed.title, message);
+            text += `**${cleanTitle}**\n`;
+          }
+          if (embed.description) {
+            const cleanDescription = await replaceAllMentions(embed.description, message);
+            text += cleanDescription;
+          }
           return text;
         })
-        .filter(t => t)
-        .join('\n\n');
+      );
       
-      if (embedTexts) {
-        forwardedText += '\n\n' + embedTexts;
+      const filteredTexts = embedTexts.filter(t => t).join('\n\n');
+      
+      if (filteredTexts) {
+        forwardedText += '\n\n' + filteredTexts;
       }
     }
     
@@ -619,7 +707,9 @@ async function processGifLinks(messageContent, message) {
 
         if (mediaUrl) {
           gifLinks.push(mediaUrl);
-          const gifDescription = embed.description || embed.title || embed.url || 'GIF';
+          let gifDescription = embed.description || embed.title || embed.url || 'GIF';
+          // Replace mentions in GIF description
+          gifDescription = await replaceAllMentions(gifDescription, message);
           const contextText = `${CONTEXT_MARKERS.GIF_SENT} ${embed.provider?.name || 'GIF'}${gifDescription !== 'GIF' ? ': ' + gifDescription : ''}]`;
           if (!messageContent.includes(contextText)) {
             messageContent += `\n${contextText}`;
@@ -719,8 +809,8 @@ async function handleTextMessage(message) {
 
     let messageContent = message.content.replace(new RegExp(`<@!?${botId}>`), '').trim();
     
-    // Replace user mentions with actual usernames
-    messageContent = await replaceUserMentionsWithUsernames(messageContent, message);
+    // Replace all mentions (users, channels, roles) with actual names
+    messageContent = await replaceAllMentions(messageContent, message);
 
     const gifRegex = new RegExp(TENOR_GIPHY_REGEX);
     if (gifRegex.test(messageContent) && (!message.embeds || message.embeds.length === 0)) {
@@ -728,8 +818,8 @@ async function handleTextMessage(message) {
       try {
         message = await message.channel.messages.fetch(message.id);
         messageContent = message.content.replace(new RegExp(`<@!?${botId}>`), '').trim();
-        // Replace user mentions again after refetching message
-        messageContent = await replaceUserMentionsWithUsernames(messageContent, message);
+        // Replace all mentions again after refetching message
+        messageContent = await replaceAllMentions(messageContent, message);
       } catch (e) {}
     }
 
@@ -744,22 +834,33 @@ async function handleTextMessage(message) {
           let contextBuffer = `${CONTEXT_MARKERS.REPLY_PREFIX} ${repliedMsg.author.username}]:\n`;
 
           if (repliedMsg.content) {
-            // Replace user mentions in replied message content
-            const repliedContent = await replaceUserMentionsWithUsernames(repliedMsg.content, message);
+            // Replace all mentions in replied message content
+            const repliedContent = await replaceAllMentions(repliedMsg.content, message);
             contextBuffer += `${repliedContent}\n`;
           }
 
           if (repliedMsg.embeds.length > 0) {
-            repliedMsg.embeds.forEach((embed, index) => {
+            for (const [index, embed] of repliedMsg.embeds.entries()) {
               contextBuffer += `${CONTEXT_MARKERS.EMBED_PREFIX} ${index + 1} ${CONTEXT_MARKERS.CONTENT_SUFFIX}:\n`;
-              if (embed.title) contextBuffer += `Title: ${embed.title}\n`;
-              if (embed.description) contextBuffer += `Description: ${embed.description}\n`;
-              if (embed.fields && embed.fields.length > 0) {
-                embed.fields.forEach(field => {
-                  contextBuffer += `${field.name}: ${field.value}\n`;
-                });
+              
+              if (embed.title) {
+                const cleanTitle = await replaceAllMentions(embed.title, message);
+                contextBuffer += `Title: ${cleanTitle}\n`;
               }
-            });
+              
+              if (embed.description) {
+                const cleanDescription = await replaceAllMentions(embed.description, message);
+                contextBuffer += `Description: ${cleanDescription}\n`;
+              }
+              
+              if (embed.fields && embed.fields.length > 0) {
+                for (const field of embed.fields) {
+                  const cleanFieldName = await replaceAllMentions(field.name, message);
+                  const cleanFieldValue = await replaceAllMentions(field.value, message);
+                  contextBuffer += `${cleanFieldName}: ${cleanFieldValue}\n`;
+                }
+              }
+            }
           }
 
           if (repliedMsg.attachments.size > 0) {

@@ -64,6 +64,122 @@ const MESSAGE_FORMATTING = {
 
 const OFFICE_FILE_TYPES = ['.pptx', '.docx'];
 
+async function replaceUserMentionsWithUsernames(content, guild) {
+  if (!content) return content;
+  
+  const userMentionRegex = /<@!?(\d+)>/g;
+  let match;
+  const replacements = new Map();
+
+  while ((match = userMentionRegex.exec(content)) !== null) {
+    const userId = match[1];
+    const mentionText = match[0];
+    
+    if (!replacements.has(userId)) {
+      try {
+        const user = await client.users.fetch(userId).catch(() => null);
+        if (user) {
+          replacements.set(userId, `@${user.username}`);
+        } else {
+          replacements.set(userId, mentionText);
+        }
+      } catch (error) {
+        console.error(`Error fetching user ${userId}:`, error);
+        replacements.set(userId, mentionText);
+      }
+    }
+  }
+
+  let result = content;
+  for (const [userId, username] of replacements.entries()) {
+    const mentionRegex = new RegExp(`<@!?${userId}>`, 'g');
+    result = result.replace(mentionRegex, username);
+  }
+
+  return result;
+}
+
+async function replaceChannelMentionsWithNames(content, guild) {
+  if (!content) return content;
+  
+  const channelMentionRegex = /<#(\d+)>/g;
+  let match;
+  const replacements = new Map();
+
+  while ((match = channelMentionRegex.exec(content)) !== null) {
+    const channelId = match[1];
+    const mentionText = match[0];
+    
+    if (!replacements.has(channelId)) {
+      try {
+        const channel = await client.channels.fetch(channelId).catch(() => null);
+        if (channel && channel.name) {
+          replacements.set(channelId, `#${channel.name}`);
+        } else {
+          replacements.set(channelId, mentionText);
+        }
+      } catch (error) {
+        console.error(`Error fetching channel ${channelId}:`, error);
+        replacements.set(channelId, mentionText);
+      }
+    }
+  }
+
+  let result = content;
+  for (const [channelId, channelName] of replacements.entries()) {
+    const mentionRegex = new RegExp(`<#${channelId}>`, 'g');
+    result = result.replace(mentionRegex, channelName);
+  }
+
+  return result;
+}
+
+async function replaceRoleMentionsWithNames(content, guild) {
+  if (!content || !guild) return content;
+  
+  const roleMentionRegex = /<@&(\d+)>/g;
+  let match;
+  const replacements = new Map();
+
+  while ((match = roleMentionRegex.exec(content)) !== null) {
+    const roleId = match[1];
+    const mentionText = match[0];
+    
+    if (!replacements.has(roleId)) {
+      try {
+        const role = await guild.roles.fetch(roleId).catch(() => null);
+        if (role && role.name) {
+          replacements.set(roleId, `@${role.name}`);
+        } else {
+          replacements.set(roleId, mentionText);
+        }
+      } catch (error) {
+        console.error(`Error fetching role ${roleId}:`, error);
+        replacements.set(roleId, mentionText);
+      }
+    }
+  }
+
+  let result = content;
+  for (const [roleId, roleName] of replacements.entries()) {
+    const mentionRegex = new RegExp(`<@&${roleId}>`, 'g');
+    result = result.replace(mentionRegex, roleName);
+  }
+
+  return result;
+}
+
+async function replaceAllMentions(content, guild) {
+  if (!content) return content;
+  
+  let result = content;
+  result = await replaceUserMentionsWithUsernames(result, guild);
+  result = await replaceChannelMentionsWithNames(result, guild);
+  result = await replaceRoleMentionsWithNames(result, guild);
+  
+  return result;
+}
+
 function createDefaultServerSettings() {
   return { ...DEFAULT_SERVER_SETTINGS };
 }
@@ -234,11 +350,13 @@ async function fetchSurroundingMessages(channel, messageId, count) {
   }
 }
 
-function formatMessageContent(msg, index) {
+async function formatMessageContent(msg, index, guild) {
   let content = `${MESSAGE_FORMATTING.MESSAGE_PREFIX} ${index + 1}${MESSAGE_FORMATTING.AUTHOR_PREFIX}${msg.author.username}${MESSAGE_FORMATTING.AUTHOR_SUFFIX}${msg.createdAt.toLocaleString()}${MESSAGE_FORMATTING.TIMESTAMP_SUFFIX}`;
   
   if (msg.content) {
-    content += msg.content;
+    // Replace all mentions in message content
+    const cleanContent = await replaceAllMentions(msg.content, guild);
+    content += cleanContent;
   }
   
   if (msg.attachments.size > 0) {
@@ -250,15 +368,45 @@ function formatMessageContent(msg, index) {
   
   if (msg.embeds.length > 0) {
     content += `\n${MESSAGE_FORMATTING.EMBED_PREFIX}${msg.embeds.length}${MESSAGE_FORMATTING.EMBED_SUFFIX}`;
+    
+    // Process embed content with mentions
+    for (const [embedIndex, embed] of msg.embeds.entries()) {
+      if (embed.title || embed.description) {
+        content += `\n[Embed ${embedIndex + 1}]:`;
+        
+        if (embed.title) {
+          const cleanTitle = await replaceAllMentions(embed.title, guild);
+          content += `\n  Title: ${cleanTitle}`;
+        }
+        
+        if (embed.description) {
+          const cleanDescription = await replaceAllMentions(embed.description, guild);
+          const truncatedDescription = cleanDescription.length > 200 
+            ? cleanDescription.substring(0, 200) + '...' 
+            : cleanDescription;
+          content += `\n  Description: ${truncatedDescription}`;
+        }
+        
+        if (embed.fields && embed.fields.length > 0) {
+          for (const field of embed.fields) {
+            const cleanFieldName = await replaceAllMentions(field.name, guild);
+            const cleanFieldValue = await replaceAllMentions(field.value, guild);
+            content += `\n  ${cleanFieldName}: ${cleanFieldValue}`;
+          }
+        }
+      }
+    }
   }
   
   return content;
 }
 
-function formatMessages(messages) {
-  return messages
-    .map(formatMessageContent)
-    .join(`\n\n${MESSAGE_FORMATTING.SEPARATOR}\n\n`);
+async function formatMessages(messages, guild) {
+  const formattedMessages = await Promise.all(
+    messages.map((msg, index) => formatMessageContent(msg, index, guild))
+  );
+  
+  return formattedMessages.join(`\n\n${MESSAGE_FORMATTING.SEPARATOR}\n\n`);
 }
 
 export async function fetchMessagesForSummary(message, messageLink, count = MESSAGE_FETCH_CONFIG.DEFAULT_MESSAGE_COUNT) {
@@ -297,7 +445,7 @@ export async function fetchMessagesForSummary(message, messageLink, count = MESS
       messagesToSummarize = [...surrounding.older, startMessageResult.message, ...surrounding.newer];
     }
 
-    const formattedMessages = formatMessages(messagesToSummarize);
+    const formattedMessages = await formatMessages(messagesToSummarize, guildValidation.guild);
 
     return {
       success: true,
