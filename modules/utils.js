@@ -1,20 +1,10 @@
 import { PermissionsBitField } from 'discord.js';
 import axios from 'axios';
 import { getTextExtractor } from 'office-text-extractor';
-import { state, client } from '../botManager.js';
-import config from '../config.js';
+import { state, client, DEFAULT_SERVER_SETTINGS } from '../botManager.js';
 
-const DEFAULT_SERVER_SETTINGS = {
-  SELECTED_MODEL: 'gemini-2.5-flash',
-  RESPONSE_FORMAT: 'Normal',
-  SHOW_ACTION_BUTTONS: false,
-  CONTINUOUS_REPLY: true,
-  CUSTOM_PERSONALITY: null,
-  EMBED_COLOR: config.hexColour,
-  OVERRIDE_USER_SETTINGS: true,
-  SERVER_CHAT_HISTORY: false,
-  ALLOWED_CHANNELS: []
-};
+// Note: DEFAULT_SERVER_SETTINGS now imported from botManager.js
+// This ensures single source of truth for all default settings
 
 const UPLOAD_CONFIG = {
   SITE_URL: 'https://bin.mudfish.net',
@@ -189,10 +179,10 @@ function ensureServerSettingsComplete(settings) {
     settings.allowedChannels = [];
   }
   if (settings.showActionButtons === undefined) {
-    settings.showActionButtons = DEFAULT_SERVER_SETTINGS.SHOW_ACTION_BUTTONS;
+    settings.showActionButtons = DEFAULT_SERVER_SETTINGS.showActionButtons;
   }
   if (settings.continuousReply === undefined) {
-    settings.continuousReply = DEFAULT_SERVER_SETTINGS.CONTINUOUS_REPLY;
+    settings.continuousReply = DEFAULT_SERVER_SETTINGS.continuousReply;
   }
   return settings;
 }
