@@ -1,7 +1,10 @@
 import { EmbedBuilder, MessageFlags, StringSelectMenuBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } from 'discord.js';
 import { genAI } from '../botManager.js';
+import { DEFAULT_MODEL } from '../modules/config.js';
 
-const GAME_MODEL = 'gemini-2.5-flash';
+
+const GAME_MODEL = DEFAULT_MODEL;
+
 
 export const gameCommand = {
   name: 'game',
