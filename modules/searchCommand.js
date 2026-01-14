@@ -546,7 +546,7 @@ export async function executeSearchInteraction(interaction) {
 
     const selectedModel = effectiveSettings.selectedModel || DEFAULT_MODEL;
     const modelName = MODELS[selectedModel];
-    const responseFormat = effectiveSettings.responseFormat || 'Normal';
+    const responseFormat = effectiveSettings.responseFormat || BOT_CONFIG.DEFAULT_RESPONSE_FORMAT;
     const embedColor = effectiveSettings.embedColor || BOT_CONFIG.HEX_COLOUR;
 
     const tools = buildSearchTools(hasMedia);
