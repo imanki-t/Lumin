@@ -1553,9 +1553,9 @@ async function handleModelResponse(
         }
 
         if (showActionButtons && botMessage && !isLargeResponse) {
-          const { addDownloadButton, addDeleteButton } = await import('./buttonHandlers.js');
-          botMessage = await addDownloadButton(botMessage);
-          botMessage = await addDeleteButton(botMessage, botMessage.id);
+  const { addDownloadButton, addDeleteButton } = await import('./buttonHandlers.js');
+  botMessage = await addDownloadButton(botMessage);
+  botMessage = await addDeleteButton(botMessage, botMessage.id, userId);
         }
 
         if (newHistory.length > 1 && botMessage) {
