@@ -414,30 +414,30 @@ client.on('interactionCreate', async (interaction) => {
       await handleCommandInteraction(interaction);
     } 
     else if (interaction.isButton()) {
-      // Try new command buttons first
-      await handleNewButtons(interaction);
+      // Try settings buttons first (more specific)
+      await handleButtonInteraction(interaction);
       
-      // Fallback to settings buttons if not handled
+      // Fallback to command buttons if not handled
       if (!interaction.replied && !interaction.deferred) {
-        await handleButtonInteraction(interaction);
+        await handleNewButtons(interaction);
       }
     } 
     else if (interaction.isModalSubmit()) {
-      // Try command modals first
-      await handleNewModals(interaction);
+      // Try settings modals first
+      await handleModalSubmit(interaction);
       
-      // Fallback to settings modals
+      // Fallback to command modals if not handled
       if (!interaction.replied && !interaction.deferred) {
-        await handleModalSubmit(interaction);
+        await handleNewModals(interaction);
       }
     } 
     else if (interaction.isStringSelectMenu() || interaction.isChannelSelectMenu()) {
-      // Try command select menus first
-      await handleNewSelectMenus(interaction);
+      // Try settings select menus first
+      await handleSelectMenuInteraction(interaction);
       
-      // Fallback to settings select menus
+      // Fallback to command select menus if not handled
       if (!interaction.replied && !interaction.deferred) {
-        await handleSelectMenuInteraction(interaction);
+        await handleNewSelectMenus(interaction);
       }
     }
   } catch (error) {
