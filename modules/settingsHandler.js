@@ -1774,35 +1774,23 @@ async function toggleContinuousReplyChannel(interaction) {
 }
 
 async function handleDeleteMessageInteraction(interaction, msgId) {
-  const userId = interaction.user.id;
-  const userChatHistory = state.chatHistories[userId];
-  const channel = interaction.channel;
-  const message = channel ? (await channel.messages.fetch(msgId).catch(() => false)) : false;
+  const clickerId = interaction.user.id;
+  const originalAuthorId = interaction.message.interaction?.user.id;
 
-  if (userChatHistory) {
-    if (userChatHistory[msgId]) {
-      delete userChatHistory[msgId];
-      await deleteMsg();
-    } else {
-      try {
-        const replyingTo = message ? (message.reference ? (await message.channel.messages.fetch(message.reference.messageId)).author.id : 0) : 0;
-        if (userId === replyingTo) {
-          await deleteMsg();
-        } else {
-          const embed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setTitle('🚫 Not Authorized')
-            .setDescription('This button is not meant for you.');
-          return interaction.reply({
-            embeds: [embed],
-            flags: MessageFlags.Ephemeral
-          });
-        }
-      } catch (error) {
-        console.error('Error checking message ownership:', error);
-      }
-    }
+  if (originalAuthorId && clickerId === originalAuthorId) {
+    await interaction.message.delete().catch(() => {});
+  } else {
+    const embed = new EmbedBuilder()
+      .setColor(0xFF0000)
+      .setTitle('🚫 Not Authorized')
+      .setDescription('Only the user who ran this command can delete it.');
+      
+    return interaction.reply({
+      embeds: [embed],
+      flags: MessageFlags.Ephemeral
+    });
   }
+}
 
   async function deleteMsg() {
     await interaction.message.delete()
