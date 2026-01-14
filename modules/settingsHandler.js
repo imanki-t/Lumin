@@ -1976,10 +1976,3 @@ export async function handleModalSubmit(interaction) {
 // ============================================================================
 // EXPORTS
 // ============================================================================
-
-export {
-  showMainSettings,
-  handleButtonInteraction,
-  handleSelectMenuInteraction,
-  handleModalSubmit
-};
