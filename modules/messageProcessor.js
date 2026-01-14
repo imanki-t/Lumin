@@ -5,7 +5,7 @@ import axios from 'axios';
 import { getTextExtractor } from 'office-text-extractor';
 import ffmpeg from 'fluent-ffmpeg';
 import { delay } from '../tools/others.js';
-import { genAI, state, chatHistoryLock, updateChatHistory, saveStateToFile, TEMP_DIR, client, switchToNextKey, BOT_CONFIG, DEFAULT_SERVER_SETTINGS } from '../botManager.js';
+import { genAI, state, chatHistoryLock, updateChatHistory, saveStateToFile, TEMP_DIR, client, switchToNextKey, BOT_CONFIG, DEFAULT_SERVER_SETTINGS, DEFAULT_USER_SETTINGS } from '../botManager.js';
 import { memorySystem } from '../memorySystem.js';
 import config from '../config.js';
 import * as db from '../database.js';
@@ -1232,10 +1232,15 @@ async function handleModelResponse(
   const userId = originalMessage.author.id;
   const guildId = originalMessage.guild?.id;
   const responseFormat = effectiveSettings.responseFormat || BOT_CONFIG.DEFAULT_RESPONSE_FORMAT;
-  const showActionButtons = effectiveSettings.showActionButtons ?? BOT_CONFIG.DEFAULT_SHOW_ACTION_BUTTONS;
+  
+  // FIX: Use DEFAULT_USER_SETTINGS for fallback, as BOT_CONFIG doesn't have these specific keys
+  const showActionButtons = effectiveSettings.showActionButtons ?? DEFAULT_USER_SETTINGS.showActionButtons;
+  const continuousReply = effectiveSettings.continuousReply ?? DEFAULT_USER_SETTINGS.continuousReply;
+  
   const maxCharacterLimit = responseFormat === 'Embedded' ? CHARACTER_LIMITS.EMBEDDED : CHARACTER_LIMITS.NORMAL;
 
   let currentModelIndex = MODEL_FALLBACK_CHAIN.indexOf(modelName);
+  
   if (currentModelIndex === -1) {
     currentModelIndex = 0;
     modelName = MODEL_FALLBACK_CHAIN[0];
