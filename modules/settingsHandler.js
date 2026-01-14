@@ -1,389 +1,371 @@
-import { EmbedBuilder, MessageFlags, ButtonBuilder, ButtonStyle, ActionRowBuilder, PermissionsBitField, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ChannelSelectMenuBuilder, ChannelType, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } from 'discord.js';
+import { 
+  EmbedBuilder, 
+  MessageFlags, 
+  ButtonBuilder, 
+  ButtonStyle, 
+  ActionRowBuilder, 
+  PermissionsBitField, 
+  StringSelectMenuBuilder, 
+  StringSelectMenuOptionBuilder, 
+  ChannelSelectMenuBuilder, 
+  ChannelType, 
+  ModalBuilder, 
+  TextInputBuilder, 
+  TextInputStyle, 
+  AttachmentBuilder 
+} from 'discord.js';
 import path from 'path';
 import fs from 'fs/promises';
 import { state, saveStateToFile, chatHistoryLock, getHistory, TEMP_DIR } from '../botManager.js';
 import config from '../config.js';
 
-const hexColour = config.hexColour;
-const DEFAULT_BLACK = 0x000000;
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONFIGURATION & CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
 
+// Color Constants
+const COLORS = Object.freeze({
+  PRIMARY: 0x2B2D31,      // Dark slate
+  SUCCESS: 0x43B581,      // Green
+  WARNING: 0xFAA61A,      // Orange
+  ERROR: 0xF04747,        // Red
+  INFO: 0x5865F2,         // Blurple
+  DEFAULT: 0x000000,      // Black
+  ACCENT: 0x7289DA        // Light blurple
+});
+
+// Model Configuration
+const MODELS = Object.freeze({
+  GEMINI_FLASH: {
+    value: 'gemini-2.5-flash',
+    label: 'Gemini 3.0 Flash',
+    description: 'Latest model - Pro-level intelligence at Flash speed',
+    icon: '⚡'
+  },
+  // Add more models here as needed
+});
+
+// Default model
+const DEFAULT_MODEL = MODELS.GEMINI_FLASH.value;
+
+// Response Format Options
+const RESPONSE_FORMATS = Object.freeze({
+  NORMAL: { value: 'Normal', label: 'Normal', description: 'Plain text responses', icon: '▪' },
+  EMBEDDED: { value: 'Embedded', label: 'Embedded', description: 'Rich embed responses', icon: '▫' }
+});
+
+// UI Symbols (minimalistic, no emoji)
+const SYMBOLS = Object.freeze({
+  // Navigation
+  BACK: '◀',
+  FORWARD: '▶',
+  HOME: '⌂',
+  SETTINGS: '⚙',
+  
+  // Actions
+  SAVE: '↓',
+  DELETE: '×',
+  CLEAR: '⌫',
+  DOWNLOAD: '↓',
+  UPLOAD: '↑',
+  TOGGLE: '⇄',
+  
+  // Status
+  ENABLED: '●',
+  DISABLED: '○',
+  SUCCESS: '✓',
+  ERROR: '✗',
+  WARNING: '⚠',
+  INFO: 'ⓘ',
+  LOCKED: '⚿',
+  UNLOCKED: '⚿',
+  
+  // Categories
+  USER: '◉',
+  SERVER: '◈',
+  CHANNEL: '▣',
+  MODEL: '◆',
+  FORMAT: '◇',
+  COLOR: '◐',
+  PERSONALITY: '◎',
+  MEMORY: '◔',
+  HISTORY: '◑',
+  
+  // Misc
+  BULLET: '•',
+  ARROW: '→',
+  DOT: '·'
+});
+
+// Button Custom IDs
+const BUTTON_IDS = Object.freeze({
+  // Main Menu
+  SETTINGS_MAIN: 'settings_main',
+  
+  // User Settings
+  USER_SETTINGS: 'user_settings',
+  USER_SETTINGS_P2: 'user_settings_page2',
+  USER_SETTINGS_P3: 'user_settings_page3',
+  USER_COLOR: 'user_embed_color',
+  USER_PERSONALITY: 'user_custom_personality',
+  USER_PERSONALITY_REMOVE: 'user_remove_personality',
+  USER_MEMORY_CLEAR: 'clear_user_memory',
+  USER_DOWNLOAD: 'download_user_conversation',
+  
+  // Server Settings
+  SERVER_SETTINGS: 'server_settings',
+  SERVER_SETTINGS_P2: 'server_settings_page2',
+  SERVER_SETTINGS_P3: 'server_settings_page3',
+  SERVER_SETTINGS_P4: 'server_settings_page4',
+  SERVER_SETTINGS_P5: 'server_settings_page5',
+  SERVER_COLOR: 'server_embed_color',
+  SERVER_PERSONALITY: 'server_custom_personality',
+  SERVER_PERSONALITY_REMOVE: 'server_remove_personality',
+  SERVER_MEMORY_CLEAR: 'clear_server_memory',
+  SERVER_DOWNLOAD: 'download_server_conversation',
+  SERVER_CHANNELS: 'manage_allowed_channels',
+  SERVER_TOGGLE_CHANNEL: 'toggle_continuous_reply',
+  SERVER_ALL_CHANNELS: 'set_all_channels',
+  
+  // Navigation
+  BACK_TO_MAIN: 'back_to_main',
+  BACK_TO_USER: 'back_to_user',
+  BACK_TO_USER_P2: 'back_to_user_p2',
+  BACK_TO_SERVER: 'back_to_server',
+  BACK_TO_SERVER_P2: 'back_to_server_p2',
+  BACK_TO_SERVER_P3: 'back_to_server_p3',
+  BACK_TO_SERVER_P4: 'back_to_server_p4',
+  
+  // Message Actions
+  DOWNLOAD_MESSAGE: 'download_message',
+  DELETE_MESSAGE_PREFIX: 'delete_message-'
+});
+
+// Select Menu Custom IDs
+const SELECT_IDS = Object.freeze({
+  USER_MODEL: 'user_model_select',
+  USER_FORMAT: 'user_response_format',
+  USER_BUTTONS: 'user_action_buttons',
+  USER_CONTINUOUS: 'user_continuous_reply',
+  
+  SERVER_MODEL: 'server_model_select',
+  SERVER_FORMAT: 'server_response_format',
+  SERVER_BUTTONS: 'server_action_buttons',
+  SERVER_CONTINUOUS: 'server_continuous_reply',
+  SERVER_OVERRIDE: 'server_override',
+  SERVER_HISTORY: 'server_chat_history',
+  
+  CHANNEL_MANAGE: 'channel_manage_select'
+});
+
+// Modal Custom IDs
+const MODAL_IDS = Object.freeze({
+  USER_PERSONALITY: 'user_personality_modal',
+  USER_COLOR: 'user_embed_color_modal',
+  SERVER_PERSONALITY: 'server_personality_modal',
+  SERVER_COLOR: 'server_embed_color_modal'
+});
+
+// Timeout for settings messages (5 minutes)
+const SETTINGS_TIMEOUT = 300000;
+
+// Maximum message length for downloads
+const MAX_DOWNLOAD_LENGTH = 500000;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INTERACTION HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Main button interaction handler
+ */
 export async function handleButtonInteraction(interaction) {
   if (!interaction.isButton()) return;
 
   const guildId = interaction.guild?.id;
   const userId = interaction.user.id;
 
+  // Blacklist check
   if (guildId) {
     const { initializeBlacklistForGuild } = await import('./utils.js');
     initializeBlacklistForGuild(guildId);
     if (state.blacklistedUsers[guildId]?.includes(userId)) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF0000)
-        .setTitle('🚫 Blacklisted')
-        .setDescription('You are blacklisted and cannot use this interaction.');
-      return interaction.reply({
-        embeds: [embed],
-        flags: MessageFlags.Ephemeral
-      });
+      return sendErrorEmbed(interaction, 'Access Denied', 'You are blacklisted from using this bot.');
     }
   }
 
-  const buttonHandlers = {
-    'user_settings_page3': showUserSettingsPage3,
-    'user_settings_page2': showUserSettingsPage2,
-    'user_settings_p1': showUserSettings,
-    'user_settings': showUserSettings,
-    'back_to_user_p2': showUserSettingsPage2,
-    'back_to_user': showUserSettings,
-    'server_settings_page5': showServerSettingsPage5,
-    'server_settings_page4': showServerSettingsPage4,
-    'server_settings_page3': showServerSettingsPage3,
-    'server_settings_page2': showServerSettingsPage2,
-    'server_settings_p1': showServerSettings,
-    'server_settings': showServerSettings,
-    'back_to_server_p4': showServerSettingsPage4,
-    'back_to_server_p3': showServerSettingsPage3,
-    'back_to_server_p2': showServerSettingsPage2,
-    'back_to_server': showServerSettings,
-    'back_to_main': showMainSettings,
-    'clear_user_memory': clearUserMemory,
-    'download_user_conversation': downloadUserConversation,
-    'clear_server_memory': clearServerMemory,
-    'download_server_conversation': downloadServerConversation,
-    'user_custom_personality': showUserPersonalityModal,
-    'user_remove_personality': removeUserPersonality,
-    'server_custom_personality': showServerPersonalityModal,
-    'server_remove_personality': removeServerPersonality,
-    'user_embed_color': showUserEmbedColorModal,
-    'server_embed_color': showServerEmbedColorModal,
-    'toggle_continuous_reply': toggleContinuousReplyChannel,
-    'manage_allowed_channels': showChannelManagementMenu,
-    'set_all_channels': handleSetAllChannels,
-    'download_message': downloadMessage,
-    'settings_btn': showMainSettings,
+  // Button handler mapping
+  const handlers = {
+    [BUTTON_IDS.SETTINGS_MAIN]: () => showMainSettings(interaction, true),
+    [BUTTON_IDS.USER_SETTINGS]: () => showUserSettings(interaction, true),
+    [BUTTON_IDS.USER_SETTINGS_P2]: () => showUserSettingsPage2(interaction, true),
+    [BUTTON_IDS.USER_SETTINGS_P3]: () => showUserSettingsPage3(interaction, true),
+    [BUTTON_IDS.USER_COLOR]: () => showUserColorModal(interaction),
+    [BUTTON_IDS.USER_PERSONALITY]: () => showUserPersonalityModal(interaction),
+    [BUTTON_IDS.USER_PERSONALITY_REMOVE]: () => removeUserPersonality(interaction),
+    [BUTTON_IDS.USER_MEMORY_CLEAR]: () => clearUserMemory(interaction),
+    [BUTTON_IDS.USER_DOWNLOAD]: () => downloadUserConversation(interaction),
+    
+    [BUTTON_IDS.SERVER_SETTINGS]: () => showServerSettings(interaction, true),
+    [BUTTON_IDS.SERVER_SETTINGS_P2]: () => showServerSettingsPage2(interaction, true),
+    [BUTTON_IDS.SERVER_SETTINGS_P3]: () => showServerSettingsPage3(interaction, true),
+    [BUTTON_IDS.SERVER_SETTINGS_P4]: () => showServerSettingsPage4(interaction, true),
+    [BUTTON_IDS.SERVER_SETTINGS_P5]: () => showServerSettingsPage5(interaction, true),
+    [BUTTON_IDS.SERVER_COLOR]: () => showServerColorModal(interaction),
+    [BUTTON_IDS.SERVER_PERSONALITY]: () => showServerPersonalityModal(interaction),
+    [BUTTON_IDS.SERVER_PERSONALITY_REMOVE]: () => removeServerPersonality(interaction),
+    [BUTTON_IDS.SERVER_MEMORY_CLEAR]: () => clearServerMemory(interaction),
+    [BUTTON_IDS.SERVER_DOWNLOAD]: () => downloadServerConversation(interaction),
+    [BUTTON_IDS.SERVER_CHANNELS]: () => showChannelManagementMenu(interaction, true),
+    [BUTTON_IDS.SERVER_TOGGLE_CHANNEL]: () => toggleContinuousReplyChannel(interaction),
+    [BUTTON_IDS.SERVER_ALL_CHANNELS]: () => handleSetAllChannels(interaction, true),
+    
+    [BUTTON_IDS.BACK_TO_MAIN]: () => showMainSettings(interaction, true),
+    [BUTTON_IDS.BACK_TO_USER]: () => showUserSettings(interaction, true),
+    [BUTTON_IDS.BACK_TO_USER_P2]: () => showUserSettingsPage2(interaction, true),
+    [BUTTON_IDS.BACK_TO_SERVER]: () => showServerSettings(interaction, true),
+    [BUTTON_IDS.BACK_TO_SERVER_P2]: () => showServerSettingsPage2(interaction, true),
+    [BUTTON_IDS.BACK_TO_SERVER_P3]: () => showServerSettingsPage3(interaction, true),
+    [BUTTON_IDS.BACK_TO_SERVER_P4]: () => showServerSettingsPage4(interaction, true),
+    
+    [BUTTON_IDS.DOWNLOAD_MESSAGE]: () => downloadMessage(interaction)
   };
 
-  const updateableMenus = [
-    'user_settings', 'user_settings_page2', 'user_settings_page3', 'user_settings_p1',
-    'server_settings', 'server_settings_p1', 'server_settings_page2', 
-    'server_settings_page3', 'server_settings_page4', 'server_settings_page5',
-    'back_to_main', 'back_to_user', 'back_to_user_p2',
-    'back_to_server', 'back_to_server_p2', 'back_to_server_p3', 'back_to_server_p4',
-    'manage_allowed_channels', 'set_all_channels'
-  ];
-
-  for (const [key, handler] of Object.entries(buttonHandlers)) {
-    if (interaction.customId.startsWith(key)) {
-      if (updateableMenus.includes(key)) {
-        await handler(interaction, true);
-      } else {
-        await handler(interaction);
+  // Find and execute handler
+  for (const [id, handler] of Object.entries(handlers)) {
+    if (interaction.customId === id || interaction.customId.startsWith(id)) {
+      try {
+        await handler();
+        return;
+      } catch (error) {
+        console.error(`Error in button handler ${id}:`, error);
+        if (!interaction.replied && !interaction.deferred) {
+          await sendErrorEmbed(interaction, 'Error', 'An error occurred processing your request.');
+        }
+        return;
       }
-      return;
     }
   }
 
-  if (interaction.customId.startsWith('delete_message-')) {
-    const msgId = interaction.customId.replace('delete_message-', '');
+  // Handle delete message button
+  if (interaction.customId.startsWith(BUTTON_IDS.DELETE_MESSAGE_PREFIX)) {
+    const msgId = interaction.customId.replace(BUTTON_IDS.DELETE_MESSAGE_PREFIX, '');
     await handleDeleteMessageInteraction(interaction, msgId);
   }
 }
 
+/**
+ * Main select menu interaction handler
+ */
 export async function handleSelectMenuInteraction(interaction) {
   if (!interaction.isStringSelectMenu() && !interaction.isChannelSelectMenu()) return;
 
   const guildId = interaction.guild?.id;
   const userId = interaction.user.id;
 
+  // Blacklist check
   if (guildId) {
     const { initializeBlacklistForGuild } = await import('./utils.js');
     initializeBlacklistForGuild(guildId);
     if (state.blacklistedUsers[guildId]?.includes(userId)) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF0000)
-        .setTitle('🚫 Blacklisted')
-        .setDescription('You are blacklisted and cannot use this interaction.');
-      return interaction.reply({
-        embeds: [embed],
-        flags: MessageFlags.Ephemeral
-      });
+      return sendErrorEmbed(interaction, 'Access Denied', 'You are blacklisted from using this bot.');
     }
   }
 
-  if (interaction.customId === 'user_model_select') {
-    const selectedModel = interaction.values[0];
-    if (!state.userSettings[userId]) {
-      state.userSettings[userId] = {};
+  const handlers = {
+    [SELECT_IDS.USER_MODEL]: handleUserModelSelect,
+    [SELECT_IDS.USER_FORMAT]: handleUserFormatSelect,
+    [SELECT_IDS.USER_BUTTONS]: handleUserButtonsSelect,
+    [SELECT_IDS.USER_CONTINUOUS]: handleUserContinuousSelect,
+    
+    [SELECT_IDS.SERVER_MODEL]: handleServerModelSelect,
+    [SELECT_IDS.SERVER_FORMAT]: handleServerFormatSelect,
+    [SELECT_IDS.SERVER_BUTTONS]: handleServerButtonsSelect,
+    [SELECT_IDS.SERVER_CONTINUOUS]: handleServerContinuousSelect,
+    [SELECT_IDS.SERVER_OVERRIDE]: handleServerOverrideSelect,
+    [SELECT_IDS.SERVER_HISTORY]: handleServerHistorySelect,
+    
+    [SELECT_IDS.CHANNEL_MANAGE]: handleChannelManageSelect
+  };
+
+  const handler = handlers[interaction.customId];
+  if (handler) {
+    try {
+      await handler(interaction);
+    } catch (error) {
+      console.error(`Error in select menu handler ${interaction.customId}:`, error);
+      if (!interaction.replied && !interaction.deferred) {
+        await sendErrorEmbed(interaction, 'Error', 'An error occurred processing your selection.');
+      }
     }
-    state.userSettings[userId].selectedModel = selectedModel;
-    await saveStateToFile();
-    await showUserSettings(interaction, true);
-  } else if (interaction.customId === 'server_model_select') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return sendPermError(interaction);
-    }
-    const selectedModel = interaction.values[0];
-    if (!state.serverSettings[guildId]) {
-      state.serverSettings[guildId] = {};
-    }
-    state.serverSettings[guildId].selectedModel = selectedModel;
-    await saveStateToFile();
-    await showServerSettings(interaction, true);
-  } else if (interaction.customId === 'user_response_format') {
-    const selectedFormat = interaction.values[0];
-    if (!state.userSettings[userId]) {
-      state.userSettings[userId] = {};
-    }
-    state.userSettings[userId].responseFormat = selectedFormat;
-    await saveStateToFile();
-    await showUserSettings(interaction, true);
-  } else if (interaction.customId === 'server_response_format') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return sendPermError(interaction);
-    }
-    const selectedFormat = interaction.values[0];
-    if (!state.serverSettings[guildId]) {
-      state.serverSettings[guildId] = {};
-    }
-    state.serverSettings[guildId].responseFormat = selectedFormat;
-    await saveStateToFile();
-    await showServerSettings(interaction, true);
-  } else if (interaction.customId === 'user_action_buttons') {
-    const selectedValue = interaction.values[0];
-    if (!state.userSettings[userId]) {
-      state.userSettings[userId] = {};
-    }
-    state.userSettings[userId].showActionButtons = selectedValue === 'show';
-    await saveStateToFile();
-    await showUserSettings(interaction, true);
-  } else if (interaction.customId === 'server_action_buttons') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return sendPermError(interaction);
-    }
-    const selectedValue = interaction.values[0];
-    if (!state.serverSettings[guildId]) {
-      state.serverSettings[guildId] = {};
-    }
-    state.serverSettings[guildId].showActionButtons = selectedValue === 'show';
-    await saveStateToFile();
-    await showServerSettings(interaction, true);
-  } else if (interaction.customId === 'user_continuous_reply') {
-    const selectedValue = interaction.values[0];
-    if (!state.userSettings[userId]) {
-      state.userSettings[userId] = {};
-    }
-    state.userSettings[userId].continuousReply = selectedValue === 'enabled';
-    await saveStateToFile();
-    await showUserSettingsPage2(interaction, true);
-  } else if (interaction.customId === 'server_continuous_reply') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return sendPermError(interaction);
-    }
-    const selectedValue = interaction.values[0];
-    if (!state.serverSettings[guildId]) {
-      state.serverSettings[guildId] = {};
-    }
-    state.serverSettings[guildId].continuousReply = selectedValue === 'enabled';
-    await saveStateToFile();
-    await showServerSettingsPage2(interaction, true);
-  } else if (interaction.customId === 'server_override') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return sendPermError(interaction);
-    }
-    const selectedValue = interaction.values[0];
-    if (!state.serverSettings[guildId]) {
-      state.serverSettings[guildId] = {};
-    }
-    state.serverSettings[guildId].overrideUserSettings = selectedValue === 'enabled';
-    await saveStateToFile();
-    await showServerSettingsPage2(interaction, true);
-  } else if (interaction.customId === 'server_chat_history') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return sendPermError(interaction);
-    }
-    const selectedValue = interaction.values[0];
-    if (!state.serverSettings[guildId]) {
-      state.serverSettings[guildId] = {};
-    }
-    state.serverSettings[guildId].serverChatHistory = selectedValue === 'enabled';
-    await saveStateToFile();
-    await showServerSettingsPage2(interaction, true);
-  } else if (interaction.customId === 'channel_manage_select') {
-    await handleChannelManageSelect(interaction);
   }
 }
 
+/**
+ * Main modal submit handler
+ */
 export async function handleModalSubmit(interaction) {
   const userId = interaction.user.id;
   const guildId = interaction.guild?.id;
 
-  if (interaction.customId === 'user_personality_modal') {
-    try {
-      const personalityInput = interaction.fields.getTextInputValue('personality_input');
-      if (!state.userSettings[userId]) {
-        state.userSettings[userId] = {};
-      }
-      state.userSettings[userId].customPersonality = personalityInput.trim();
-      await saveStateToFile();
+  const handlers = {
+    [MODAL_IDS.USER_PERSONALITY]: handleUserPersonalitySubmit,
+    [MODAL_IDS.USER_COLOR]: handleUserColorSubmit,
+    [MODAL_IDS.SERVER_PERSONALITY]: handleServerPersonalitySubmit,
+    [MODAL_IDS.SERVER_COLOR]: handleServerColorSubmit
+  };
 
-      const embed = new EmbedBuilder()
-        .setColor(0x00FF00)
-        .setTitle('✅ Success')
-        .setDescription('Your custom personality has been saved!');
-      await interaction.reply({
-        embeds: [embed],
-        flags: MessageFlags.Ephemeral
-      });
-    } catch (error) {
-      console.error('Error saving user personality:', error);
-    }
-  } else if (interaction.customId === 'server_personality_modal') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return sendPermError(interaction);
-    }
+  const handler = handlers[interaction.customId];
+  if (handler) {
     try {
-      const personalityInput = interaction.fields.getTextInputValue('personality_input');
-      if (!state.serverSettings[guildId]) {
-        state.serverSettings[guildId] = {};
-      }
-      state.serverSettings[guildId].customPersonality = personalityInput.trim();
-      await saveStateToFile();
-
-      const embed = new EmbedBuilder()
-        .setColor(0x00FF00)
-        .setTitle('✅ Success')
-        .setDescription('Server custom personality has been saved!');
-      await interaction.reply({
-        embeds: [embed],
-        flags: MessageFlags.Ephemeral
-      });
+      await handler(interaction);
     } catch (error) {
-      console.error('Error saving server personality:', error);
-    }
-  } else if (interaction.customId === 'user_embed_color_modal') {
-    try {
-      const colorInput = interaction.fields.getTextInputValue('color_input').trim();
-      const hexPattern = /^#?([0-9A-Fa-f]{6})$/;
-      if (!hexPattern.test(colorInput)) {
-        const embed = new EmbedBuilder()
-          .setColor(0xFF0000)
-          .setTitle('❌ Invalid Color')
-          .setDescription('Please provide a valid hex color code (e.g., #FF5733 or FF5733).');
-        return interaction.reply({
-          embeds: [embed],
-          flags: MessageFlags.Ephemeral
-        });
+      console.error(`Error in modal handler ${interaction.customId}:`, error);
+      if (!interaction.replied && !interaction.deferred) {
+        await sendErrorEmbed(interaction, 'Error', 'An error occurred processing your submission.');
       }
-      const hexColor = colorInput.startsWith('#') ? colorInput : `#${colorInput}`;
-      if (!state.userSettings[userId]) {
-        state.userSettings[userId] = {};
-      }
-      state.userSettings[userId].embedColor = hexColor;
-      await saveStateToFile();
-
-      const embed = new EmbedBuilder()
-        .setColor(hexColor)
-        .setTitle('✅ Color Updated')
-        .setDescription(`Your embed color has been set to \`${hexColor}\``);
-      await interaction.reply({
-        embeds: [embed],
-        flags: MessageFlags.Ephemeral
-      });
-    } catch (error) {
-      console.error('Error saving user embed color:', error);
-    }
-  } else if (interaction.customId === 'server_embed_color_modal') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return sendPermError(interaction);
-    }
-    try {
-      const colorInput = interaction.fields.getTextInputValue('color_input').trim();
-      const hexPattern = /^#?([0-9A-Fa-f]{6})$/;
-      if (!hexPattern.test(colorInput)) {
-        const embed = new EmbedBuilder()
-          .setColor(0xFF0000)
-          .setTitle('❌ Invalid Color')
-          .setDescription('Please provide a valid hex color code (e.g., #FF5733 or FF5733).');
-        return interaction.reply({
-          embeds: [embed],
-          flags: MessageFlags.Ephemeral
-        });
-      }
-      const hexColor = colorInput.startsWith('#') ? colorInput : `#${colorInput}`;
-      if (!state.serverSettings[guildId]) {
-        state.serverSettings[guildId] = {};
-      }
-      state.serverSettings[guildId].embedColor = hexColor;
-      await saveStateToFile();
-
-      const embed = new EmbedBuilder()
-        .setColor(hexColor)
-        .setTitle('✅ Color Updated')
-        .setDescription(`Server embed color has been set to \`${hexColor}\``);
-      await interaction.reply({
-        embeds: [embed],
-        flags: MessageFlags.Ephemeral
-      });
-    } catch (error) {
-      console.error('Error saving server embed color:', error);
     }
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MAIN SETTINGS - Modern Black Theme
+// MAIN SETTINGS MENU
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function showMainSettings(interaction, isUpdate = false) {
   try {
     const userId = interaction.user.id;
     const guildId = interaction.guild?.id;
-    const hasManageServer = guildId ? interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild) : false;
+    const hasManageServer = guildId ? 
+      interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild) : false;
 
-    // Get embed color from user or server settings, default to black
-    let embedColor = DEFAULT_BLACK;
-    if (guildId && state.serverSettings[guildId]?.embedColor) {
-      embedColor = state.serverSettings[guildId].embedColor;
-    } else if (state.userSettings[userId]?.embedColor) {
-      embedColor = state.userSettings[userId].embedColor;
-    }
-
-    const userButton = new ButtonBuilder()
-      .setCustomId('user_settings')
-      .setLabel('User Settings')
-      .setEmoji('👤')
-      .setStyle(ButtonStyle.Primary);
-
-    const serverButton = new ButtonBuilder()
-      .setCustomId('server_settings')
-      .setLabel('Server Settings')
-      .setEmoji('🏰')
-      .setStyle(ButtonStyle.Success);
-
-    const components = hasManageServer 
-      ? [new ActionRowBuilder().addComponents(userButton, serverButton)]
-      : [new ActionRowBuilder().addComponents(userButton)];
+    const embedColor = getEmbedColor(userId, guildId);
 
     const embed = new EmbedBuilder()
       .setColor(embedColor)
-      .setTitle('⚙️ Settings Dashboard')
-      .setDescription('**Configure your bot experience**\n\nSelect a category below to customize your preferences.')
-      .addFields(
-        {
-          name: '👤 User Settings',
-          value: '> Personal preferences, models, appearance, and data management',
-          inline: false
-        }
+      .setTitle(`${SYMBOLS.SETTINGS} Settings Panel`)
+      .setDescription(
+        '**Configure Bot Preferences**\n\n' +
+        `${SYMBOLS.USER} **User Settings** ${SYMBOLS.ARROW} Personal configuration\n` +
+        (hasManageServer ? `${SYMBOLS.SERVER} **Server Settings** ${SYMBOLS.ARROW} Server-wide configuration\n\n` : '\n') +
+        'Select a category to begin.'
       )
-      .setFooter({ text: 'Settings Menu • Changes save automatically' })
+      .setFooter({ text: 'Settings auto-save • Session expires in 5 minutes' })
       .setTimestamp();
 
+    const userButton = new ButtonBuilder()
+      .setCustomId(BUTTON_IDS.USER_SETTINGS)
+      .setLabel('User Settings')
+      .setStyle(ButtonStyle.Primary);
+
+    const components = [new ActionRowBuilder().addComponents(userButton)];
+
     if (hasManageServer) {
-      embed.addFields({
-        name: '🏰 Server Settings',
-        value: '> Server-wide configuration, channels, overrides, and moderation',
-        inline: false
-      });
+      const serverButton = new ButtonBuilder()
+        .setCustomId(BUTTON_IDS.SERVER_SETTINGS)
+        .setLabel('Server Settings')
+        .setStyle(ButtonStyle.Success);
+      components[0].addComponents(serverButton);
     }
 
     const payload = {
@@ -398,144 +380,132 @@ async function showMainSettings(interaction, isUpdate = false) {
       await interaction.reply(payload);
     }
 
-    setTimeout(async () => {
-      try {
-        const currentReply = await interaction.fetchReply().catch(() => null);
-        if (currentReply) {
-          await interaction.deleteReply();
-        }
-      } catch (error) {
-        if (error.code !== 10008) {
-          console.error('Error deleting expired settings message:', error);
-        }
-      }
-    }, 300000);
+    // Auto-delete after timeout
+    scheduleMessageDeletion(interaction);
   } catch (error) {
     console.error('Error showing main settings:', error);
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// USER SETTINGS - Page 1: Core Preferences
+// USER SETTINGS - PAGE 1: CORE
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function showUserSettings(interaction, isUpdate = false) {
   const userId = interaction.user.id;
-  const userSettings = state.userSettings[userId] || {};
   const guildId = interaction.guild?.id;
+  const userSettings = state.userSettings[userId] || {};
 
+  // Check for server override
   if (guildId) {
     const serverSettings = state.serverSettings[guildId] || {};
     if (serverSettings.overrideUserSettings && !isUpdate) {
       try {
-        const embed = new EmbedBuilder()
-          .setColor(0xFFAA00)
-          .setTitle('🔒 Server Override Active')
-          .setDescription(`The settings on this server, **${interaction.guild.name}**, are being overridden by server administrators.\n\n` +
-            'Your personal user settings will not apply here. However, you can still edit them, and they will apply in your DMs and other servers that do not have override enabled.');
-        await interaction.user.send({
-          embeds: [embed]
-        });
-      } catch (dmError) {
-        console.error("Failed to send override DM:", dmError);
+        const warningEmbed = new EmbedBuilder()
+          .setColor(COLORS.WARNING)
+          .setTitle(`${SYMBOLS.WARNING} Server Override Active`)
+          .setDescription(
+            `Server administrators have enabled settings override on **${interaction.guild.name}**.\n\n` +
+            'Your personal settings will not apply here, but they will work in DMs and other servers.'
+          );
+        await interaction.user.send({ embeds: [warningEmbed] }).catch(() => {});
+      } catch (error) {
+        // DM failed, ignore
       }
     }
   }
 
-  const selectedModel = userSettings.selectedModel || 'gemini-2.5-flash';
-  const responseFormat = userSettings.responseFormat || 'Normal';
+  const selectedModel = userSettings.selectedModel || DEFAULT_MODEL;
+  const responseFormat = userSettings.responseFormat || RESPONSE_FORMATS.NORMAL.value;
   const showActionButtons = userSettings.showActionButtons === true;
-  const embedColor = userSettings.embedColor || DEFAULT_BLACK;
+  const embedColor = userSettings.embedColor || COLORS.DEFAULT;
 
+  // Model Select
   const modelSelect = new StringSelectMenuBuilder()
-    .setCustomId('user_model_select')
+    .setCustomId(SELECT_IDS.USER_MODEL)
     .setPlaceholder('Select AI Model')
     .addOptions(
       new StringSelectMenuOptionBuilder()
-        .setLabel('Gemini 3.0 Flash')
-        .setDescription('Latest AI model - Pro-level intelligence at Flash speed')
-        .setValue('gemini-2.5-flash')
-        .setEmoji('⚡')
-        .setDefault(true)
+        .setLabel(MODELS.GEMINI_FLASH.label)
+        .setDescription(MODELS.GEMINI_FLASH.description)
+        .setValue(MODELS.GEMINI_FLASH.value)
+        .setDefault(selectedModel === MODELS.GEMINI_FLASH.value)
     );
 
-  const responseFormatSelect = new StringSelectMenuBuilder()
-    .setCustomId('user_response_format')
+  // Response Format Select
+  const formatSelect = new StringSelectMenuBuilder()
+    .setCustomId(SELECT_IDS.USER_FORMAT)
     .setPlaceholder('Response Format')
     .addOptions(
       new StringSelectMenuOptionBuilder()
-        .setLabel('Normal')
-        .setDescription('Plain text responses')
-        .setValue('Normal')
-        .setEmoji('📝')
-        .setDefault(responseFormat === 'Normal'),
+        .setLabel(RESPONSE_FORMATS.NORMAL.label)
+        .setDescription(RESPONSE_FORMATS.NORMAL.description)
+        .setValue(RESPONSE_FORMATS.NORMAL.value)
+        .setDefault(responseFormat === RESPONSE_FORMATS.NORMAL.value),
       new StringSelectMenuOptionBuilder()
-        .setLabel('Embedded')
-        .setDescription('Rich embed responses')
-        .setValue('Embedded')
-        .setEmoji('📊')
-        .setDefault(responseFormat === 'Embedded')
+        .setLabel(RESPONSE_FORMATS.EMBEDDED.label)
+        .setDescription(RESPONSE_FORMATS.EMBEDDED.description)
+        .setValue(RESPONSE_FORMATS.EMBEDDED.value)
+        .setDefault(responseFormat === RESPONSE_FORMATS.EMBEDDED.value)
     );
 
-  const actionButtonsSelect = new StringSelectMenuBuilder()
-    .setCustomId('user_action_buttons')
+  // Action Buttons Select
+  const buttonsSelect = new StringSelectMenuBuilder()
+    .setCustomId(SELECT_IDS.USER_BUTTONS)
     .setPlaceholder('Action Buttons')
     .addOptions(
       new StringSelectMenuOptionBuilder()
         .setLabel('Show Buttons')
-        .setDescription('Display Stop/Save/Delete buttons')
+        .setDescription('Display action buttons on messages')
         .setValue('show')
-        .setEmoji('✅')
         .setDefault(showActionButtons),
       new StringSelectMenuOptionBuilder()
         .setLabel('Hide Buttons')
         .setDescription('Hide action buttons')
         .setValue('hide')
-        .setEmoji('❌')
         .setDefault(!showActionButtons)
     );
 
-  const nextButton = new ButtonBuilder()
-    .setCustomId('user_settings_page2')
-    .setLabel('Next Page')
-    .setEmoji('▶️')
-    .setStyle(ButtonStyle.Primary);
-
+  // Navigation Buttons
   const backButton = new ButtonBuilder()
-    .setCustomId('back_to_main')
-    .setLabel('Back to Menu')
-    .setEmoji('◀️')
+    .setCustomId(BUTTON_IDS.BACK_TO_MAIN)
+    .setLabel('Back')
     .setStyle(ButtonStyle.Secondary);
+
+  const nextButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.USER_SETTINGS_P2)
+    .setLabel('Next')
+    .setStyle(ButtonStyle.Primary);
 
   const components = [
     new ActionRowBuilder().addComponents(modelSelect),
-    new ActionRowBuilder().addComponents(responseFormatSelect),
-    new ActionRowBuilder().addComponents(actionButtonsSelect),
+    new ActionRowBuilder().addComponents(formatSelect),
+    new ActionRowBuilder().addComponents(buttonsSelect),
     new ActionRowBuilder().addComponents(backButton, nextButton)
   ];
 
   const embed = new EmbedBuilder()
     .setColor(embedColor)
-    .setTitle('👤 User Settings')
-    .setDescription('**Page 1 of 3** • Core Preferences\n\nConfigure your personal AI model and response settings.')
+    .setTitle(`${SYMBOLS.USER} User Settings`)
+    .setDescription('**Page 1 of 3** — Core Configuration\n\nSelect your preferred AI model and response style.')
     .addFields(
       {
-        name: '🤖 AI Model',
+        name: `${SYMBOLS.MODEL} Current Model`,
         value: `\`${selectedModel}\``,
         inline: true
       },
       {
-        name: '📋 Response Format',
+        name: `${SYMBOLS.FORMAT} Response Format`,
         value: `\`${responseFormat}\``,
         inline: true
       },
       {
-        name: '🔘 Action Buttons',
+        name: `${SYMBOLS.BULLET} Action Buttons`,
         value: `\`${showActionButtons ? 'Visible' : 'Hidden'}\``,
         inline: true
       }
     )
-    .setFooter({ text: 'Page 1 of 3 • Core Preferences' })
+    .setFooter({ text: 'Page 1/3 — Core Configuration' })
     .setTimestamp();
 
   const payload = {
@@ -549,719 +519,97 @@ async function showUserSettings(interaction, isUpdate = false) {
   } else {
     await interaction.reply(payload);
   }
-
-  setTimeout(async () => {
-    try {
-      const currentReply = await interaction.fetchReply().catch(() => null);
-      if (currentReply) {
-        await interaction.deleteReply();
-      }
-    } catch (error) {
-      if (error.code !== 10008) console.error('Error deleting expired settings message:', error);
-    }
-  }, 300000);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// USER SETTINGS - Page 2: Behavior & Appearance
+// USER SETTINGS - PAGE 2: BEHAVIOR & APPEARANCE
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function showUserSettingsPage2(interaction, isUpdate = false) {
   const userId = interaction.user.id;
   const userSettings = state.userSettings[userId] || {};
   const continuousReply = userSettings.continuousReply ?? true;
-  const embedColor = userSettings.embedColor || DEFAULT_BLACK;
+  const embedColor = userSettings.embedColor || COLORS.DEFAULT;
   const hasPersonality = !!userSettings.customPersonality;
 
-  const continuousReplySelect = new StringSelectMenuBuilder()
-    .setCustomId('user_continuous_reply')
-    .setPlaceholder('Continuous Reply')
+  // Continuous Reply Select
+  const continuousSelect = new StringSelectMenuBuilder()
+    .setCustomId(SELECT_IDS.USER_CONTINUOUS)
+    .setPlaceholder('Continuous Reply Mode')
     .addOptions(
       new StringSelectMenuOptionBuilder()
         .setLabel('Enabled')
-        .setDescription('Bot replies without mentions')
+        .setDescription('Bot responds without requiring mentions')
         .setValue('enabled')
-        .setEmoji('🔄')
         .setDefault(continuousReply),
       new StringSelectMenuOptionBuilder()
         .setLabel('Disabled')
-        .setDescription('Bot requires mentions')
+        .setDescription('Bot only responds when mentioned')
         .setValue('disabled')
-        .setEmoji('⏸️')
         .setDefault(!continuousReply)
     );
 
+  // Action Buttons
   const colorButton = new ButtonBuilder()
-    .setCustomId('user_embed_color')
-    .setLabel('Embed Color')
-    .setEmoji('🎨')
+    .setCustomId(BUTTON_IDS.USER_COLOR)
+    .setLabel('Set Color')
     .setStyle(ButtonStyle.Secondary);
 
-  const personalityBtn = new ButtonBuilder()
-    .setCustomId('user_custom_personality')
-    .setLabel('Set Personality')
-    .setEmoji('🎭')
+  const personalityButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.USER_PERSONALITY)
+    .setLabel('Personality')
     .setStyle(ButtonStyle.Primary);
 
-  const removePersonalityBtn = new ButtonBuilder()
-    .setCustomId('user_remove_personality')
+  const removePersonalityButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.USER_PERSONALITY_REMOVE)
     .setLabel('Reset')
-    .setEmoji('🗑️')
     .setStyle(ButtonStyle.Danger)
     .setDisabled(!hasPersonality);
 
+  // Navigation
   const backButton = new ButtonBuilder()
-    .setCustomId('user_settings_p1')
-    .setLabel('Previous')
-    .setEmoji('◀️')
+    .setCustomId(BUTTON_IDS.BACK_TO_USER)
+    .setLabel('Back')
     .setStyle(ButtonStyle.Secondary);
 
   const nextButton = new ButtonBuilder()
-    .setCustomId('user_settings_page3')
-    .setLabel('Next Page')
-    .setEmoji('▶️')
+    .setCustomId(BUTTON_IDS.USER_SETTINGS_P3)
+    .setLabel('Next')
     .setStyle(ButtonStyle.Primary);
 
   const components = [
-    new ActionRowBuilder().addComponents(continuousReplySelect),
-    new ActionRowBuilder().addComponents(colorButton, personalityBtn, removePersonalityBtn),
+    new ActionRowBuilder().addComponents(continuousSelect),
+    new ActionRowBuilder().addComponents(colorButton, personalityButton, removePersonalityButton),
     new ActionRowBuilder().addComponents(backButton, nextButton)
   ];
 
   const embed = new EmbedBuilder()
     .setColor(embedColor)
-    .setTitle('👤 User Settings')
-    .setDescription('**Page 2 of 3** • Behavior & Appearance\n\nCustomize how the bot responds and looks.')
+    .setTitle(`${SYMBOLS.USER} User Settings`)
+    .setDescription('**Page 2 of 3** — Behavior & Appearance\n\nCustomize bot behavior and visual preferences.')
     .addFields(
       {
-        name: '🔄 Continuous Reply',
-        value: `\`${continuousReply ? 'Enabled' : 'Disabled'}\``,
+        name: `${SYMBOLS.TOGGLE} Continuous Reply`,
+        value: `\`${continuousReply ? SYMBOLS.ENABLED : SYMBOLS.DISABLED} ${continuousReply ? 'Enabled' : 'Disabled'}\``,
         inline: true
       },
       {
-        name: '🎨 Embed Color',
+        name: `${SYMBOLS.COLOR} Embed Color`,
         value: `\`${embedColor}\``,
         inline: true
       },
       {
-        name: '🎭 Custom Personality',
-        value: `\`${hasPersonality ? 'Active' : 'Default'}\``,
+        name: `${SYMBOLS.PERSONALITY} Custom Personality`,
+        value: `\`${hasPersonality ? SYMBOLS.ENABLED + ' Active' : SYMBOLS.DISABLED + ' Default'}\``,
         inline: true
       }
     )
-    .setFooter({ text: 'Page 2 of 3 • Behavior & Appearance' })
+    .setFooter({ text: 'Page 2/3 — Behavior & Appearance' })
     .setTimestamp();
 
   const payload = {
     embeds: [embed],
     components: components,
-    flags: MessageFlags.Ephemeral
-  };
-
-  if (isUpdate) await interaction.update(payload);
-  else await interaction.reply(payload);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// USER SETTINGS - Page 3: Data Management
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function showUserSettingsPage3(interaction, isUpdate = false) {
-  const userId = interaction.user.id;
-  const userSettings = state.userSettings[userId] || {};
-  const embedColor = userSettings.embedColor || DEFAULT_BLACK;
-
-  const clearMemBtn = new ButtonBuilder()
-    .setCustomId('clear_user_memory')
-    .setLabel('Clear Memory')
-    .setEmoji('🧹')
-    .setStyle(ButtonStyle.Danger);
-
-  const downloadBtn = new ButtonBuilder()
-    .setCustomId('download_user_conversation')
-    .setLabel('Download History')
-    .setEmoji('💾')
-    .setStyle(ButtonStyle.Success);
-
-  const backButton = new ButtonBuilder()
-    .setCustomId('back_to_user_p2')
-    .setLabel('Previous')
-    .setEmoji('◀️')
-    .setStyle(ButtonStyle.Secondary);
-
-  const mainMenuButton = new ButtonBuilder()
-    .setCustomId('back_to_main')
-    .setLabel('Main Menu')
-    .setEmoji('🏠')
-    .setStyle(ButtonStyle.Primary);
-
-  const components = [
-    new ActionRowBuilder().addComponents(clearMemBtn, downloadBtn),
-    new ActionRowBuilder().addComponents(backButton, mainMenuButton)
-  ];
-
-  const embed = new EmbedBuilder()
-    .setColor(embedColor)
-    .setTitle('👤 User Settings')
-    .setDescription('**Page 3 of 3** • Data Management\n\nManage your conversation data and history.')
-    .addFields(
-      {
-        name: '🧹 Clear Memory',
-        value: 'Delete all conversation history and start fresh',
-        inline: false
-      },
-      {
-        name: '💾 Download History',
-        value: 'Export your chat log as a text file',
-        inline: false
-      }
-    )
-    .setFooter({ text: 'Page 3 of 3 • Data Management' })
-    .setTimestamp();
-
-  const payload = {
-    embeds: [embed],
-    components: components,
-    flags: MessageFlags.Ephemeral
-  };
-
-  if (isUpdate) await interaction.update(payload);
-  else await interaction.reply(payload);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SERVER SETTINGS - Page 1: Core Preferences
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function showServerSettings(interaction, isUpdate = false) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return sendPermError(interaction);
-
-  const guildId = interaction.guild.id;
-  const serverSettings = state.serverSettings[guildId] || {};
-  const selectedModel = serverSettings.selectedModel || 'gemini-2.5-flash';
-  const responseFormat = serverSettings.responseFormat || 'Normal';
-  const showActionButtons = serverSettings.showActionButtons === true;
-  const embedColor = serverSettings.embedColor || DEFAULT_BLACK;
-
-  const modelSelect = new StringSelectMenuBuilder()
-    .setCustomId('server_model_select')
-    .setPlaceholder('Select AI Model')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Gemini 3.0 Flash')
-        .setDescription('Latest AI model - Pro-level intelligence at Flash speed')
-        .setValue('gemini-2.5-flash')
-        .setEmoji('⚡')
-        .setDefault(true)
-    );
-
-  const responseFormatSelect = new StringSelectMenuBuilder()
-    .setCustomId('server_response_format')
-    .setPlaceholder('Response Format')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Normal')
-        .setDescription('Plain text responses')
-        .setValue('Normal')
-        .setEmoji('📝')
-        .setDefault(responseFormat === 'Normal'),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Embedded')
-        .setDescription('Rich embed responses')
-        .setValue('Embedded')
-        .setEmoji('📊')
-        .setDefault(responseFormat === 'Embedded')
-    );
-
-  const actionButtonsSelect = new StringSelectMenuBuilder()
-    .setCustomId('server_action_buttons')
-    .setPlaceholder('Action Buttons')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Show Buttons')
-        .setDescription('Display Stop/Save/Delete buttons')
-        .setValue('show')
-        .setEmoji('✅')
-        .setDefault(showActionButtons),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Hide Buttons')
-        .setDescription('Hide action buttons')
-        .setValue('hide')
-        .setEmoji('❌')
-        .setDefault(!showActionButtons)
-    );
-
-  const backButton = new ButtonBuilder()
-    .setCustomId('back_to_main')
-    .setLabel('Back to Menu')
-    .setEmoji('◀️')
-    .setStyle(ButtonStyle.Secondary);
-
-  const nextButton = new ButtonBuilder()
-    .setCustomId('server_settings_page2')
-    .setLabel('Next Page')
-    .setEmoji('▶️')
-    .setStyle(ButtonStyle.Primary);
-
-  const components = [
-    new ActionRowBuilder().addComponents(modelSelect),
-    new ActionRowBuilder().addComponents(responseFormatSelect),
-    new ActionRowBuilder().addComponents(actionButtonsSelect),
-    new ActionRowBuilder().addComponents(backButton, nextButton)
-  ];
-
-  const embed = new EmbedBuilder()
-    .setColor(embedColor)
-    .setTitle('🏰 Server Settings')
-    .setDescription('**Page 1 of 5** • Core Preferences\n\nConfigure server-wide AI model and response settings.')
-    .addFields(
-      {
-        name: '🤖 AI Model',
-        value: `\`${selectedModel}\``,
-        inline: true
-      },
-      {
-        name: '📋 Response Format',
-        value: `\`${responseFormat}\``,
-        inline: true
-      },
-      {
-        name: '🔘 Action Buttons',
-        value: `\`${showActionButtons ? 'Visible' : 'Hidden'}\``,
-        inline: true
-      }
-    )
-    .setFooter({ text: 'Page 1 of 5 • Core Preferences' })
-    .setTimestamp();
-
-  const payload = {
-    embeds: [embed],
-    components: components,
-    flags: MessageFlags.Ephemeral
-  };
-
-  if (isUpdate) await interaction.update(payload);
-  else await interaction.reply(payload);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SERVER SETTINGS - Page 2: Logic & Overrides
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function showServerSettingsPage2(interaction, isUpdate = false) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return sendPermError(interaction);
-  
-  const guildId = interaction.guild.id;
-  const serverSettings = state.serverSettings[guildId] || {};
-  const embedColor = serverSettings.embedColor || DEFAULT_BLACK;
-  const overrideUserSettings = serverSettings.overrideUserSettings || false;
-  const continuousReply = serverSettings.continuousReply || false;
-  const serverChatHistory = serverSettings.serverChatHistory || false;
-
-  const overrideSelect = new StringSelectMenuBuilder()
-    .setCustomId('server_override')
-    .setPlaceholder('Override User Settings')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Enabled')
-        .setDescription('Server settings override user settings')
-        .setValue('enabled')
-        .setEmoji('🔒')
-        .setDefault(overrideUserSettings),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Disabled')
-        .setDescription('Users can use their own settings')
-        .setValue('disabled')
-        .setEmoji('🔓')
-        .setDefault(!overrideUserSettings)
-    );
-
-  const continuousReplySelect = new StringSelectMenuBuilder()
-    .setCustomId('server_continuous_reply')
-    .setPlaceholder('Continuous Reply (Server-Wide)')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Enabled')
-        .setDescription('Bot replies without mentions in all channels')
-        .setValue('enabled')
-        .setEmoji('🔄')
-        .setDefault(continuousReply),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Disabled')
-        .setDescription('Bot requires mentions (default)')
-        .setValue('disabled')
-        .setEmoji('⏸️')
-        .setDefault(!continuousReply)
-    );
-
-  const chatHistorySelect = new StringSelectMenuBuilder()
-    .setCustomId('server_chat_history')
-    .setPlaceholder('Server-Wide Chat History')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Enabled')
-        .setDescription('Share chat history across server')
-        .setValue('enabled')
-        .setEmoji('📚')
-        .setDefault(serverChatHistory),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Disabled')
-        .setDescription('Individual user histories')
-        .setValue('disabled')
-        .setEmoji('📖')
-        .setDefault(!serverChatHistory)
-    );
-
-  const backButton = new ButtonBuilder()
-    .setCustomId('back_to_server')
-    .setLabel('Previous')
-    .setEmoji('◀️')
-    .setStyle(ButtonStyle.Secondary);
-
-  const nextButton = new ButtonBuilder()
-    .setCustomId('server_settings_page3')
-    .setLabel('Next Page')
-    .setEmoji('▶️')
-    .setStyle(ButtonStyle.Primary);
-
-  const components = [
-    new ActionRowBuilder().addComponents(overrideSelect),
-    new ActionRowBuilder().addComponents(continuousReplySelect),
-    new ActionRowBuilder().addComponents(chatHistorySelect),
-    new ActionRowBuilder().addComponents(backButton, nextButton)
-  ];
-
-  const embed = new EmbedBuilder()
-    .setColor(embedColor)
-    .setTitle('🏰 Server Settings')
-    .setDescription('**Page 2 of 5** • Logic & Overrides\n\nConfigure server behavior and override settings.')
-    .addFields(
-      {
-        name: '🔒 Override User Settings',
-        value: `\`${overrideUserSettings ? 'Enabled' : 'Disabled'}\``,
-        inline: true
-      },
-      {
-        name: '🔄 Continuous Reply',
-        value: `\`${continuousReply ? 'Enabled' : 'Disabled'}\``,
-        inline: true
-      },
-      {
-        name: '📚 Server-Wide History',
-        value: `\`${serverChatHistory ? 'Enabled' : 'Disabled'}\``,
-        inline: true
-      }
-    )
-    .setFooter({ text: 'Page 2 of 5 • Logic & Overrides' })
-    .setTimestamp();
-
-  const payload = {
-    embeds: [embed],
-    components: components,
-    flags: MessageFlags.Ephemeral
-  };
-
-  if (isUpdate) await interaction.update(payload);
-  else await interaction.reply(payload);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SERVER SETTINGS - Page 3: Appearance & Personality
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function showServerSettingsPage3(interaction, isUpdate = false) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return sendPermError(interaction);
-  
-  const guildId = interaction.guild.id;
-  const serverSettings = state.serverSettings[guildId] || {};
-  const embedColor = serverSettings.embedColor || DEFAULT_BLACK;
-  const hasPersonality = !!serverSettings.customPersonality;
-
-  const colorBtn = new ButtonBuilder()
-    .setCustomId('server_embed_color')
-    .setLabel('Embed Color')
-    .setEmoji('🎨')
-    .setStyle(ButtonStyle.Secondary);
-
-  const personalityBtn = new ButtonBuilder()
-    .setCustomId('server_custom_personality')
-    .setLabel('Set Personality')
-    .setEmoji('🎭')
-    .setStyle(ButtonStyle.Primary);
-
-  const removePersonalityBtn = new ButtonBuilder()
-    .setCustomId('server_remove_personality')
-    .setLabel('Reset')
-    .setEmoji('🗑️')
-    .setStyle(ButtonStyle.Danger)
-    .setDisabled(!hasPersonality);
-
-  const backButton = new ButtonBuilder()
-    .setCustomId('back_to_server_p2')
-    .setLabel('Previous')
-    .setEmoji('◀️')
-    .setStyle(ButtonStyle.Secondary);
-
-  const nextButton = new ButtonBuilder()
-    .setCustomId('server_settings_page4')
-    .setLabel('Next Page')
-    .setEmoji('▶️')
-    .setStyle(ButtonStyle.Primary);
-
-  const components = [
-    new ActionRowBuilder().addComponents(colorBtn, personalityBtn, removePersonalityBtn),
-    new ActionRowBuilder().addComponents(backButton, nextButton)
-  ];
-
-  const embed = new EmbedBuilder()
-    .setColor(embedColor)
-    .setTitle('🏰 Server Settings')
-    .setDescription('**Page 3 of 5** • Appearance & Personality\n\nCustomize the server\'s visual theme and bot personality.')
-    .addFields(
-      {
-        name: '🎨 Embed Color',
-        value: `\`${embedColor}\``,
-        inline: true
-      },
-      {
-        name: '🎭 Custom Personality',
-        value: `\`${hasPersonality ? 'Active' : 'Default'}\``,
-        inline: true
-      }
-    )
-    .setFooter({ text: 'Page 3 of 5 • Appearance & Personality' })
-    .setTimestamp();
-
-  const payload = {
-    embeds: [embed],
-    components: components,
-    flags: MessageFlags.Ephemeral
-  };
-
-  if (isUpdate) await interaction.update(payload);
-  else await interaction.reply(payload);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SERVER SETTINGS - Page 4: Channel Management
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function showServerSettingsPage4(interaction, isUpdate = false) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-    return sendPermError(interaction);
-  }
-
-  const guildId = interaction.guild.id;
-  const serverSettings = state.serverSettings[guildId] || {};
-  const embedColor = serverSettings.embedColor || DEFAULT_BLACK;
-  const allowedChannels = serverSettings.allowedChannels || [];
-
-  const manageChannelsBtn = new ButtonBuilder()
-    .setCustomId('manage_allowed_channels')
-    .setLabel('Manage Channels')
-    .setEmoji('📢')
-    .setStyle(ButtonStyle.Primary);
-
-  const toggleContinuousBtn = new ButtonBuilder()
-    .setCustomId('toggle_continuous_reply')
-    .setLabel('Toggle Channel Mode')
-    .setEmoji('🔄')
-    .setStyle(ButtonStyle.Secondary);
-
-  const backButton = new ButtonBuilder()
-    .setCustomId('back_to_server_p3')
-    .setLabel('Previous')
-    .setEmoji('◀️')
-    .setStyle(ButtonStyle.Secondary);
-
-  const nextButton = new ButtonBuilder()
-    .setCustomId('server_settings_page5')
-    .setLabel('Next Page')
-    .setEmoji('▶️')
-    .setStyle(ButtonStyle.Primary);
-
-  const components = [
-    new ActionRowBuilder().addComponents(manageChannelsBtn, toggleContinuousBtn),
-    new ActionRowBuilder().addComponents(backButton, nextButton)
-  ];
-
-  const channelList = allowedChannels.length > 0 ?
-    allowedChannels.map(id => `<#${id}>`).slice(0, 5).join(', ') + (allowedChannels.length > 5 ? ` +${allowedChannels.length - 5} more` : '') :
-    'All channels allowed';
-
-  const embed = new EmbedBuilder()
-    .setColor(embedColor)
-    .setTitle('🏰 Server Settings')
-    .setDescription('**Page 4 of 5** • Channel Management\n\nControl which channels the bot can respond in.')
-    .addFields(
-      {
-        name: '📢 Allowed Channels',
-        value: channelList,
-        inline: false
-      },
-      {
-        name: '🔄 Channel-Specific Mode',
-        value: 'Enable or disable continuous mode for the current channel',
-        inline: false
-      }
-    )
-    .setFooter({ text: 'Page 4 of 5 • Channel Management' })
-    .setTimestamp();
-
-  const payload = {
-    embeds: [embed],
-    components: components,
-    flags: MessageFlags.Ephemeral
-  };
-
-  if (isUpdate) await interaction.update(payload);
-  else await interaction.reply(payload);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SERVER SETTINGS - Page 5: Data Management
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function showServerSettingsPage5(interaction, isUpdate = false) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-    return sendPermError(interaction);
-  }
-
-  const guildId = interaction.guild.id;
-  const serverSettings = state.serverSettings[guildId] || {};
-  const embedColor = serverSettings.embedColor || DEFAULT_BLACK;
-
-  const clearMemBtn = new ButtonBuilder()
-    .setCustomId('clear_server_memory')
-    .setLabel('Clear Memory')
-    .setEmoji('🧹')
-    .setStyle(ButtonStyle.Danger);
-
-  const downloadBtn = new ButtonBuilder()
-    .setCustomId('download_server_conversation')
-    .setLabel('Download History')
-    .setEmoji('💾')
-    .setStyle(ButtonStyle.Success);
-
-  const backButton = new ButtonBuilder()
-    .setCustomId('back_to_server_p4')
-    .setLabel('Previous')
-    .setEmoji('◀️')
-    .setStyle(ButtonStyle.Secondary);
-
-  const mainMenuButton = new ButtonBuilder()
-    .setCustomId('back_to_main')
-    .setLabel('Main Menu')
-    .setEmoji('🏠')
-    .setStyle(ButtonStyle.Primary);
-
-  const components = [
-    new ActionRowBuilder().addComponents(clearMemBtn, downloadBtn),
-    new ActionRowBuilder().addComponents(backButton, mainMenuButton)
-  ];
-
-  const embed = new EmbedBuilder()
-    .setColor(embedColor)
-    .setTitle('🏰 Server Settings')
-    .setDescription('**Page 5 of 5** • Data Management\n\nManage server-wide conversation data and history.')
-    .addFields(
-      {
-        name: '🧹 Clear Server Memory',
-        value: 'Delete all server conversation history and start fresh',
-        inline: false
-      },
-      {
-        name: '💾 Download Server History',
-        value: 'Export the complete server chat log as a text file',
-        inline: false
-      }
-    )
-    .setFooter({ text: 'Page 5 of 5 • Data Management' })
-    .setTimestamp();
-
-  const payload = {
-    embeds: [embed],
-    components: components,
-    flags: MessageFlags.Ephemeral
-  };
-
-  if (isUpdate) await interaction.update(payload);
-  else await interaction.reply(payload);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// CHANNEL MANAGEMENT MENU
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function showChannelManagementMenu(interaction, isUpdate = false) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-    return sendPermError(interaction);
-  }
-
-  const guildId = interaction.guild.id;
-  const serverSettings = state.serverSettings[guildId] || {};
-  const allowedChannels = serverSettings.allowedChannels || [];
-  const embedColor = serverSettings.embedColor || DEFAULT_BLACK;
-
-  const channelSelect = new ChannelSelectMenuBuilder()
-    .setCustomId('channel_manage_select')
-    .setPlaceholder('Select channels the bot can be used in')
-    .setMinValues(0)
-    .setMaxValues(25)
-    .setChannelTypes([ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum]);
-
-  if (allowedChannels.length > 0) {
-    const validDefaultChannels = [];
-    for (const channelId of allowedChannels) {
-      if (interaction.guild.channels.cache.has(channelId)) {
-        validDefaultChannels.push(channelId);
-      }
-    }
-    if (validDefaultChannels.length > 0) {
-      channelSelect.setDefaultChannels(validDefaultChannels.slice(0, 25));
-    }
-  }
-
-  const row = new ActionRowBuilder().addComponents(channelSelect);
-
-  const setAllBtn = new ButtonBuilder()
-    .setCustomId('set_all_channels')
-    .setLabel('Allow All Channels')
-    .setEmoji('🌍')
-    .setStyle(ButtonStyle.Success);
-
-  const backBtn = new ButtonBuilder()
-    .setCustomId('back_to_server_p4')
-    .setLabel('Back to Settings')
-    .setEmoji('◀️')
-    .setStyle(ButtonStyle.Secondary);
-
-  const buttons = new ActionRowBuilder().addComponents(backBtn, setAllBtn);
-
-  const embed = new EmbedBuilder()
-    .setColor(embedColor)
-    .setTitle('📢 Channel Management')
-    .setDescription('**Configure allowed channels**\n\n' +
-      '• Select specific channels where the bot can respond\n' +
-      '• Leave empty to allow all channels\n' +
-      '• Changes save automatically')
-    .setFooter({ text: 'Channel Management • Select channels from the menu below' });
-
-  if (allowedChannels.length > 0) {
-    embed.addFields({
-      name: '✅ Currently Allowed',
-      value: allowedChannels.map(id => `<#${id}>`).join(', ') || 'None'
-    });
-  } else {
-    embed.addFields({
-      name: '✅ Currently Allowed',
-      value: '**All Channels**'
-    });
-  }
-
-  const payload = {
-    embeds: [embed],
-    components: [row, buttons],
     flags: MessageFlags.Ephemeral
   };
 
@@ -1270,640 +618,1409 @@ async function showChannelManagementMenu(interaction, isUpdate = false) {
   } else {
     await interaction.reply(payload);
   }
-
-  setTimeout(async () => {
-    try {
-      const currentReply = await interaction.fetchReply().catch(() => null);
-      if (currentReply) {
-        await interaction.deleteReply();
-      }
-    } catch (error) {
-      if (error.code !== 10008) {
-        console.error('Error deleting expired settings message:', error);
-      }
-    }
-  }, 300000);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ACTION HANDLERS
+// USER SETTINGS - PAGE 3: DATA MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function clearUserMemory(interaction) {
+async function showUserSettingsPage3(interaction, isUpdate = false) {
   const userId = interaction.user.id;
-  state.chatHistories[userId] = {};
-  await saveStateToFile();
+  const userSettings = state.userSettings[userId] || {};
+  const embedColor = userSettings.embedColor || COLORS.DEFAULT;
+
+  // Action Buttons
+  const clearButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.USER_MEMORY_CLEAR)
+    .setLabel('Clear Memory')
+    .setStyle(ButtonStyle.Danger);
+
+  const downloadButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.USER_DOWNLOAD)
+    .setLabel('Download')
+    .setStyle(ButtonStyle.Success);
+
+  // Navigation
+  const backButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.BACK_TO_USER_P2)
+    .setLabel('Back')
+    .setStyle(ButtonStyle.Secondary);
+
+  const mainButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.BACK_TO_MAIN)
+    .setLabel('Main Menu')
+    .setStyle(ButtonStyle.Primary);
+
+  const components = [
+    new ActionRowBuilder().addComponents(clearButton, downloadButton),
+    new ActionRowBuilder().addComponents(backButton, mainButton)
+  ];
 
   const embed = new EmbedBuilder()
-    .setColor(0x00FF00)
-    .setTitle('✅ Memory Cleared')
-    .setDescription('Your chat history has been cleared successfully!');
-  await interaction.reply({
+    .setColor(embedColor)
+    .setTitle(`${SYMBOLS.USER} User Settings`)
+    .setDescription('**Page 3 of 3** — Data Management\n\nManage your conversation history and data.')
+    .addFields(
+      {
+        name: `${SYMBOLS.CLEAR} Clear Memory`,
+        value: 'Delete all conversation history permanently',
+        inline: false
+      },
+      {
+        name: `${SYMBOLS.DOWNLOAD} Download History`,
+        value: 'Export conversation history as a text file',
+        inline: false
+      }
+    )
+    .setFooter({ text: 'Page 3/3 — Data Management' })
+    .setTimestamp();
+
+  const payload = {
     embeds: [embed],
+    components: components,
     flags: MessageFlags.Ephemeral
-  });
-}
+  };
 
-async function clearServerMemory(interaction) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-    return sendPermError(interaction);
-  }
-
-  const guildId = interaction.guild.id;
-  state.chatHistories[guildId] = {};
-  await saveStateToFile();
-
-  const embed = new EmbedBuilder()
-    .setColor(0x00FF00)
-    .setTitle('✅ Server Memory Cleared')
-    .setDescription('Server-wide chat history has been cleared successfully!');
-  await interaction.reply({
-    embeds: [embed],
-    flags: MessageFlags.Ephemeral
-  });
-}
-
-async function downloadUserConversation(interaction) {
-  const userId = interaction.user.id;
-  const conversationHistory = getHistory(userId);
-
-  if (!conversationHistory || conversationHistory.length === 0) {
-    const embed = new EmbedBuilder()
-      .setColor(0xFF5555)
-      .setTitle('❌ No History Found')
-      .setDescription('You don\'t have any conversation history to download.');
-    return interaction.reply({
-      embeds: [embed],
-      flags: MessageFlags.Ephemeral
-    });
-  }
-
-  let conversationText = conversationHistory.map(entry => {
-    const role = entry.role === 'user' ? '[User]' : '[Model]';
-    const content = entry.parts.map(c => c.text).join('\n');
-    return `${role}:\n${content}\n\n`;
-  }).join('');
-
-  const tempFileName = path.join(TEMP_DIR, `conversation_${interaction.id}.txt`);
-  await fs.writeFile(tempFileName, conversationText, 'utf8');
-
-  const stats = await fs.stat(tempFileName);
-  const fileSizeMB = stats.size / (1024 * 1024);
-  const MAX_DISCORD_MB = 9.5;
-
-  const isDM = interaction.channel.type === ChannelType.DM;
-  const historyType = isDM ? 'DM History' : 'Personal History';
-  
-  let fileSent = false;
-  let fallbackEmbed;
-
-  if (fileSizeMB <= MAX_DISCORD_MB) {
-    const file = new AttachmentBuilder(tempFileName, {
-      name: 'conversation_history.txt'
-    });
-
-    try {
-      await interaction.user.send({
-        content: `📥 **Your Conversation History**\n\`${historyType}\``,
-        files: [file]
-      });
-      
-      await interaction.reply({
-        embeds: [new EmbedBuilder().setColor(0x00FF00).setTitle('✅ History Sent').setDescription('Your conversation history has been sent to your DMs!')],
-        flags: MessageFlags.Ephemeral
-      });
-      fileSent = true;
-    } catch (error) {
-      console.error(`Discord Send Error for ${tempFileName}:`, error);
-      fallbackEmbed = new EmbedBuilder()
-        .setColor(0xFFAA00)
-        .setTitle('❌ DM Failed / Upload Error')
-        .setDescription('Could not send the history file via DM. Attempting external upload fallback.');
-    }
+  if (isUpdate) {
+    await interaction.update(payload);
   } else {
-    fallbackEmbed = new EmbedBuilder()
-      .setColor(0xFFAA00)
-      .setTitle('🔗 History Too Large')
-      .setDescription(`The conversation history is too large (${fileSizeMB.toFixed(2)} MB) to send directly via Discord. It will be uploaded to an external site.`);
+    await interaction.reply(payload);
   }
-
-  if (!fileSent) {
-    const { uploadText } = await import('./utils.js');
-    const msgUrlText = await uploadText(conversationText);
-    const msgUrl = msgUrlText.match(/🔗 URL: (.+)/)?.[1] || 'URL generation failed.';
-
-    const finalEmbed = fallbackEmbed || new EmbedBuilder()
-      .setColor(0xFFAA00)
-      .setTitle('🔗 History Upload Fallback');
-      
-    finalEmbed.addFields({
-      name: 'External Link',
-      value: `[View History Content](${msgUrl})`,
-      inline: false
-    });
-
-    await interaction.reply({
-      embeds: [finalEmbed],
-      flags: MessageFlags.Ephemeral
-    });
-  }
-
-  await fs.unlink(tempFileName).catch(() => {});
 }
 
-async function downloadServerConversation(interaction) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-    return sendPermError(interaction);
-  }
+// ═══════════════════════════════════════════════════════════════════════════════
+// SERVER SETTINGS - PAGE 1: CORE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function showServerSettings(interaction, isUpdate = false) {
+  if (!checkServerPermission(interaction)) return;
 
   const guildId = interaction.guild.id;
   const serverSettings = state.serverSettings[guildId] || {};
-  
-  if (!serverSettings.serverChatHistory) {
-    const embed = new EmbedBuilder()
-      .setColor(0xFF5555)
-      .setTitle('❌ Server Chat History Disabled')
-      .setDescription('Server-wide chat history is not enabled. Enable it in server settings to use this feature.');
-    return interaction.reply({
-      embeds: [embed],
-      flags: MessageFlags.Ephemeral
-    });
-  }
+  const selectedModel = serverSettings.selectedModel || DEFAULT_MODEL;
+  const responseFormat = serverSettings.responseFormat || RESPONSE_FORMATS.NORMAL.value;
+  const showActionButtons = serverSettings.showActionButtons === true;
+  const embedColor = serverSettings.embedColor || COLORS.DEFAULT;
 
-  const historyObject = state.chatHistories[guildId];
-  
-  if (!historyObject || Object.keys(historyObject).length === 0) {
-    const embed = new EmbedBuilder()
-      .setColor(0xFF5555)
-      .setTitle('❌ No History Found')
-      .setDescription('No server-wide conversation history found. Start chatting with the bot to build history!');
-    return interaction.reply({
-      embeds: [embed],
-      flags: MessageFlags.Ephemeral
-    });
-  }
+  // Model Select
+  const modelSelect = new StringSelectMenuBuilder()
+    .setCustomId(SELECT_IDS.SERVER_MODEL)
+    .setPlaceholder('Select AI Model')
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel(MODELS.GEMINI_FLASH.label)
+        .setDescription(MODELS.GEMINI_FLASH.description)
+        .setValue(MODELS.GEMINI_FLASH.value)
+        .setDefault(selectedModel === MODELS.GEMINI_FLASH.value)
+    );
 
-  let conversationText = '';
-  let messageCount = 0;
-  
-  for (const messagesId in historyObject) {
-    if (historyObject.hasOwnProperty(messagesId)) {
-      const messages = historyObject[messagesId];
-      
-      for (const entry of messages) {
-        const role = entry.role === 'user' ? '[User]' : '[Assistant]';
-        const contentParts = [];
-        
-        for (const part of entry.content) {
-          if (part.text !== undefined && part.text !== '') {
-            contentParts.push(part.text);
-          } else if (part.fileUri || part.fileData) {
-            contentParts.push('[Media File Attached]');
-          }
-        }
-        
-        if (contentParts.length > 0) {
-          const content = contentParts.join('\n');
-          conversationText += `${role}:\n${content}\n\n`;
-          messageCount++;
-        }
+  // Response Format Select
+  const formatSelect = new StringSelectMenuBuilder()
+    .setCustomId(SELECT_IDS.SERVER_FORMAT)
+    .setPlaceholder('Response Format')
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel(RESPONSE_FORMATS.NORMAL.label)
+        .setDescription(RESPONSE_FORMATS.NORMAL.description)
+        .setValue(RESPONSE_FORMATS.NORMAL.value)
+        .setDefault(responseFormat === RESPONSE_FORMATS.NORMAL.value),
+      new StringSelectMenuOptionBuilder()
+        .setLabel(RESPONSE_FORMATS.EMBEDDED.label)
+        .setDescription(RESPONSE_FORMATS.EMBEDDED.description)
+        .setValue(RESPONSE_FORMATS.EMBEDDED.value)
+        .setDefault(responseFormat === RESPONSE_FORMATS.EMBEDDED.value)
+    );
+
+  // Action Buttons Select
+  const buttonsSelect = new StringSelectMenuBuilder()
+    .setCustomId(SELECT_IDS.SERVER_BUTTONS)
+    .setPlaceholder('Action Buttons')
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Show Buttons')
+        .setDescription('Display action buttons on messages')
+        .setValue('show')
+        .setDefault(showActionButtons),
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Hide Buttons')
+        .setDescription('Hide action buttons')
+        .setValue('hide')
+        .setDefault(!showActionButtons)
+    );
+
+  // Navigation
+  const backButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.BACK_TO_MAIN)
+    .setLabel('Back')
+    .setStyle(ButtonStyle.Secondary);
+
+  const nextButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_SETTINGS_P2)
+    .setLabel('Next')
+    .setStyle(ButtonStyle.Primary);
+
+  const components = [
+    new ActionRowBuilder().addComponents(modelSelect),
+    new ActionRowBuilder().addComponents(formatSelect),
+    new ActionRowBuilder().addComponents(buttonsSelect),
+    new ActionRowBuilder().addComponents(backButton, nextButton)
+  ];
+
+  const embed = new EmbedBuilder()
+    .setColor(embedColor)
+    .setTitle(`${SYMBOLS.SERVER} Server Settings`)
+    .setDescription('**Page 1 of 5** — Core Configuration\n\nConfigure server-wide AI settings.')
+    .addFields(
+      {
+        name: `${SYMBOLS.MODEL} Current Model`,
+        value: `\`${selectedModel}\``,
+        inline: true
+      },
+      {
+        name: `${SYMBOLS.FORMAT} Response Format`,
+        value: `\`${responseFormat}\``,
+        inline: true
+      },
+      {
+        name: `${SYMBOLS.BULLET} Action Buttons`,
+        value: `\`${showActionButtons ? 'Visible' : 'Hidden'}\``,
+        inline: true
       }
-    }
-  }
+    )
+    .setFooter({ text: 'Page 1/5 — Core Configuration' })
+    .setTimestamp();
 
-  if (conversationText === '' || messageCount === 0) {
-    const embed = new EmbedBuilder()
-      .setColor(0xFF5555)
-      .setTitle('❌ No Readable History')
-      .setDescription('History exists but contains no readable content (possibly only media without text).');
-    return interaction.reply({
-      embeds: [embed],
-      flags: MessageFlags.Ephemeral
-    });
-  }
+  const payload = {
+    embeds: [embed],
+    components: components,
+    flags: MessageFlags.Ephemeral
+  };
 
-  const tempFileName = path.join(TEMP_DIR, `server_conversation_${interaction.id}.txt`);
-  const header = `Server Conversation History\nServer: ${interaction.guild.name}\nMessages: ${messageCount}\nExported: ${new Date().toLocaleString()}\n${'='.repeat(50)}\n\n`;
-  await fs.writeFile(tempFileName, header + conversationText, 'utf8');
-
-  const stats = await fs.stat(tempFileName);
-  const fileSizeMB = stats.size / (1024 * 1024);
-  const MAX_DISCORD_MB = 9.5;
-  const serverName = interaction.guild.name;
-  
-  let fileSent = false;
-  let fallbackEmbed;
-
-  if (fileSizeMB <= MAX_DISCORD_MB) {
-    const file = new AttachmentBuilder(tempFileName, {
-      name: `${serverName.replace(/[^a-z0-9]/gi, '_')}_history.txt`
-    });
-
-    try {
-      await interaction.user.send({
-        content: `📥 **Server Conversation History**\n\`Server: ${serverName}\`\n\`Messages: ${messageCount}\``,
-        files: [file]
-      });
-      
-      await interaction.reply({
-        embeds: [new EmbedBuilder().setColor(0x00FF00).setTitle('✅ History Sent').setDescription(`Server conversation history (${messageCount} messages) has been sent to your DMs!`)],
-        flags: MessageFlags.Ephemeral
-      });
-      fileSent = true;
-    } catch (error) {
-      console.error(`Discord Send Error for ${tempFileName}:`, error);
-      fallbackEmbed = new EmbedBuilder()
-        .setColor(0xFFAA00)
-        .setTitle('❌ DM Failed / Upload Error')
-        .setDescription('Could not send the history file via DM. Attempting external upload fallback.');
-    }
+  if (isUpdate) {
+    await interaction.update(payload);
   } else {
-    fallbackEmbed = new EmbedBuilder()
-      .setColor(0xFFAA00)
-      .setTitle('🔗 History Too Large')
-      .setDescription(`The server history is too large (${fileSizeMB.toFixed(2)} MB) to send directly via Discord. It will be uploaded to an external site.`);
+    await interaction.reply(payload);
   }
-
-  if (!fileSent) {
-    const { uploadText } = await import('./utils.js');
-    const msgUrlText = await uploadText(conversationText);
-    const msgUrl = msgUrlText.match(/🔗 URL: (.+)/)?.[1] || 'URL generation failed.';
-
-    const finalEmbed = fallbackEmbed || new EmbedBuilder()
-      .setColor(0xFFAA00)
-      .setTitle('🔗 History Upload Fallback');
-      
-    finalEmbed.addFields({
-      name: 'External Link',
-      value: `[View History Content](${msgUrl})`,
-      inline: false
-    });
-    
-    await interaction.reply({
-      embeds: [finalEmbed],
-      flags: MessageFlags.Ephemeral
-    });
-  }
-
-  await fs.unlink(tempFileName).catch(() => {});
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SERVER SETTINGS - PAGE 2: BEHAVIOR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function showServerSettingsPage2(interaction, isUpdate = false) {
+  if (!checkServerPermission(interaction)) return;
+
+  const guildId = interaction.guild.id;
+  const serverSettings = state.serverSettings[guildId] || {};
+  const embedColor = serverSettings.embedColor || COLORS.DEFAULT;
+  const overrideUserSettings = serverSettings.overrideUserSettings || false;
+  const continuousReply = serverSettings.continuousReply || false;
+  const serverChatHistory = serverSettings.serverChatHistory || false;
+
+  // Override Select
+  const overrideSelect = new StringSelectMenuBuilder()
+    .setCustomId(SELECT_IDS.SERVER_OVERRIDE)
+    .setPlaceholder('Override User Settings')
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Enabled')
+        .setDescription('Force server settings for all users')
+        .setValue('enabled')
+        .setDefault(overrideUserSettings),
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Disabled')
+        .setDescription('Allow users to use their own settings')
+        .setValue('disabled')
+        .setDefault(!overrideUserSettings)
+    );
+
+  // Continuous Reply Select
+  const continuousSelect = new StringSelectMenuBuilder()
+    .setCustomId(SELECT_IDS.SERVER_CONTINUOUS)
+    .setPlaceholder('Continuous Reply Mode')
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Enabled')
+        .setDescription('Bot responds without mentions server-wide')
+        .setValue('enabled')
+        .setDefault(continuousReply),
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Disabled')
+        .setDescription('Bot requires mentions (default)')
+        .setValue('disabled')
+        .setDefault(!continuousReply)
+    );
+
+  // Chat History Select
+  const historySelect = new StringSelectMenuBuilder()
+    .setCustomId(SELECT_IDS.SERVER_HISTORY)
+    .setPlaceholder('Chat History Mode')
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Server-Wide')
+        .setDescription('Share chat history across all users')
+        .setValue('enabled')
+        .setDefault(serverChatHistory),
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Individual')
+        .setDescription('Separate history per user')
+        .setValue('disabled')
+        .setDefault(!serverChatHistory)
+    );
+
+  // Navigation
+  const backButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.BACK_TO_SERVER)
+    .setLabel('Back')
+    .setStyle(ButtonStyle.Secondary);
+
+  const nextButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_SETTINGS_P3)
+    .setLabel('Next')
+    .setStyle(ButtonStyle.Primary);
+
+  const components = [
+    new ActionRowBuilder().addComponents(overrideSelect),
+    new ActionRowBuilder().addComponents(continuousSelect),
+    new ActionRowBuilder().addComponents(historySelect),
+    new ActionRowBuilder().addComponents(backButton, nextButton)
+  ];
+
+  const embed = new EmbedBuilder()
+    .setColor(embedColor)
+    .setTitle(`${SYMBOLS.SERVER} Server Settings`)
+    .setDescription('**Page 2 of 5** — Behavior Configuration\n\nControl server behavior and user overrides.')
+    .addFields(
+      {
+        name: `${SYMBOLS.LOCKED} Override Settings`,
+        value: `\`${overrideUserSettings ? SYMBOLS.ENABLED + ' Enabled' : SYMBOLS.DISABLED + ' Disabled'}\``,
+        inline: true
+      },
+      {
+        name: `${SYMBOLS.TOGGLE} Continuous Reply`,
+        value: `\`${continuousReply ? SYMBOLS.ENABLED + ' Enabled' : SYMBOLS.DISABLED + ' Disabled'}\``,
+        inline: true
+      },
+      {
+        name: `${SYMBOLS.HISTORY} Chat History`,
+        value: `\`${serverChatHistory ? SYMBOLS.ENABLED + ' Server-Wide' : SYMBOLS.DISABLED + ' Individual'}\``,
+        inline: true
+      }
+    )
+    .setFooter({ text: 'Page 2/5 — Behavior Configuration' })
+    .setTimestamp();
+
+  const payload = {
+    embeds: [embed],
+    components: components,
+    flags: MessageFlags.Ephemeral
+  };
+
+  if (isUpdate) {
+    await interaction.update(payload);
+  } else {
+    await interaction.reply(payload);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SERVER SETTINGS - PAGE 3: APPEARANCE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function showServerSettingsPage3(interaction, isUpdate = false) {
+  if (!checkServerPermission(interaction)) return;
+
+  const guildId = interaction.guild.id;
+  const serverSettings = state.serverSettings[guildId] || {};
+  const embedColor = serverSettings.embedColor || COLORS.DEFAULT;
+  const hasPersonality = !!serverSettings.customPersonality;
+
+  // Action Buttons
+  const colorButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_COLOR)
+    .setLabel('Set Color')
+    .setStyle(ButtonStyle.Secondary);
+
+  const personalityButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_PERSONALITY)
+    .setLabel('Personality')
+    .setStyle(ButtonStyle.Primary);
+
+  const removePersonalityButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_PERSONALITY_REMOVE)
+    .setLabel('Reset')
+    .setStyle(ButtonStyle.Danger)
+    .setDisabled(!hasPersonality);
+
+  // Navigation
+  const backButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.BACK_TO_SERVER_P2)
+    .setLabel('Back')
+    .setStyle(ButtonStyle.Secondary);
+
+  const nextButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_SETTINGS_P4)
+    .setLabel('Next')
+    .setStyle(ButtonStyle.Primary);
+
+  const components = [
+    new ActionRowBuilder().addComponents(colorButton, personalityButton, removePersonalityButton),
+    new ActionRowBuilder().addComponents(backButton, nextButton)
+  ];
+
+  const embed = new EmbedBuilder()
+    .setColor(embedColor)
+    .setTitle(`${SYMBOLS.SERVER} Server Settings`)
+    .setDescription('**Page 3 of 5** — Appearance & Personality\n\nCustomize visual theme and bot personality.')
+    .addFields(
+      {
+        name: `${SYMBOLS.COLOR} Embed Color`,
+        value: `\`${embedColor}\``,
+        inline: true
+      },
+      {
+        name: `${SYMBOLS.PERSONALITY} Custom Personality`,
+        value: `\`${hasPersonality ? SYMBOLS.ENABLED + ' Active' : SYMBOLS.DISABLED + ' Default'}\``,
+        inline: true
+      }
+    )
+    .setFooter({ text: 'Page 3/5 — Appearance & Personality' })
+    .setTimestamp();
+
+  const payload = {
+    embeds: [embed],
+    components: components,
+    flags: MessageFlags.Ephemeral
+  };
+
+  if (isUpdate) {
+    await interaction.update(payload);
+  } else {
+    await interaction.reply(payload);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SERVER SETTINGS - PAGE 4: CHANNELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function showServerSettingsPage4(interaction, isUpdate = false) {
+  if (!checkServerPermission(interaction)) return;
+
+  const guildId = interaction.guild.id;
+  const serverSettings = state.serverSettings[guildId] || {};
+  const embedColor = serverSettings.embedColor || COLORS.DEFAULT;
+  const allowedChannels = serverSettings.allowedChannels || [];
+
+  // Action Buttons
+  const manageButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_CHANNELS)
+    .setLabel('Manage Channels')
+    .setStyle(ButtonStyle.Primary);
+
+  const toggleButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_TOGGLE_CHANNEL)
+    .setLabel('Toggle Current')
+    .setStyle(ButtonStyle.Secondary);
+
+  // Navigation
+  const backButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.BACK_TO_SERVER_P3)
+    .setLabel('Back')
+    .setStyle(ButtonStyle.Secondary);
+
+  const nextButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_SETTINGS_P5)
+    .setLabel('Next')
+    .setStyle(ButtonStyle.Primary);
+
+  const components = [
+    new ActionRowBuilder().addComponents(manageButton, toggleButton),
+    new ActionRowBuilder().addComponents(backButton, nextButton)
+  ];
+
+  const channelList = allowedChannels.length > 0
+    ? allowedChannels.slice(0, 5).map(id => `<#${id}>`).join(', ') +
+      (allowedChannels.length > 5 ? ` and ${allowedChannels.length - 5} more` : '')
+    : 'All channels enabled';
+
+  const embed = new EmbedBuilder()
+    .setColor(embedColor)
+    .setTitle(`${SYMBOLS.SERVER} Server Settings`)
+    .setDescription('**Page 4 of 5** — Channel Management\n\nControl bot access and behavior per channel.')
+    .addFields(
+      {
+        name: `${SYMBOLS.CHANNEL} Allowed Channels`,
+        value: channelList,
+        inline: false
+      },
+      {
+        name: `${SYMBOLS.INFO} Channel Mode`,
+        value: 'Toggle continuous reply for the current channel',
+        inline: false
+      }
+    )
+    .setFooter({ text: 'Page 4/5 — Channel Management' })
+    .setTimestamp();
+
+  const payload = {
+    embeds: [embed],
+    components: components,
+    flags: MessageFlags.Ephemeral
+  };
+
+  if (isUpdate) {
+    await interaction.update(payload);
+  } else {
+    await interaction.reply(payload);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SERVER SETTINGS - PAGE 5: DATA
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function showServerSettingsPage5(interaction, isUpdate = false) {
+  if (!checkServerPermission(interaction)) return;
+
+  const guildId = interaction.guild.id;
+  const serverSettings = state.serverSettings[guildId] || {};
+  const embedColor = serverSettings.embedColor || COLORS.DEFAULT;
+
+  // Action Buttons
+  const clearButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_MEMORY_CLEAR)
+    .setLabel('Clear Memory')
+    .setStyle(ButtonStyle.Danger);
+
+  const downloadButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_DOWNLOAD)
+    .setLabel('Download')
+    .setStyle(ButtonStyle.Success);
+
+  // Navigation
+  const backButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.BACK_TO_SERVER_P4)
+    .setLabel('Back')
+    .setStyle(ButtonStyle.Secondary);
+
+  const mainButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.BACK_TO_MAIN)
+    .setLabel('Main Menu')
+    .setStyle(ButtonStyle.Primary);
+
+  const components = [
+    new ActionRowBuilder().addComponents(clearButton, downloadButton),
+    new ActionRowBuilder().addComponents(backButton, mainButton)
+  ];
+
+  const embed = new EmbedBuilder()
+    .setColor(embedColor)
+    .setTitle(`${SYMBOLS.SERVER} Server Settings`)
+    .setDescription('**Page 5 of 5** — Data Management\n\nManage server conversation history and data.')
+    .addFields(
+      {
+        name: `${SYMBOLS.CLEAR} Clear Server Memory`,
+        value: 'Delete all server conversation history permanently',
+        inline: false
+      },
+      {
+        name: `${SYMBOLS.DOWNLOAD} Download History`,
+        value: 'Export server conversation history as text',
+        inline: false
+      }
+    )
+    .setFooter({ text: 'Page 5/5 — Data Management' })
+    .setTimestamp();
+
+  const payload = {
+    embeds: [embed],
+    components: components,
+    flags: MessageFlags.Ephemeral
+  };
+
+  if (isUpdate) {
+    await interaction.update(payload);
+  } else {
+    await interaction.reply(payload);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHANNEL MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function showChannelManagementMenu(interaction, isUpdate = false) {
+  if (!checkServerPermission(interaction)) return;
+
+  const guildId = interaction.guild.id;
+  const serverSettings = state.serverSettings[guildId] || {};
+  const embedColor = serverSettings.embedColor || COLORS.DEFAULT;
+  const allowedChannels = serverSettings.allowedChannels || [];
+
+  // Channel Select Menu
+  const channelSelect = new ChannelSelectMenuBuilder()
+    .setCustomId(SELECT_IDS.CHANNEL_MANAGE)
+    .setPlaceholder('Select allowed channels')
+    .setChannelTypes([ChannelType.GuildText])
+    .setMinValues(0)
+    .setMaxValues(25);
+
+  if (allowedChannels.length > 0) {
+    channelSelect.setDefaultChannels(allowedChannels);
+  }
+
+  // Action Buttons
+  const allChannelsButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.SERVER_ALL_CHANNELS)
+    .setLabel('Allow All')
+    .setStyle(ButtonStyle.Success);
+
+  const backButton = new ButtonBuilder()
+    .setCustomId(BUTTON_IDS.BACK_TO_SERVER_P4)
+    .setLabel('Back')
+    .setStyle(ButtonStyle.Secondary);
+
+  const components = [
+    new ActionRowBuilder().addComponents(channelSelect),
+    new ActionRowBuilder().addComponents(allChannelsButton, backButton)
+  ];
+
+  const channelList = allowedChannels.length > 0
+    ? allowedChannels.slice(0, 10).map(id => `<#${id}>`).join(', ') +
+      (allowedChannels.length > 10 ? `\n...and ${allowedChannels.length - 10} more` : '')
+    : 'No restrictions — all channels allowed';
+
+  const embed = new EmbedBuilder()
+    .setColor(embedColor)
+    .setTitle(`${SYMBOLS.CHANNEL} Channel Management`)
+    .setDescription(
+      'Configure which channels the bot can respond in.\n\n' +
+      `${SYMBOLS.INFO} Leave empty to allow all channels.\n` +
+      `${SYMBOLS.INFO} Select specific channels to restrict access.`
+    )
+    .addFields({
+      name: `${SYMBOLS.BULLET} Currently Allowed`,
+      value: channelList,
+      inline: false
+    })
+    .setFooter({ text: 'Channel Management' })
+    .setTimestamp();
+
+  const payload = {
+    embeds: [embed],
+    components: components,
+    flags: MessageFlags.Ephemeral
+  };
+
+  if (isUpdate) {
+    await interaction.update(payload);
+  } else {
+    await interaction.reply(payload);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SELECT MENU HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function handleUserModelSelect(interaction) {
+  const userId = interaction.user.id;
+  const selectedModel = interaction.values[0];
+  
+  if (!state.userSettings[userId]) {
+    state.userSettings[userId] = {};
+  }
+  state.userSettings[userId].selectedModel = selectedModel;
+  await saveStateToFile();
+  await showUserSettings(interaction, true);
+}
+
+async function handleUserFormatSelect(interaction) {
+  const userId = interaction.user.id;
+  const selectedFormat = interaction.values[0];
+  
+  if (!state.userSettings[userId]) {
+    state.userSettings[userId] = {};
+  }
+  state.userSettings[userId].responseFormat = selectedFormat;
+  await saveStateToFile();
+  await showUserSettings(interaction, true);
+}
+
+async function handleUserButtonsSelect(interaction) {
+  const userId = interaction.user.id;
+  const selectedValue = interaction.values[0];
+  
+  if (!state.userSettings[userId]) {
+    state.userSettings[userId] = {};
+  }
+  state.userSettings[userId].showActionButtons = selectedValue === 'show';
+  await saveStateToFile();
+  await showUserSettings(interaction, true);
+}
+
+async function handleUserContinuousSelect(interaction) {
+  const userId = interaction.user.id;
+  const selectedValue = interaction.values[0];
+  
+  if (!state.userSettings[userId]) {
+    state.userSettings[userId] = {};
+  }
+  state.userSettings[userId].continuousReply = selectedValue === 'enabled';
+  await saveStateToFile();
+  await showUserSettingsPage2(interaction, true);
+}
+
+async function handleServerModelSelect(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
+  const guildId = interaction.guild.id;
+  const selectedModel = interaction.values[0];
+  
+  if (!state.serverSettings[guildId]) {
+    state.serverSettings[guildId] = {};
+  }
+  state.serverSettings[guildId].selectedModel = selectedModel;
+  await saveStateToFile();
+  await showServerSettings(interaction, true);
+}
+
+async function handleServerFormatSelect(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
+  const guildId = interaction.guild.id;
+  const selectedFormat = interaction.values[0];
+  
+  if (!state.serverSettings[guildId]) {
+    state.serverSettings[guildId] = {};
+  }
+  state.serverSettings[guildId].responseFormat = selectedFormat;
+  await saveStateToFile();
+  await showServerSettings(interaction, true);
+}
+
+async function handleServerButtonsSelect(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
+  const guildId = interaction.guild.id;
+  const selectedValue = interaction.values[0];
+  
+  if (!state.serverSettings[guildId]) {
+    state.serverSettings[guildId] = {};
+  }
+  state.serverSettings[guildId].showActionButtons = selectedValue === 'show';
+  await saveStateToFile();
+  await showServerSettings(interaction, true);
+}
+
+async function handleServerContinuousSelect(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
+  const guildId = interaction.guild.id;
+  const selectedValue = interaction.values[0];
+  
+  if (!state.serverSettings[guildId]) {
+    state.serverSettings[guildId] = {};
+  }
+  state.serverSettings[guildId].continuousReply = selectedValue === 'enabled';
+  await saveStateToFile();
+  await showServerSettingsPage2(interaction, true);
+}
+
+async function handleServerOverrideSelect(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
+  const guildId = interaction.guild.id;
+  const selectedValue = interaction.values[0];
+  
+  if (!state.serverSettings[guildId]) {
+    state.serverSettings[guildId] = {};
+  }
+  state.serverSettings[guildId].overrideUserSettings = selectedValue === 'enabled';
+  await saveStateToFile();
+  await showServerSettingsPage2(interaction, true);
+}
+
+async function handleServerHistorySelect(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
+  const guildId = interaction.guild.id;
+  const selectedValue = interaction.values[0];
+  
+  if (!state.serverSettings[guildId]) {
+    state.serverSettings[guildId] = {};
+  }
+  state.serverSettings[guildId].serverChatHistory = selectedValue === 'enabled';
+  await saveStateToFile();
+  await showServerSettingsPage2(interaction, true);
+}
+
+async function handleChannelManageSelect(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
+  const guildId = interaction.guild.id;
+  const selectedChannels = interaction.values;
+  
+  if (!state.serverSettings[guildId]) {
+    state.serverSettings[guildId] = {};
+  }
+  state.serverSettings[guildId].allowedChannels = selectedChannels;
+  await saveStateToFile();
+  await showChannelManagementMenu(interaction, true);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODAL HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async function showUserPersonalityModal(interaction) {
   const userId = interaction.user.id;
   const userSettings = state.userSettings[userId] || {};
-  const existingPersonality = userSettings.customPersonality || '';
+  const existing = userSettings.customPersonality || '';
 
   const input = new TextInputBuilder()
     .setCustomId('personality_input')
-    .setLabel("What should the bot's personality be like?")
+    .setLabel('Custom Personality')
     .setStyle(TextInputStyle.Paragraph)
-    .setPlaceholder("Enter your custom personality instructions...")
+    .setPlaceholder('Describe how the bot should respond...')
+    .setRequired(true)
     .setMinLength(10)
-    .setMaxLength(4000);
+    .setMaxLength(1000);
 
-  if (existingPersonality) {
-    input.setValue(existingPersonality);
+  if (existing) {
+    input.setValue(existing);
   }
 
   const modal = new ModalBuilder()
-    .setCustomId('user_personality_modal')
-    .setTitle('Custom Personality')
+    .setCustomId(MODAL_IDS.USER_PERSONALITY)
+    .setTitle('Set Custom Personality')
+    .addComponents(new ActionRowBuilder().addComponents(input));
+
+  await interaction.showModal(modal);
+}
+
+async function showUserColorModal(interaction) {
+  const userId = interaction.user.id;
+  const userSettings = state.userSettings[userId] || {};
+  const existing = userSettings.embedColor || '';
+
+  const input = new TextInputBuilder()
+    .setCustomId('color_input')
+    .setLabel('Hex Color Code')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('#1a1a1a or 1a1a1a')
+    .setRequired(true)
+    .setMinLength(6)
+    .setMaxLength(7);
+
+  if (existing) {
+    input.setValue(existing);
+  }
+
+  const modal = new ModalBuilder()
+    .setCustomId(MODAL_IDS.USER_COLOR)
+    .setTitle('Set Embed Color')
     .addComponents(new ActionRowBuilder().addComponents(input));
 
   await interaction.showModal(modal);
 }
 
 async function showServerPersonalityModal(interaction) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-    return sendPermError(interaction);
-  }
-
+  if (!checkServerPermission(interaction)) return;
+  
   const guildId = interaction.guild.id;
   const serverSettings = state.serverSettings[guildId] || {};
-  const existingPersonality = serverSettings.customPersonality || '';
+  const existing = serverSettings.customPersonality || '';
 
   const input = new TextInputBuilder()
     .setCustomId('personality_input')
-    .setLabel("What should the bot's personality be like?")
+    .setLabel('Server Personality')
     .setStyle(TextInputStyle.Paragraph)
-    .setPlaceholder("Enter server custom personality instructions...")
+    .setPlaceholder('Describe how the bot should respond in this server...')
+    .setRequired(true)
     .setMinLength(10)
-    .setMaxLength(4000);
+    .setMaxLength(1000);
 
-  if (existingPersonality) {
-    input.setValue(existingPersonality);
+  if (existing) {
+    input.setValue(existing);
   }
 
   const modal = new ModalBuilder()
-    .setCustomId('server_personality_modal')
-    .setTitle('Server Custom Personality')
+    .setCustomId(MODAL_IDS.SERVER_PERSONALITY)
+    .setTitle('Set Server Personality')
     .addComponents(new ActionRowBuilder().addComponents(input));
 
   await interaction.showModal(modal);
 }
+
+async function showServerColorModal(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
+  const guildId = interaction.guild.id;
+  const serverSettings = state.serverSettings[guildId] || {};
+  const existing = serverSettings.embedColor || '';
+
+  const input = new TextInputBuilder()
+    .setCustomId('color_input')
+    .setLabel('Hex Color Code')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('#1a1a1a or 1a1a1a')
+    .setRequired(true)
+    .setMinLength(6)
+    .setMaxLength(7);
+
+  if (existing) {
+    input.setValue(existing);
+  }
+
+  const modal = new ModalBuilder()
+    .setCustomId(MODAL_IDS.SERVER_COLOR)
+    .setTitle('Set Server Embed Color')
+    .addComponents(new ActionRowBuilder().addComponents(input));
+
+  await interaction.showModal(modal);
+}
+
+async function handleUserPersonalitySubmit(interaction) {
+  try {
+    const userId = interaction.user.id;
+    const personality = interaction.fields.getTextInputValue('personality_input').trim();
+    
+    if (!state.userSettings[userId]) {
+      state.userSettings[userId] = {};
+    }
+    state.userSettings[userId].customPersonality = personality;
+    await saveStateToFile();
+
+    await sendSuccessEmbed(
+      interaction,
+      'Personality Updated',
+      'Your custom personality has been saved successfully.'
+    );
+  } catch (error) {
+    console.error('Error saving user personality:', error);
+    await sendErrorEmbed(interaction, 'Error', 'Failed to save personality.');
+  }
+}
+
+async function handleUserColorSubmit(interaction) {
+  try {
+    const userId = interaction.user.id;
+    const colorInput = interaction.fields.getTextInputValue('color_input').trim();
+    
+    const hexPattern = /^#?([0-9A-Fa-f]{6})$/;
+    if (!hexPattern.test(colorInput)) {
+      return sendErrorEmbed(
+        interaction,
+        'Invalid Color',
+        'Please provide a valid hex color code (e.g., #1a1a1a or 1a1a1a).'
+      );
+    }
+
+    const hexColor = colorInput.startsWith('#') ? colorInput : `#${colorInput}`;
+    
+    if (!state.userSettings[userId]) {
+      state.userSettings[userId] = {};
+    }
+    state.userSettings[userId].embedColor = hexColor;
+    await saveStateToFile();
+
+    const embed = new EmbedBuilder()
+      .setColor(hexColor)
+      .setTitle(`${SYMBOLS.SUCCESS} Color Updated`)
+      .setDescription(`Your embed color has been set to \`${hexColor}\`.`);
+    
+    await interaction.reply({
+      embeds: [embed],
+      flags: MessageFlags.Ephemeral
+    });
+  } catch (error) {
+    console.error('Error saving user color:', error);
+    await sendErrorEmbed(interaction, 'Error', 'Failed to save color.');
+  }
+}
+
+async function handleServerPersonalitySubmit(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
+  try {
+    const guildId = interaction.guild.id;
+    const personality = interaction.fields.getTextInputValue('personality_input').trim();
+    
+    if (!state.serverSettings[guildId]) {
+      state.serverSettings[guildId] = {};
+    }
+    state.serverSettings[guildId].customPersonality = personality;
+    await saveStateToFile();
+
+    await sendSuccessEmbed(
+      interaction,
+      'Server Personality Updated',
+      'The server personality has been saved successfully.'
+    );
+  } catch (error) {
+    console.error('Error saving server personality:', error);
+    await sendErrorEmbed(interaction, 'Error', 'Failed to save personality.');
+  }
+}
+
+async function handleServerColorSubmit(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
+  try {
+    const guildId = interaction.guild.id;
+    const colorInput = interaction.fields.getTextInputValue('color_input').trim();
+    
+    const hexPattern = /^#?([0-9A-Fa-f]{6})$/;
+    if (!hexPattern.test(colorInput)) {
+      return sendErrorEmbed(
+        interaction,
+        'Invalid Color',
+        'Please provide a valid hex color code (e.g., #1a1a1a or 1a1a1a).'
+      );
+    }
+
+    const hexColor = colorInput.startsWith('#') ? colorInput : `#${colorInput}`;
+    
+    if (!state.serverSettings[guildId]) {
+      state.serverSettings[guildId] = {};
+    }
+    state.serverSettings[guildId].embedColor = hexColor;
+    await saveStateToFile();
+
+    const embed = new EmbedBuilder()
+      .setColor(hexColor)
+      .setTitle(`${SYMBOLS.SUCCESS} Server Color Updated`)
+      .setDescription(`Server embed color has been set to \`${hexColor}\`.`);
+    
+    await interaction.reply({
+      embeds: [embed],
+      flags: MessageFlags.Ephemeral
+    });
+  } catch (error) {
+    console.error('Error saving server color:', error);
+    await sendErrorEmbed(interaction, 'Error', 'Failed to save color.');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ACTION HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async function removeUserPersonality(interaction) {
   const userId = interaction.user.id;
-  if (state.userSettings[userId]) {
+  
+  if (state.userSettings[userId]?.customPersonality) {
     delete state.userSettings[userId].customPersonality;
+    await saveStateToFile();
+    await sendSuccessEmbed(interaction, 'Personality Reset', 'Your custom personality has been removed.');
+  } else {
+    await sendInfoEmbed(interaction, 'No Personality Set', 'You don\'t have a custom personality configured.');
   }
-  if (state.customInstructions && state.customInstructions[userId]) {
-    delete state.customInstructions[userId]; 
-  }
-  await saveStateToFile();
-
-  const embed = new EmbedBuilder()
-    .setColor(0x00FF00)
-    .setTitle('✅ Personality Removed')
-    .setDescription('Your custom personality has been removed!');
-  await interaction.reply({
-    embeds: [embed],
-    flags: MessageFlags.Ephemeral
-  });
 }
 
 async function removeServerPersonality(interaction) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-    return sendPermError(interaction);
-  }
-
+  if (!checkServerPermission(interaction)) return;
+  
   const guildId = interaction.guild.id;
-  if (state.serverSettings[guildId]) {
+  
+  if (state.serverSettings[guildId]?.customPersonality) {
     delete state.serverSettings[guildId].customPersonality;
+    await saveStateToFile();
+    await sendSuccessEmbed(interaction, 'Personality Reset', 'Server personality has been removed.');
+  } else {
+    await sendInfoEmbed(interaction, 'No Personality Set', 'No custom server personality is configured.');
   }
-  if (state.customInstructions && state.customInstructions[guildId]) {
-    delete state.customInstructions[guildId];
-  }
-  await saveStateToFile();
-
-  const embed = new EmbedBuilder()
-    .setColor(0x00FF00)
-    .setTitle('✅ Server Personality Removed')
-    .setDescription('Server custom personality has been removed!');
-  await interaction.reply({
-    embeds: [embed],
-    flags: MessageFlags.Ephemeral
-  });
 }
 
-async function showUserEmbedColorModal(interaction) {
+async function clearUserMemory(interaction) {
   const userId = interaction.user.id;
-  const userSettings = state.userSettings[userId] || {};
-  const existingColor = userSettings.embedColor || hexColour;
-
-  const input = new TextInputBuilder()
-    .setCustomId('color_input')
-    .setLabel('Enter Hex Color Code')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('#FF5733 or FF5733')
-    .setMinLength(6)
-    .setMaxLength(7);
-
-  if (existingColor) {
-    input.setValue(existingColor);
+  
+  try {
+    await chatHistoryLock.runExclusive(async () => {
+      if (state.chatHistories[userId]) {
+        delete state.chatHistories[userId];
+      }
+    });
+    await saveStateToFile();
+    await sendSuccessEmbed(
+      interaction,
+      'Memory Cleared',
+      'Your conversation history has been deleted successfully.'
+    );
+  } catch (error) {
+    console.error('Error clearing user memory:', error);
+    await sendErrorEmbed(interaction, 'Error', 'Failed to clear memory.');
   }
-
-  const modal = new ModalBuilder()
-    .setCustomId('user_embed_color_modal')
-    .setTitle('Embed Color Customization')
-    .addComponents(new ActionRowBuilder().addComponents(input));
-
-  await interaction.showModal(modal);
 }
 
-async function showServerEmbedColorModal(interaction) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-    return sendPermError(interaction);
-  }
-
+async function clearServerMemory(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
   const guildId = interaction.guild.id;
-  const serverSettings = state.serverSettings[guildId] || {};
-  const existingColor = serverSettings.embedColor || hexColour;
-
-  const input = new TextInputBuilder()
-    .setCustomId('color_input')
-    .setLabel('Enter Hex Color Code')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('#FF5733 or FF5733')
-    .setMinLength(6)
-    .setMaxLength(7);
-
-  if (existingColor) {
-    input.setValue(existingColor);
+  
+  try {
+    await chatHistoryLock.runExclusive(async () => {
+      if (state.chatHistories[guildId]) {
+        delete state.chatHistories[guildId];
+      }
+    });
+    await saveStateToFile();
+    await sendSuccessEmbed(
+      interaction,
+      'Server Memory Cleared',
+      'Server conversation history has been deleted successfully.'
+    );
+  } catch (error) {
+    console.error('Error clearing server memory:', error);
+    await sendErrorEmbed(interaction, 'Error', 'Failed to clear memory.');
   }
-
-  const modal = new ModalBuilder()
-    .setCustomId('server_embed_color_modal')
-    .setTitle('Server Embed Color')
-    .addComponents(new ActionRowBuilder().addComponents(input));
-
-  await interaction.showModal(modal);
 }
 
-async function handleChannelManageSelect(interaction) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-    return sendPermError(interaction);
+async function downloadUserConversation(interaction) {
+  const userId = interaction.user.id;
+  
+  try {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    
+    const history = await getHistory(userId);
+    
+    if (!history || history.length === 0) {
+      return sendInfoEmbed(interaction, 'No History', 'You don\'t have any conversation history yet.');
+    }
+
+    const conversationText = formatConversationHistory(history);
+    const filePath = path.join(TEMP_DIR, `user_conversation_${userId}_${Date.now()}.txt`);
+    await fs.writeFile(filePath, conversationText, 'utf8');
+
+    const attachment = new AttachmentBuilder(filePath, {
+      name: 'conversation_history.txt'
+    });
+
+    await interaction.editReply({
+      embeds: [createSuccessEmbed('Download Complete', 'Your conversation history has been exported.')],
+      files: [attachment]
+    });
+
+    await fs.unlink(filePath).catch(() => {});
+
+    // Upload to pastebin alternative
+    const { uploadText } = await import('./utils.js');
+    const url = await uploadText(conversationText);
+    
+    if (url) {
+      await interaction.followUp({
+        embeds: [createInfoEmbed('Online Backup', `View online: ${url}`)],
+        flags: MessageFlags.Ephemeral
+      });
+    }
+  } catch (error) {
+    console.error('Error downloading user conversation:', error);
+    await sendErrorEmbed(interaction, 'Error', 'Failed to download conversation history.');
   }
+}
 
+async function downloadServerConversation(interaction) {
+  if (!checkServerPermission(interaction)) return;
+  
   const guildId = interaction.guild.id;
-  const selectedChannelIds = interaction.values;
+  
+  try {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    
+    const history = await getHistory(guildId);
+    
+    if (!history || history.length === 0) {
+      return sendInfoEmbed(interaction, 'No History', 'This server doesn\'t have any conversation history yet.');
+    }
 
+    const conversationText = formatConversationHistory(history);
+    const filePath = path.join(TEMP_DIR, `server_conversation_${guildId}_${Date.now()}.txt`);
+    await fs.writeFile(filePath, conversationText, 'utf8');
+
+    const attachment = new AttachmentBuilder(filePath, {
+      name: 'server_conversation_history.txt'
+    });
+
+    await interaction.editReply({
+      embeds: [createSuccessEmbed('Download Complete', 'Server conversation history has been exported.')],
+      files: [attachment]
+    });
+
+    await fs.unlink(filePath).catch(() => {});
+
+    // Upload to pastebin alternative
+    const { uploadText } = await import('./utils.js');
+    const url = await uploadText(conversationText);
+    
+    if (url) {
+      await interaction.followUp({
+        embeds: [createInfoEmbed('Online Backup', `View online: ${url}`)],
+        flags: MessageFlags.Ephemeral
+      });
+    }
+  } catch (error) {
+    console.error('Error downloading server conversation:', error);
+    await sendErrorEmbed(interaction, 'Error', 'Failed to download conversation history.');
+  }
+}
+
+async function handleSetAllChannels(interaction, isUpdate = false) {
+  if (!checkServerPermission(interaction)) return;
+  
+  const guildId = interaction.guild.id;
+  
   if (!state.serverSettings[guildId]) {
     state.serverSettings[guildId] = {};
   }
-
-  state.serverSettings[guildId].allowedChannels = selectedChannelIds;
-  await saveStateToFile();
-
-  await showChannelManagementMenu(interaction, true);
-}
-
-async function handleSetAllChannels(interaction) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-    return sendPermError(interaction);
-  }
-
-  const guildId = interaction.guild.id;
-  if (!state.serverSettings[guildId]) {
-    state.serverSettings[guildId] = {};
-  }
-
   state.serverSettings[guildId].allowedChannels = [];
   await saveStateToFile();
-
-  await showChannelManagementMenu(interaction, true);
+  
+  await showChannelManagementMenu(interaction, isUpdate);
 }
 
 async function toggleContinuousReplyChannel(interaction) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-    return sendPermError(interaction);
-  }
-
+  if (!checkServerPermission(interaction)) return;
+  
   const channelId = interaction.channelId;
+  
   if (!state.continuousReplyChannels) {
     state.continuousReplyChannels = {};
   }
 
   if (state.continuousReplyChannels[channelId]) {
     delete state.continuousReplyChannels[channelId];
-    const embed = new EmbedBuilder()
-      .setColor(0xFFAA00)
-      .setTitle('📢 Continuous Reply Disabled')
-      .setDescription(`The bot will no longer reply to all messages in <#${channelId}>.`);
-    await interaction.reply({
-      embeds: [embed],
-      flags: MessageFlags.Ephemeral
-    });
+    await saveStateToFile();
+    await sendInfoEmbed(
+      interaction,
+      'Mode Disabled',
+      `Continuous reply disabled in <#${channelId}>.`
+    );
   } else {
     state.continuousReplyChannels[channelId] = true;
-    const embed = new EmbedBuilder()
-      .setColor(0x00FF00)
-      .setTitle('📢 Continuous Reply Enabled')
-      .setDescription(`The bot will now reply to all messages in <#${channelId}> without requiring mentions.`);
-    await interaction.reply({
-      embeds: [embed],
-      flags: MessageFlags.Ephemeral
-    });
+    await saveStateToFile();
+    await sendSuccessEmbed(
+      interaction,
+      'Mode Enabled',
+      `Continuous reply enabled in <#${channelId}>.`
+    );
   }
-
-  await saveStateToFile();
 }
 
 async function handleDeleteMessageInteraction(interaction, msgId) {
   const userId = interaction.user.id;
   const userChatHistory = state.chatHistories[userId];
   const channel = interaction.channel;
-  const message = channel ? (await channel.messages.fetch(msgId).catch(() => false)) : false;
-
-  if (userChatHistory) {
-    if (userChatHistory[msgId]) {
-      delete userChatHistory[msgId];
-      await deleteMsg();
-    } else {
-      try {
-        const replyingTo = message ? (message.reference ? (await message.channel.messages.fetch(message.reference.messageId)).author.id : 0) : 0;
-        if (userId === replyingTo) {
-          await deleteMsg();
-        } else {
-          const embed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setTitle('🚫 Not Authorized')
-            .setDescription('This button is not meant for you.');
-          return interaction.reply({
-            embeds: [embed],
-            flags: MessageFlags.Ephemeral
-          });
-        }
-      } catch (error) {
-        console.error('Error checking message ownership:', error);
-      }
-    }
+  
+  let message = null;
+  try {
+    message = await channel.messages.fetch(msgId).catch(() => null);
+  } catch (error) {
+    // Message not found
   }
 
-  async function deleteMsg() {
-    await interaction.message.delete()
-      .catch(err => console.error('Error deleting interaction message:', err));
-
-    if (channel && message) {
-      message.delete().catch(() => {});
+  if (userChatHistory?.[msgId]) {
+    delete userChatHistory[msgId];
+    await deleteMessages(interaction, message, channel);
+  } else if (message?.reference) {
+    try {
+      const replyingTo = await message.channel.messages.fetch(message.reference.messageId);
+      if (userId === replyingTo.author.id) {
+        await deleteMessages(interaction, message, channel);
+      } else {
+        return sendErrorEmbed(interaction, 'Unauthorized', 'You cannot delete this message.');
+      }
+    } catch (error) {
+      return sendErrorEmbed(interaction, 'Error', 'Failed to verify message ownership.');
     }
+  } else {
+    return sendErrorEmbed(interaction, 'Unauthorized', 'You cannot delete this message.');
+  }
+}
+
+async function deleteMessages(interaction, message, channel) {
+  try {
+    await interaction.message.delete().catch(() => {});
+    if (message) {
+      await message.delete().catch(() => {});
+    }
+  } catch (error) {
+    console.error('Error deleting messages:', error);
   }
 }
 
 async function downloadMessage(interaction) {
   const message = interaction.message;
   let textContent = message.content;
+  
   if (!textContent && message.embeds.length > 0) {
-    textContent = message.embeds[0].description;
+    textContent = message.embeds[0].description || message.embeds[0].title || '';
   }
 
-  if (!textContent) {
-    const embed = new EmbedBuilder()
-      .setColor(0xFF5555)
-      .setTitle('❌ Empty Message')
-      .setDescription('The message appears to be empty.');
-    await interaction.reply({
-      embeds: [embed],
-      flags: MessageFlags.Ephemeral
-    });
-    return;
+  if (!textContent || textContent.length === 0) {
+    return sendErrorEmbed(interaction, 'Empty Message', 'This message appears to be empty.');
   }
 
-  const filePath = path.join(TEMP_DIR, `message_content_${interaction.id}.txt`);
-  await fs.writeFile(filePath, textContent, 'utf8');
+  try {
+    const filePath = path.join(TEMP_DIR, `message_${interaction.id}.txt`);
+    await fs.writeFile(filePath, textContent, 'utf8');
 
-  const attachment = new AttachmentBuilder(filePath, {
-    name: 'message_content.txt'
-  });
-
-  const initialEmbed = new EmbedBuilder()
-    .setColor(0x00FF00)
-    .setTitle('💾 Message Saved')
-    .setDescription('The message content has been prepared for download.');
-
-  let response;
-  if (interaction.channel.type === ChannelType.DM) {
-    response = await interaction.reply({
-      embeds: [initialEmbed],
-      files: [attachment]
+    const attachment = new AttachmentBuilder(filePath, {
+      name: 'message_content.txt'
     });
-    response = await interaction.fetchReply();
-  } else {
-    try {
-      response = await interaction.user.send({
-        embeds: [initialEmbed],
+
+    const embed = createSuccessEmbed('Message Saved', 'The message content has been exported.');
+
+    if (interaction.channel.type === ChannelType.DM) {
+      await interaction.reply({
+        embeds: [embed],
         files: [attachment]
       });
-      const dmSentEmbed = new EmbedBuilder()
-        .setColor(0x00FF00)
-        .setTitle('✅ Sent to DMs')
-        .setDescription('The message content has been sent to your DMs!');
-      await interaction.reply({
-        embeds: [dmSentEmbed],
-        flags: MessageFlags.Ephemeral
-      });
-    } catch (error) {
-      console.error(`Failed to send DM: ${error}`);
-      const failDMEmbed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('❌ DM Failed')
-        .setDescription('Could not send to DMs. Here is the file:');
-      response = await interaction.reply({
-        embeds: [failDMEmbed],
-        files: [attachment],
-        flags: MessageFlags.Ephemeral
-      });
-      response = await interaction.fetchReply();
+    } else {
+      try {
+        await interaction.user.send({
+          embeds: [embed],
+          files: [attachment]
+        });
+        await interaction.reply({
+          embeds: [createSuccessEmbed('Sent to DMs', 'Message content sent to your DMs.')],
+          flags: MessageFlags.Ephemeral
+        });
+      } catch (error) {
+        await interaction.reply({
+          embeds: [embed],
+          files: [attachment],
+          flags: MessageFlags.Ephemeral
+        });
+      }
     }
+
+    await fs.unlink(filePath).catch(() => {});
+
+    // Upload to pastebin
+    const { uploadText } = await import('./utils.js');
+    const url = await uploadText(textContent);
+    
+    if (url) {
+      const urlEmbed = createInfoEmbed('Online Backup', `View online: ${url}`);
+      if (interaction.channel.type === ChannelType.DM) {
+        await interaction.followUp({ embeds: [urlEmbed] });
+      } else {
+        await interaction.user.send({ embeds: [urlEmbed] }).catch(() => {});
+      }
+    }
+  } catch (error) {
+    console.error('Error downloading message:', error);
+    await sendErrorEmbed(interaction, 'Error', 'Failed to download message.');
   }
+}
 
-  await fs.unlink(filePath).catch(() => {});
+// ═══════════════════════════════════════════════════════════════════════════════
+// UTILITY FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  const { uploadText } = await import('./utils.js');
-  const msgUrl = await uploadText(textContent);
-  const updatedEmbed = EmbedBuilder.from(response.embeds[0])
-    .setDescription(`The message content has been saved.\n${msgUrl}`);
+function getEmbedColor(userId, guildId) {
+  if (guildId && state.serverSettings[guildId]?.embedColor) {
+    return state.serverSettings[guildId].embedColor;
+  }
+  if (state.userSettings[userId]?.embedColor) {
+    return state.userSettings[userId].embedColor;
+  }
+  return COLORS.DEFAULT;
+}
 
-  if (interaction.channel.type === ChannelType.DM) {
-    await interaction.editReply({
-      embeds: [updatedEmbed]
-    });
+function checkServerPermission(interaction) {
+  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+    sendErrorEmbed(interaction, 'Permission Denied', 'You need "Manage Server" permission to access this.');
+    return false;
+  }
+  return true;
+}
+
+function createSuccessEmbed(title, description) {
+  return new EmbedBuilder()
+    .setColor(COLORS.SUCCESS)
+    .setTitle(`${SYMBOLS.SUCCESS} ${title}`)
+    .setDescription(description);
+}
+
+function createErrorEmbed(title, description) {
+  return new EmbedBuilder()
+    .setColor(COLORS.ERROR)
+    .setTitle(`${SYMBOLS.ERROR} ${title}`)
+    .setDescription(description);
+}
+
+function createInfoEmbed(title, description) {
+  return new EmbedBuilder()
+    .setColor(COLORS.INFO)
+    .setTitle(`${SYMBOLS.INFO} ${title}`)
+    .setDescription(description);
+}
+
+function createWarningEmbed(title, description) {
+  return new EmbedBuilder()
+    .setColor(COLORS.WARNING)
+    .setTitle(`${SYMBOLS.WARNING} ${title}`)
+    .setDescription(description);
+}
+
+async function sendSuccessEmbed(interaction, title, description) {
+  const embed = createSuccessEmbed(title, description);
+  if (interaction.deferred) {
+    await interaction.editReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   } else {
-    await response.edit({
-      embeds: [updatedEmbed]
-    });
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 }
 
-function sendPermError(interaction) {
-  const embed = new EmbedBuilder()
-    .setColor(0xFF0000)
-    .setTitle('🚫 Permission Denied')
-    .setDescription('You need "Manage Server" permission to access server settings.');
-  return interaction.reply({
-    embeds: [embed],
-    flags: MessageFlags.Ephemeral
-  });
+async function sendErrorEmbed(interaction, title, description) {
+  const embed = createErrorEmbed(title, description);
+  if (interaction.deferred) {
+    await interaction.editReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  } else {
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
 }
+
+async function sendInfoEmbed(interaction, title, description) {
+  const embed = createInfoEmbed(title, description);
+  if (interaction.deferred) {
+    await interaction.editReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  } else {
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+}
+
+function formatConversationHistory(history) {
+  let formatted = 'CONVERSATION HISTORY\n';
+  formatted += '='.repeat(60) + '\n\n';
+  
+  for (const entry of history) {
+    formatted += `[${entry.role.toUpperCase()}]\n`;
+    formatted += `${entry.content}\n\n`;
+    formatted += '-'.repeat(60) + '\n\n';
+  }
+  
+  return formatted;
+}
+
+function scheduleMessageDeletion(interaction) {
+  setTimeout(async () => {
+    try {
+      const reply = await interaction.fetchReply().catch(() => null);
+      if (reply) {
+        await interaction.deleteReply().catch(() => {});
+      }
+    } catch (error) {
+      // Ignore deletion errors
+    }
+  }, SETTINGS_TIMEOUT);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXPORTS
+// ═══════════════════════════════════════════════════════════════════════════════
 
 export { showMainSettings };
