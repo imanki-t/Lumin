@@ -1571,19 +1571,11 @@ export function initializeBlacklistForGuild(guildId) {
       state.blacklistedUsers[guildId] = [];
     }
     
-    if (!state.serverSettings[guildId]) {
-      state.serverSettings[guildId] = {
-        selectedModel: 'gemini-2.5-flash',
-        responseFormat: 'Normal',
-        showActionButtons: false,
-        continuousReply: false,
-        customPersonality: null,
-        embedColor: BOT_CONFIG.HEX_COLOUR,
-        overrideUserSettings: true,
-        serverChatHistory: false,
-        allowedChannels: []
-      };
+        if (!state.serverSettings[guildId]) {
+      // ✅ Use the spread operator to copy the constant so updates to defaults apply here too
+      state.serverSettings[guildId] = { ...DEFAULT_SERVER_SETTINGS };
     } else {
+          
       // Ensure all required fields exist
       if (!state.serverSettings[guildId].allowedChannels) {
         state.serverSettings[guildId].allowedChannels = [];
