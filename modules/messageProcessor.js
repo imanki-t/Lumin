@@ -1232,7 +1232,6 @@ async function handleModelResponse(
   const userId = originalMessage.author.id;
   const guildId = originalMessage.guild?.id;
   const responseFormat = effectiveSettings.responseFormat || BOT_CONFIG.DEFAULT_RESPONSE_FORMAT;
-  const responseFormat = effectiveSettings.responseFormat || BOT_CONFIG.DEFAULT_RESPONSE_FORMAT;
   const showActionButtons = effectiveSettings.showActionButtons ?? BOT_CONFIG.DEFAULT_SHOW_ACTION_BUTTONS;
   const maxCharacterLimit = responseFormat === 'Embedded' ? CHARACTER_LIMITS.EMBEDDED : CHARACTER_LIMITS.NORMAL;
 
