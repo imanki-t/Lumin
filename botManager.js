@@ -1827,20 +1827,14 @@ function scheduleDailyReset() {
  */
 async function migrateAllServerSettings() {
   try {
-    console.log('🔄 Starting server settings migration...');
-    
     const allServers = await db.getAllServerSettings();
     const serverIds = Object.keys(allServers);
     
-    if (serverIds.length === 0) {
-      console.log('✅ No servers to migrate');
-      return { migrated: 0, failed: 0 };
-    }
+    if (serverIds.length === 0) return { migrated: 0, failed: 0 };
     
     let migrated = 0;
     let failed = 0;
     
-    // Process in batches
     for (let i = 0; i < serverIds.length; i += MIGRATION_CONFIG.BATCH_SIZE) {
       const batch = serverIds.slice(i, i + MIGRATION_CONFIG.BATCH_SIZE);
       
@@ -1848,59 +1842,41 @@ async function migrateAllServerSettings() {
         batch.map(async (guildId) => {
           try {
             const currentSettings = allServers[guildId];
-            
-            // Merge with defaults, preserving existing values
             const updatedSettings = {
               ...DEFAULT_SERVER_SETTINGS,
-              ...currentSettings
+              ...currentSettings,
+              selectedModel: DEFAULT_SERVER_SETTINGS.selectedModel
             };
             
             await db.saveServerSettings(guildId, updatedSettings);
             state.serverSettings[guildId] = updatedSettings;
             migrated++;
           } catch (error) {
-            console.error(`❌ Failed to migrate server ${guildId}:`, error.message);
             failed++;
           }
         })
       );
       
-      // Delay between batches to avoid overloading database
       if (i + MIGRATION_CONFIG.BATCH_SIZE < serverIds.length) {
         await new Promise(resolve => setTimeout(resolve, MIGRATION_CONFIG.BATCH_DELAY_MS));
       }
     }
-    
-    console.log(`✅ Server migration complete: ${migrated} migrated, ${failed} failed`);
     return { migrated, failed };
-    
   } catch (error) {
-    console.error('❌ Server migration error:', error);
     throw error;
   }
 }
 
-/**
- * Migrate all user settings to latest defaults
- * Runs in parallel batches for performance
- * @returns {Promise<{migrated: number, failed: number}>}
- */
 async function migrateAllUserSettings() {
   try {
-    console.log('🔄 Starting user settings migration...');
-    
     const allUsers = await db.getAllUserSettings();
     const userIds = Object.keys(allUsers);
     
-    if (userIds.length === 0) {
-      console.log('✅ No users to migrate');
-      return { migrated: 0, failed: 0 };
-    }
+    if (userIds.length === 0) return { migrated: 0, failed: 0 };
     
     let migrated = 0;
     let failed = 0;
     
-    // Process in batches
     for (let i = 0; i < userIds.length; i += MIGRATION_CONFIG.BATCH_SIZE) {
       const batch = userIds.slice(i, i + MIGRATION_CONFIG.BATCH_SIZE);
       
@@ -1908,37 +1884,31 @@ async function migrateAllUserSettings() {
         batch.map(async (userId) => {
           try {
             const currentSettings = allUsers[userId];
-            
-            // Merge with defaults, preserving existing values
             const updatedSettings = {
               ...DEFAULT_USER_SETTINGS,
-              ...currentSettings
+              ...currentSettings,
+              selectedModel: DEFAULT_USER_SETTINGS.selectedModel
             };
             
             await db.saveUserSettings(userId, updatedSettings);
             state.userSettings[userId] = updatedSettings;
             migrated++;
           } catch (error) {
-            console.error(`❌ Failed to migrate user ${userId}:`, error.message);
             failed++;
           }
         })
       );
       
-      // Delay between batches to avoid overloading database
       if (i + MIGRATION_CONFIG.BATCH_SIZE < userIds.length) {
         await new Promise(resolve => setTimeout(resolve, MIGRATION_CONFIG.BATCH_DELAY_MS));
       }
     }
-    
-    console.log(`✅ User migration complete: ${migrated} migrated, ${failed} failed`);
     return { migrated, failed };
-    
   } catch (error) {
-    console.error('❌ User migration error:', error);
     throw error;
   }
 }
+
 
 /**
  * Run all migrations if enabled
