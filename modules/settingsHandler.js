@@ -85,8 +85,8 @@ export async function handleButtonInteraction(interaction) {
   }
 
   if (interaction.customId.startsWith('delete_message-')) {
-    const msgId = interaction.customId.replace('delete_message-', '');
-    await handleDeleteMessageInteraction(interaction, msgId);
+  const customIdData = interaction.customId.replace('delete_message-', '');
+  await handleDeleteMessageInteraction(interaction, customIdData);
   }
 }
 
@@ -1773,24 +1773,29 @@ async function toggleContinuousReplyChannel(interaction) {
   await saveStateToFile();
 }
 
-async function handleDeleteMessageInteraction(interaction, msgId) {
-  const clickerId = interaction.user.id;
+async function handleDeleteMessageInteraction(interaction, customIdData) {
+  // Parse the custom ID: delete_message-{msgId}-{userId}
+  // customIdData will be: "{msgId}-{userId}"
+  const lastDashIndex = customIdData.lastIndexOf('-');
   
-  // 1. Check if it was a Slash Command
-  let originalAuthorId = interaction.message.interaction?.user.id;
-
-  // 2. Fallback: If it was a regular message (like "hi"), check the message it's replying to
-  if (!originalAuthorId && interaction.message.reference) {
-    try {
-      const referencedMsg = await interaction.channel.messages.fetch(interaction.message.reference.messageId);
-      originalAuthorId = referencedMsg.author.id;
-    } catch (e) {
-      console.error("Could not fetch referenced message:", e);
-    }
+  if (lastDashIndex === -1) {
+    // Fallback for old format without userId
+    const embed = new EmbedBuilder()
+      .setColor(0xFF0000)
+      .setTitle('🚫 Authorization Error')
+      .setDescription('Unable to verify authorization for this message.');
+      
+    return interaction.reply({
+      embeds: [embed],
+      flags: MessageFlags.Ephemeral
+    });
   }
+  
+  const userId = customIdData.substring(lastDashIndex + 1);
+  const clickerId = interaction.user.id;
 
-  // 3. Final verification
-  if (originalAuthorId && clickerId === originalAuthorId) {
+  // Verify authorization
+  if (clickerId === userId) {
     await interaction.message.delete().catch(() => {});
   } else {
     const embed = new EmbedBuilder()
