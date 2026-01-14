@@ -1800,7 +1800,6 @@ async function handleDeleteMessageInteraction(interaction, msgId) {
       message.delete().catch(() => {});
     }
   }
-}
 
 async function downloadMessage(interaction) {
   const message = interaction.message;
