@@ -1775,15 +1775,28 @@ async function toggleContinuousReplyChannel(interaction) {
 
 async function handleDeleteMessageInteraction(interaction, msgId) {
   const clickerId = interaction.user.id;
-  const originalAuthorId = interaction.message.interaction?.user.id;
+  
+  // 1. Check if it was a Slash Command
+  let originalAuthorId = interaction.message.interaction?.user.id;
 
+  // 2. Fallback: If it was a regular message (like "hi"), check the message it's replying to
+  if (!originalAuthorId && interaction.message.reference) {
+    try {
+      const referencedMsg = await interaction.channel.messages.fetch(interaction.message.reference.messageId);
+      originalAuthorId = referencedMsg.author.id;
+    } catch (e) {
+      console.error("Could not fetch referenced message:", e);
+    }
+  }
+
+  // 3. Final verification
   if (originalAuthorId && clickerId === originalAuthorId) {
     await interaction.message.delete().catch(() => {});
   } else {
     const embed = new EmbedBuilder()
       .setColor(0xFF0000)
       .setTitle('🚫 Not Authorized')
-      .setDescription('Only the user who ran this command can delete it.');
+      .setDescription('Only the user who triggered this response can delete it.');
       
     return interaction.reply({
       embeds: [embed],
