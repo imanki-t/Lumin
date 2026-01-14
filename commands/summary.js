@@ -27,7 +27,9 @@ import fs from 'fs/promises';
 // ============================================================================
 
 /** Model optimized for summarization tasks */
-const SUMMARY_MODEL = 'gemini-2.5-flash';
+const SUMMARY_MODEL = DEFAULT_MODEL;
+
+
 
 /** Maximum retry attempts for API calls */
 const MAX_RETRY_ATTEMPTS = 3;
