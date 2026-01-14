@@ -48,6 +48,10 @@ export async function handleTimezoneCommand(interaction) {
 
 // Handler for the "Set Custom Timezone" button (triggered from the embed above or settings)
 export async function handleTimezoneCustomButton(interaction) {
+  const userId = interaction.user.id;
+  // Retrieve the existing timezone from state
+  const currentTz = state.userTimezones?.[userId] || '';
+
   const modal = new ModalBuilder()
     .setCustomId('timezone_modal')
     .setTitle('Set Timezone');
@@ -59,11 +63,17 @@ export async function handleTimezoneCustomButton(interaction) {
     .setStyle(TextInputStyle.Short)
     .setRequired(true);
 
+  // Set the old value if it exists so the user can see/edit it
+  if (currentTz) {
+    input.setValue(currentTz);
+  }
+
   const row = new ActionRowBuilder().addComponents(input);
   modal.addComponents(row);
 
   await interaction.showModal(modal);
 }
+
 
 // Handler for the Modal Submission
 export async function handleTimezoneCustomModal(interaction) {
