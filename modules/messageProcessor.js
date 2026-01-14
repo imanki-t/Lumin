@@ -5,7 +5,7 @@ import axios from 'axios';
 import { getTextExtractor } from 'office-text-extractor';
 import ffmpeg from 'fluent-ffmpeg';
 import { delay } from '../tools/others.js';
-import { genAI, state, chatHistoryLock, updateChatHistory, saveStateToFile, TEMP_DIR, client, switchToNextKey } from '../botManager.js';
+import { genAI, state, chatHistoryLock, updateChatHistory, saveStateToFile, TEMP_DIR, client, switchToNextKey, BOT_CONFIG } from '../botManager.js';
 import { memorySystem } from '../memorySystem.js';
 import config from '../config.js';
 import * as db from '../database.js';
@@ -1231,10 +1231,9 @@ async function handleModelResponse(
 ) {
   const userId = originalMessage.author.id;
   const guildId = originalMessage.guild?.id;
-  const responseFormat = effectiveSettings.responseFormat || 'Normal';
-  const showActionButtons = effectiveSettings.showActionButtons === true;
-  const continuousReply = effectiveSettings.continuousReply ?? true;
-
+  const responseFormat = effectiveSettings.responseFormat || BOT_CONFIG.DEFAULT_RESPONSE_FORMAT;
+  const responseFormat = effectiveSettings.responseFormat || BOT_CONFIG.DEFAULT_RESPONSE_FORMAT;
+  const showActionButtons = effectiveSettings.showActionButtons ?? BOT_CONFIG.DEFAULT_SHOW_ACTION_BUTTONS;
   const maxCharacterLimit = responseFormat === 'Embedded' ? CHARACTER_LIMITS.EMBEDDED : CHARACTER_LIMITS.NORMAL;
 
   let currentModelIndex = MODEL_FALLBACK_CHAIN.indexOf(modelName);
