@@ -30,6 +30,7 @@ import path from 'path';
 import express from 'express';
 
 import config from './config.js';
+// Update import from botManager.js
 import { 
   client, 
   token, 
@@ -38,8 +39,10 @@ import {
   state, 
   TEMP_DIR, 
   initializeBlacklistForGuild,
-  BOT_CONFIG
+  BOT_CONFIG,
+  DEFAULT_USER_SETTINGS // Add this
 } from './botManager.js';
+
 import { processUserQueue } from './modules/messageProcessor.js';
 import { 
   handleButtonInteraction, 
@@ -351,7 +354,7 @@ client.on('messageCreate', async (message) => {
     const userSettings = state.userSettings[userId] || {};
     const serverSettings = guildId ? (state.serverSettings[guildId] || {}) : {};
     const effectiveSettings = serverSettings.overrideUserSettings ? serverSettings : userSettings;
-    const continuousReply = effectiveSettings.continuousReply ?? true;
+    const continuousReply = effectiveSettings.continuousReply ?? DEFAULT_USER_SETTINGS.continuousReply;
     const channelContinuousReply = state.continuousReplyChannels?.[channelId] || false;
 
     const shouldRespond = (
