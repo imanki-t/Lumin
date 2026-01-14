@@ -334,7 +334,7 @@ async function summarizeYouTubeVideo(interaction, videoUrl) {
       .setTitle('📺 YouTube Video Summary')
       .setURL(videoUrl)
       .setDescription(summaryText.slice(0, 4000))
-      .setFooter({ text: 'Summarized by Lumin • Gemini AI' })
+      .setFooter({ text: 'Summarized by Lumin' })
       .setTimestamp();
 
     incrementSummaryUsage(interaction.user.id);
@@ -495,7 +495,7 @@ async function summarizeDiscordConversation(interaction, messageLink, count) {
         { name: '📍 Location', value: `#${result.channelName} (${result.guildName})`, inline: true },
         { name: '💬 Messages', value: result.messageCount.toString(), inline: true }
       )
-      .setFooter({ text: 'Summarized by Lumin • Gemini AI' })
+      .setFooter({ text: 'Summarized by Lumin' })
       .setTimestamp();
 
     incrementSummaryUsage(interaction.user.id);
@@ -578,7 +578,7 @@ async function summarizeWebsite(interaction, websiteUrl) {
       .setTitle('🌐 Website Summary')
       .setURL(websiteUrl)
       .setDescription(summaryText.slice(0, 4000))
-      .setFooter({ text: 'Summarized by Lumin • Gemini AI' })
+      .setFooter({ text: 'Summarized by Lumin' })
       .setTimestamp();
 
     // Add URL context status if available
