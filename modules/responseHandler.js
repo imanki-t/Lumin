@@ -2,8 +2,7 @@ import { EmbedBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ActionRowB
 import path from 'path';
 import fs from 'fs/promises';
 import axios from 'axios';
-import { TEMP_DIR, client, BOT_CONFIG } from '../botManager.js';
-import config from '../config.js';
+import { TEMP_DIR, client, BOT_CONFIG, DEFAULT_USER_SETTINGS } from '../botManager.js';
 const DEFAULT_EMBED_COLOR = BOT_CONFIG.HEX_COLOUR;
 
 const EMBED_LIMITS = {
@@ -172,7 +171,7 @@ export function updateEmbed(botMessage, finalResponse, message, groundingMetadat
   try {
     const isGuild = message.guild !== null;
     const embedColor = effectiveSettings.embedColor || DEFAULT_EMBED_COLOR;
-    const continuousReply = effectiveSettings.continuousReply || false;
+    const continuousReply = effectiveSettings.continuousReply ?? DEFAULT_USER_SETTINGS.continuousReply;
 
     const embed = createBaseEmbed(embedColor, finalResponse);
 
