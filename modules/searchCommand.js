@@ -1,7 +1,7 @@
 import { EmbedBuilder, MessageFlags, ButtonBuilder, ButtonStyle, ActionRowBuilder, AttachmentBuilder } from 'discord.js';
 import path from 'path';
 import fs from 'fs/promises';
-import { genAI, state, TEMP_DIR, BOT_CONFIG } from '../botManager.js';
+import { genAI, state, TEMP_DIR, BOT_CONFIG, DEFAULT_USER_SETTINGS } from '../botManager.js';
 import config from '../config.js';
 import { MODELS, safetySettings, getGenerationConfig, RATE_LIMIT_ERRORS, DEFAULT_MODEL } from './config.js';
 import { initializeBlacklistForGuild } from './utils.js';
@@ -543,7 +543,7 @@ export async function executeSearchInteraction(interaction) {
     const userSettings = state.userSettings[userId] || {};
     const serverSettings = guildId ? (state.serverSettings[guildId] || {}) : {};
     const effectiveSettings = serverSettings.overrideUserSettings ? serverSettings : userSettings;
-
+    const showActionButtons = effectiveSettings.showActionButtons ?? DEFAULT_USER_SETTINGS.showActionButtons;
     const selectedModel = effectiveSettings.selectedModel || DEFAULT_MODEL;
     const modelName = MODELS[selectedModel];
     const responseFormat = effectiveSettings.responseFormat || BOT_CONFIG.DEFAULT_RESPONSE_FORMAT;
@@ -579,7 +579,7 @@ export async function executeSearchInteraction(interaction) {
       result.urlContextMetadata,
       responseFormat,
       embedColor,
-      effectiveSettings.showActionButtons
+      showActionButtons
     );
 
   } catch (error) {
