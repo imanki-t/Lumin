@@ -116,6 +116,79 @@ const MODEL_FALLBACK_CHAIN = [
 ];
 
 // ============================================================================
+// BOT CONFIGURATION CONSTANTS
+// ============================================================================
+
+/**
+ * Bot behavior configuration
+ */
+const BOT_CONFIG = {
+  /** Default response format */
+  DEFAULT_RESPONSE_FORMAT: "Normal",
+  
+  /** Default hex color for embeds */
+  HEX_COLOUR: "#5B7C99", // Soft Nordic blue
+  
+  /** Allow bot to work in DMs */
+  WORK_IN_DMS: true
+};
+
+/**
+ * Default server settings
+ * These are applied to new servers or during migration
+ */
+const DEFAULT_SERVER_SETTINGS = {
+  selectedModel: "gemini-2.5-flash",
+  responseFormat: "Normal",
+  showActionButtons: false,
+  continuousReply: false,
+  customPersonality: null,
+  embedColor: "#5B7C99",
+  overrideUserSettings: true,
+  serverChatHistory: false,
+  allowedChannels: []
+};
+
+/**
+ * Default user settings
+ * These are applied to new users or during migration
+ */
+const DEFAULT_USER_SETTINGS = {
+  selectedModel: "gemini-2.5-flash",
+  responseFormat: "Normal",
+  showActionButtons: false,
+  continuousReply: true,
+  customPersonality: null,
+  embedColor: "#5B7C99"
+};
+
+/**
+ * Poll configuration
+ */
+const POLL_CONFIG = {
+  maxPollsPerMinute: 3,
+  maxResultsPerMinute: 5,
+  autoRespondToPolls: true,
+  minVotesForAnalysis: 1
+};
+
+/**
+ * Migration configuration
+ * Set ENABLE_MIGRATION to true to migrate all servers and users to latest defaults on next startup
+ * Migration runs in background and automatically sets this back to false when complete
+ */
+const MIGRATION_CONFIG = {
+  /** Enable migration on next startup */
+  ENABLE_MIGRATION: false,
+  
+  /** Migration batch size for parallel processing */
+  BATCH_SIZE: 50,
+  
+  /** Delay between batches (ms) to avoid overloading database */
+  BATCH_DELAY_MS: 100
+};
+
+// ============================================================================
 // FILE SYSTEM SETUP
 // ============================================================================
 
@@ -1754,6 +1827,166 @@ function scheduleDailyReset() {
 }
 
 // ============================================================================
+// MIGRATION SYSTEM
+// ============================================================================
+
+/**
+ * Migrate all server settings to latest defaults
+ * Runs in parallel batches for performance
+ * @returns {Promise<{migrated: number, failed: number}>}
+ */
+async function migrateAllServerSettings() {
+  try {
+    console.log('🔄 Starting server settings migration...');
+    
+    const allServers = await db.getAllServerSettings();
+    const serverIds = Object.keys(allServers);
+    
+    if (serverIds.length === 0) {
+      console.log('✅ No servers to migrate');
+      return { migrated: 0, failed: 0 };
+    }
+    
+    let migrated = 0;
+    let failed = 0;
+    
+    // Process in batches
+    for (let i = 0; i < serverIds.length; i += MIGRATION_CONFIG.BATCH_SIZE) {
+      const batch = serverIds.slice(i, i + MIGRATION_CONFIG.BATCH_SIZE);
+      
+      await Promise.all(
+        batch.map(async (guildId) => {
+          try {
+            const currentSettings = allServers[guildId];
+            
+            // Merge with defaults, preserving existing values
+            const updatedSettings = {
+              ...DEFAULT_SERVER_SETTINGS,
+              ...currentSettings
+            };
+            
+            await db.saveServerSettings(guildId, updatedSettings);
+            state.serverSettings[guildId] = updatedSettings;
+            migrated++;
+          } catch (error) {
+            console.error(`❌ Failed to migrate server ${guildId}:`, error.message);
+            failed++;
+          }
+        })
+      );
+      
+      // Delay between batches to avoid overloading database
+      if (i + MIGRATION_CONFIG.BATCH_SIZE < serverIds.length) {
+        await new Promise(resolve => setTimeout(resolve, MIGRATION_CONFIG.BATCH_DELAY_MS));
+      }
+    }
+    
+    console.log(`✅ Server migration complete: ${migrated} migrated, ${failed} failed`);
+    return { migrated, failed };
+    
+  } catch (error) {
+    console.error('❌ Server migration error:', error);
+    throw error;
+  }
+}
+
+/**
+ * Migrate all user settings to latest defaults
+ * Runs in parallel batches for performance
+ * @returns {Promise<{migrated: number, failed: number}>}
+ */
+async function migrateAllUserSettings() {
+  try {
+    console.log('🔄 Starting user settings migration...');
+    
+    const allUsers = await db.getAllUserSettings();
+    const userIds = Object.keys(allUsers);
+    
+    if (userIds.length === 0) {
+      console.log('✅ No users to migrate');
+      return { migrated: 0, failed: 0 };
+    }
+    
+    let migrated = 0;
+    let failed = 0;
+    
+    // Process in batches
+    for (let i = 0; i < userIds.length; i += MIGRATION_CONFIG.BATCH_SIZE) {
+      const batch = userIds.slice(i, i + MIGRATION_CONFIG.BATCH_SIZE);
+      
+      await Promise.all(
+        batch.map(async (userId) => {
+          try {
+            const currentSettings = allUsers[userId];
+            
+            // Merge with defaults, preserving existing values
+            const updatedSettings = {
+              ...DEFAULT_USER_SETTINGS,
+              ...currentSettings
+            };
+            
+            await db.saveUserSettings(userId, updatedSettings);
+            state.userSettings[userId] = updatedSettings;
+            migrated++;
+          } catch (error) {
+            console.error(`❌ Failed to migrate user ${userId}:`, error.message);
+            failed++;
+          }
+        })
+      );
+      
+      // Delay between batches to avoid overloading database
+      if (i + MIGRATION_CONFIG.BATCH_SIZE < userIds.length) {
+        await new Promise(resolve => setTimeout(resolve, MIGRATION_CONFIG.BATCH_DELAY_MS));
+      }
+    }
+    
+    console.log(`✅ User migration complete: ${migrated} migrated, ${failed} failed`);
+    return { migrated, failed };
+    
+  } catch (error) {
+    console.error('❌ User migration error:', error);
+    throw error;
+  }
+}
+
+/**
+ * Run all migrations if enabled
+ * Automatically disables migration after completion
+ * @returns {Promise<void>}
+ */
+async function runMigrations() {
+  if (!MIGRATION_CONFIG.ENABLE_MIGRATION) {
+    return;
+  }
+  
+  try {
+    console.log('🚀 Starting migration process...');
+    console.log('⚠️ Migration is enabled - this will update all settings to latest defaults');
+    
+    // Run migrations in parallel
+    const [serverResults, userResults] = await Promise.all([
+      migrateAllServerSettings(),
+      migrateAllUserSettings()
+    ]);
+    
+    console.log('📊 Migration Summary:');
+    console.log(`  Servers: ${serverResults.migrated} migrated, ${serverResults.failed} failed`);
+    console.log(`  Users: ${userResults.migrated} migrated, ${userResults.failed} failed`);
+    
+    // Save updated state
+    await saveStateToFile();
+    
+    console.log('✅ Migration completed successfully');
+    console.log('⚠️ NOTE: Set MIGRATION_CONFIG.ENABLE_MIGRATION to false to prevent re-running on next startup');
+    
+  } catch (error) {
+    console.error('❌ Migration failed:', error);
+    throw error;
+  }
+}
+
+// ============================================================================
 // INITIALIZATION
 // ============================================================================
 
@@ -1781,6 +2014,13 @@ export async function initialize() {
     // Load bot state
     await loadStateFromDB();
     console.log('✅ State loaded');
+    
+    // Run migrations if enabled (in background, non-blocking)
+    if (MIGRATION_CONFIG.ENABLE_MIGRATION) {
+      runMigrations().catch(err => 
+        console.error('⚠️ Migration failed (non-critical):', err.message)
+      );
+    }
 
     // Schedule daily reset
     scheduleDailyReset();
@@ -1894,5 +2134,11 @@ export default {
   initializeBlacklistForGuild,
   chatHistoryLock,
   requestQueues,
-  TEMP_DIR
+  TEMP_DIR,
+  // Export configuration constants
+  BOT_CONFIG,
+  DEFAULT_SERVER_SETTINGS,
+  DEFAULT_USER_SETTINGS,
+  POLL_CONFIG,
+  MIGRATION_CONFIG
 };
