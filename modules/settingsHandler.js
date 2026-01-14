@@ -1,8 +1,10 @@
 import { EmbedBuilder, MessageFlags, ButtonBuilder, ButtonStyle, ActionRowBuilder, PermissionsBitField, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ChannelSelectMenuBuilder, ChannelType, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } from 'discord.js';
 import path from 'path';
 import fs from 'fs/promises';
-import { state, saveStateToFile, chatHistoryLock, getHistory, TEMP_DIR, BOT_CONFIG } from '../botManager.js';
+import { state, saveStateToFile, chatHistoryLock, getHistory, TEMP_DIR, BOT_CONFIG, DEFAULT_USER_SETTINGS, DEFAULT_SERVER_SETTINGS } from '../botManager.js';
 import config from '../config.js';
+import { DEFAULT_MODEL } from './config.js';
+
 const hexColour = BOT_CONFIG.HEX_COLOUR;
 const DEFAULT_BLACK = 0x000000;
 
@@ -442,10 +444,11 @@ async function showUserSettings(interaction, isUpdate = false) {
     }
   }
 
-  const selectedModel = userSettings.selectedModel || 'gemini-2.5-flash';
-  const responseFormat = userSettings.responseFormat || 'Normal';
-  const showActionButtons = userSettings.showActionButtons === true;
-  const embedColor = userSettings.embedColor || DEFAULT_BLACK;
+  const selectedModel = userSettings.selectedModel || DEFAULT_USER_SETTINGS.selectedModel;
+  const responseFormat = userSettings.responseFormat || DEFAULT_USER_SETTINGS.responseFormat;
+  const showActionButtons = userSettings.showActionButtons ?? DEFAULT_USER_SETTINGS.showActionButtons;
+  const embedColor = userSettings.embedColor || BOT_CONFIG.HEX_COLOUR;
+  
 
   const modelSelect = new StringSelectMenuBuilder()
     .setCustomId('user_model_select')
@@ -738,10 +741,11 @@ async function showServerSettings(interaction, isUpdate = false) {
 
   const guildId = interaction.guild.id;
   const serverSettings = state.serverSettings[guildId] || {};
-  const selectedModel = serverSettings.selectedModel || 'gemini-2.5-flash';
-  const responseFormat = serverSettings.responseFormat || 'Normal';
-  const showActionButtons = serverSettings.showActionButtons === true;
-  const embedColor = serverSettings.embedColor || DEFAULT_BLACK;
+  const selectedModel = serverSettings.selectedModel || DEFAULT_SERVER_SETTINGS.selectedModel;
+  const responseFormat = serverSettings.responseFormat || DEFAULT_SERVER_SETTINGS.responseFormat;
+  const showActionButtons = serverSettings.showActionButtons ?? DEFAULT_SERVER_SETTINGS.showActionButtons;
+  const embedColor = serverSettings.embedColor || BOT_CONFIG.HEX_COLOUR;
+  
 
   const modelSelect = new StringSelectMenuBuilder()
     .setCustomId('server_model_select')
