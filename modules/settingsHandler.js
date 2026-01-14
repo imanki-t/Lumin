@@ -340,7 +340,8 @@ async function showMainSettings(interaction, isUpdate = false) {
     const hasManageServer = guildId ? interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild) : false;
 
     // Get embed color from user or server settings, default to black
-    let embedColor = DEFAULT_BLACK;
+    const defaultColor = parseInt(BOT_CONFIG.HEX_COLOUR.replace('#', ''), 16);
+    let embedColor = defaultColor;
     if (guildId && state.serverSettings[guildId]?.embedColor) {
       embedColor = state.serverSettings[guildId].embedColor;
     } else if (state.userSettings[userId]?.embedColor) {
