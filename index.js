@@ -37,7 +37,8 @@ import {
   saveStateToFile, 
   state, 
   TEMP_DIR, 
-  initializeBlacklistForGuild 
+  initializeBlacklistForGuild,
+  BOT_CONFIG
 } from './botManager.js';
 import { processUserQueue } from './modules/messageProcessor.js';
 import { 
@@ -354,7 +355,7 @@ client.on('messageCreate', async (message) => {
     const channelContinuousReply = state.continuousReplyChannels?.[channelId] || false;
 
     const shouldRespond = (
-      (isDM && config.workInDMs && (continuousReply || message.mentions.users.has(client.user.id))) ||
+      (isDM && BOT_CONFIG.WORK_IN_DMS && (continuousReply || message.mentions.users.has(client.user.id))) ||
       (guildId && message.mentions.users.has(client.user.id)) ||
       (guildId && !message.mentions.users.has(client.user.id) && (channelContinuousReply || continuousReply)) ||
       state.alwaysRespondChannels[channelId] ||
