@@ -3,9 +3,11 @@ import { state, saveStateToFile, genAI } from '../botManager.js';
 import { memorySystem } from '../memorySystem.js';
 import * as db from '../database.js';
 import { getUserTime } from './timezone.js';
+import { MODELS, DEFAULT_MODEL } from '../modules/config.js';
 
-const BIRTHDAY_MODEL = 'gemini-2.5-flash-lite';
-const FALLBACK_MODEL = 'gemini-2.5-flash';
+const BIRTHDAY_MODEL = MODELS['gemini-2.5-flash-lite'];
+const FALLBACK_MODEL = DEFAULT_MODEL;
+
 const MAX_BIRTHDAYS_PER_USER = 5;
 const BIRTHDAY_WISH_DELAY_MS = 2000; // 2-second delay between wishes
 
