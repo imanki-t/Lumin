@@ -1,7 +1,18 @@
 import { HarmBlockThreshold, HarmCategory } from '@google/genai';
 
+// ============================================================================
+// MODEL CONFIGURATION
+// ============================================================================
+
+/**
+ * Default model to use when no preference is set
+ */
 export const DEFAULT_MODEL = 'gemini-2.5-flash';
 
+/**
+ * Available models mapping
+ * Maps user-friendly names to actual API model identifiers
+ */
 export const MODELS = {
   'gemini-3-flash': 'gemini-3-flash-preview',
   'gemini-2.5-flash': 'gemini-2.5-flash',
@@ -10,17 +21,27 @@ export const MODELS = {
   'gemini-2.0-flash-lite': 'gemini-2.0-flash-lite'
 };
 
+/**
+ * Gemini 3 model identifiers
+ */
 export const GEMINI_3_MODELS = [
   'gemini-3-flash-preview',
   'gemini-3-pro-preview'
 ];
 
+/**
+ * Model fallback chain for rate limiting
+ * Models are tried in order when rate limits are hit
+ */
 export const MODEL_FALLBACK_CHAIN = [
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
   'gemini-2.0-flash-lite'
 ];
 
+/**
+ * Rate limit error identifiers
+ */
 export const RATE_LIMIT_ERRORS = [
   429,
   'RESOURCE_EXHAUSTED',
@@ -28,11 +49,21 @@ export const RATE_LIMIT_ERRORS = [
   'QUOTA_EXCEEDED'
 ];
 
+// ============================================================================
+// GENERATION CONFIGURATION
+// ============================================================================
+
+/**
+ * Default generation config values
+ */
 const GENERATION_CONFIG_DEFAULTS = {
   TEMPERATURE: 1.0,
   TOP_P: 0.95
 };
 
+/**
+ * Thinking configuration for different model families
+ */
 const THINKING_CONFIG = {
   GEMINI_3: {
     LOW: 'low',
@@ -47,6 +78,14 @@ const THINKING_CONFIG = {
   }
 };
 
+// ============================================================================
+// SAFETY SETTINGS
+// ============================================================================
+
+/**
+ * Safety settings for content filtering
+ * Currently set to BLOCK_NONE for all categories
+ */
 export const safetySettings = [
   {
     category: HarmCategory.HARM_CATEGORY_HARASSMENT,
@@ -70,10 +109,23 @@ export const safetySettings = [
   },
 ];
 
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Check if a model is a Gemini 3 model
+ * @param {string} modelName - Model identifier
+ * @returns {boolean}
+ */
 function isGemini3Model(modelName) {
   return GEMINI_3_MODELS.includes(modelName);
 }
 
+/**
+ * Get generation config for Gemini 3 models
+ * @returns {Object} Generation configuration
+ */
 function getGemini3Config() {
   return {
     temperature: GENERATION_CONFIG_DEFAULTS.TEMPERATURE,
@@ -84,6 +136,10 @@ function getGemini3Config() {
   };
 }
 
+/**
+ * Get generation config for Gemini 2 models
+ * @returns {Object} Generation configuration
+ */
 function getGemini2Config() {
   return {
     temperature: GENERATION_CONFIG_DEFAULTS.TEMPERATURE,
@@ -94,6 +150,11 @@ function getGemini2Config() {
   };
 }
 
+/**
+ * Get appropriate generation config for a model
+ * @param {string} modelName - Model identifier
+ * @returns {Object} Generation configuration
+ */
 export function getGenerationConfig(modelName) {
   if (isGemini3Model(modelName)) {
     return getGemini3Config();
@@ -101,4 +162,22 @@ export function getGenerationConfig(modelName) {
   return getGemini2Config();
 }
 
+/**
+ * Default generation config (using Gemini 3 Flash as reference)
+ */
 export const generationConfig = getGenerationConfig('gemini-3-flash-preview');
+
+// ============================================================================
+// EXPORTS
+// ============================================================================
+
+export default {
+  DEFAULT_MODEL,
+  MODELS,
+  GEMINI_3_MODELS,
+  MODEL_FALLBACK_CHAIN,
+  RATE_LIMIT_ERRORS,
+  safetySettings,
+  getGenerationConfig,
+  generationConfig
+};
