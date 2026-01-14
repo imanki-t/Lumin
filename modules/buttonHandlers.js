@@ -27,9 +27,9 @@ function createDownloadButton() {
     .setStyle(BUTTON_CONFIG.DOWNLOAD.STYLE);
 }
 
-function createDeleteButton(msgId) {
+function createDeleteButton(msgId, userId) {
   return new ButtonBuilder()
-    .setCustomId(`${BUTTON_CONFIG.DELETE.CUSTOM_ID_PREFIX}${msgId}`)
+    .setCustomId(`${BUTTON_CONFIG.DELETE.CUSTOM_ID_PREFIX}${msgId}-${userId}`)
     .setLabel(BUTTON_CONFIG.DELETE.LABEL)
     .setEmoji(BUTTON_CONFIG.DELETE.EMOJI)
     .setStyle(BUTTON_CONFIG.DELETE.STYLE);
@@ -72,17 +72,15 @@ export async function addDownloadButton(botMessage) {
   }
 }
 
-export async function addDeleteButton(botMessage, msgId) {
+export async function addDeleteButton(botMessage, msgId, userId) {
   try {
     const messageComponents = botMessage.components || [];
-    const deleteButton = createDeleteButton(msgId);
+    const deleteButton = createDeleteButton(msgId, userId);
 
-    let actionRow;
-    
     if (messageComponents.length > 0 && 
         messageComponents[0].type === ComponentType.ActionRow && 
-        hasSpaceForButton(messageComponents[0])) {
-      actionRow = ActionRowBuilder.from(messageComponents[0]);
+        hasSpaceForButton(messageComponents[0].components)) {
+      const actionRow = ActionRowBuilder.from(messageComponents[0]);
       actionRow.addComponents(deleteButton);
       
       return await botMessage.edit({
@@ -91,13 +89,13 @@ export async function addDeleteButton(botMessage, msgId) {
     }
 
     if (messageComponents.length > 0) {
-      const rows = createSecondaryRow(messageComponents, deleteButton);
+      const rows = createButtonRows(messageComponents[0].components, deleteButton);
       return await botMessage.edit({
         components: rows
       });
     }
 
-    actionRow = new ActionRowBuilder().addComponents(deleteButton);
+    const actionRow = new ActionRowBuilder().addComponents(deleteButton);
     return await botMessage.edit({
       components: [actionRow]
     });
