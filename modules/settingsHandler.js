@@ -1,10 +1,9 @@
 import { EmbedBuilder, MessageFlags, ButtonBuilder, ButtonStyle, ActionRowBuilder, PermissionsBitField, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ChannelSelectMenuBuilder, ChannelType, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } from 'discord.js';
 import path from 'path';
 import fs from 'fs/promises';
-import { state, saveStateToFile, chatHistoryLock, getHistory, TEMP_DIR } from '../botManager.js';
+import { state, saveStateToFile, chatHistoryLock, getHistory, TEMP_DIR, BOT_CONFIG } from '../botManager.js';
 import config from '../config.js';
-
-const hexColour = config.hexColour;
+const hexColour = BOT_CONFIG.HEX_COLOUR;
 const DEFAULT_BLACK = 0x000000;
 
 export async function handleButtonInteraction(interaction) {
