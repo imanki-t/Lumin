@@ -1,13 +1,16 @@
 ﻿import { EmbedBuilder, MessageFlags, StringSelectMenuBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, PermissionsBitField } from 'discord.js';
 import { state, saveStateToFile, genAI, TEMP_DIR } from '../botManager.js';
 import { memorySystem } from '../memorySystem.js';
-import { RATE_LIMIT_ERRORS } from '../modules/config.js';
+import { RATE_LIMIT_ERRORS, MODELS, DEFAULT_MODEL } from '../modules/config.js';
 import * as db from '../database.js';
+
 import path from 'path';
 import fs from 'fs/promises';
 
-const FUN_MODEL = 'gemini-2.5-flash-lite';
-const FALLBACK_MODEL = 'gemini-2.5-flash';
+
+const FUN_MODEL = MODELS['gemini-2.5-flash-lite'];
+const FALLBACK_MODEL = DEFAULT_MODEL;
+
 const MAX_COMPLIMENTS_PER_DAY = 15;
 const MAX_STARTERS_PER_DAY = 15;
 
@@ -1106,4 +1109,5 @@ try {
     });
   }
 }
+
 }
