@@ -2,10 +2,9 @@ import { EmbedBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ActionRowB
 import path from 'path';
 import fs from 'fs/promises';
 import axios from 'axios';
-import { TEMP_DIR, client } from '../botManager.js';
+import { TEMP_DIR, client, BOT_CONFIG } from '../botManager.js';
 import config from '../config.js';
-
-const DEFAULT_EMBED_COLOR = config.hexColour;
+const DEFAULT_EMBED_COLOR = BOT_CONFIG.HEX_COLOUR;
 
 const EMBED_LIMITS = {
   DESCRIPTION_MAX: 4096,
