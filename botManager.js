@@ -26,6 +26,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import config from './config.js';
 import * as db from './database.js';
+import { MODEL_FALLBACK_CHAIN, DEFAULT_MODEL } from './modules/config.js';
 
 // ============================================================================
 // CONFIGURATION CONSTANTS
@@ -105,15 +106,7 @@ const STATE_CONFIG = {
   MAX_QUEUE_SIZE: 5
 };
 
-/**
- * Model fallback chain
- * Models are tried in order when rate limits are hit
- */
-const MODEL_FALLBACK_CHAIN = [
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash-lite'
-];
+// Note: MODEL_FALLBACK_CHAIN is imported from ./modules/config.js to avoid duplication
 
 // ============================================================================
 // BOT CONFIGURATION CONSTANTS
@@ -138,7 +131,7 @@ const BOT_CONFIG = {
  * These are applied to new servers or during migration
  */
 const DEFAULT_SERVER_SETTINGS = {
-  selectedModel: "gemini-2.5-flash",
+  selectedModel: DEFAULT_MODEL, // Imported from modules/config.js
   responseFormat: "Normal",
   showActionButtons: false,
   continuousReply: false,
@@ -154,7 +147,7 @@ const DEFAULT_SERVER_SETTINGS = {
  * These are applied to new users or during migration
  */
 const DEFAULT_USER_SETTINGS = {
-  selectedModel: "gemini-2.5-flash",
+  selectedModel: DEFAULT_MODEL, // Imported from modules/config.js
   responseFormat: "Normal",
   showActionButtons: false,
   continuousReply: true,
