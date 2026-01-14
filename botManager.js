@@ -747,9 +747,10 @@ async function withRetryPerModel(apiCall, initialModelName) {
 async function withRetry(apiCall) {
   return withRetryPerModel(
     async (modelName) => await apiCall(),
-    'gemini-2.5-flash'
+    DEFAULT_MODEL
   );
 }
+
 
 // ============================================================================
 // GEMINI AI CLIENT PROXY
@@ -770,7 +771,7 @@ export const genAI = new Proxy({}, {
               request.model = modelName;
               return currentClient.models.generateContent(request);
             },
-            request.model || 'gemini-2.5-flash'
+            request.model || DEFAULT_MODEL
           ),
         generateContentStream: (request) => 
           withRetryPerModel(
@@ -778,8 +779,9 @@ export const genAI = new Proxy({}, {
               request.model = modelName;
               return currentClient.models.generateContentStream(request);
             },
-            request.model || 'gemini-2.5-flash'
+            request.model || DEFAULT_MODEL
           ),
+        
         embedContent: (request) => 
           withRetry(() => currentClient.models.embedContent(request))
       };
