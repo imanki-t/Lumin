@@ -3,9 +3,12 @@ import { state, saveStateToFile, genAI } from '../botManager.js';
 import { memorySystem } from '../memorySystem.js';
 import * as db from '../database.js';
 import { getUserTime } from './timezone.js';
+import { MODELS, DEFAULT_MODEL } from '../modules/config.js';
 
-const QUOTE_MODEL = 'gemini-2.5-flash-lite';
-const FALLBACK_MODEL = 'gemini-2.5-flash';
+
+const QUOTE_MODEL = MODELS['gemini-2.5-flash-lite'];
+const FALLBACK_MODEL = DEFAULT_MODEL;
+
 const MAX_QUOTES_PER_DAY = 5;
 const MAX_SCHEDULED_QUOTES_PER_USER = 2;
 
