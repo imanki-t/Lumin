@@ -5,7 +5,7 @@ import axios from 'axios';
 import { getTextExtractor } from 'office-text-extractor';
 import ffmpeg from 'fluent-ffmpeg';
 import { delay } from '../tools/others.js';
-import { genAI, state, chatHistoryLock, updateChatHistory, saveStateToFile, TEMP_DIR, client, switchToNextKey, BOT_CONFIG } from '../botManager.js';
+import { genAI, state, chatHistoryLock, updateChatHistory, saveStateToFile, TEMP_DIR, client, switchToNextKey, BOT_CONFIG, DEFAULT_SERVER_SETTINGS } from '../botManager.js';
 import { memorySystem } from '../memorySystem.js';
 import config from '../config.js';
 import * as db from '../database.js';
@@ -1094,7 +1094,7 @@ async function handleTextMessage(message) {
 
     finalInstructions += infoStr;
 
-    const isServerChatHistoryEnabled = guildId ? serverSettings.serverChatHistory : false;
+    const isServerChatHistoryEnabled = guildId ? (serverSettings.serverChatHistory ?? DEFAULT_SERVER_SETTINGS.serverChatHistory) : false;
     const isChannelChatHistoryEnabled = guildId ? state.channelWideChatHistory[channelId] : false;
     const historyId = isServerChatHistoryEnabled ? guildId : (isChannelChatHistoryEnabled ? channelId : userId);
 
