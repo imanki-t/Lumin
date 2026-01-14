@@ -276,6 +276,9 @@ let currentKeyIdx = 0;
 /** Current Google AI client instance */
 let currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
 
+// Export settings for use in other modules
+export { DEFAULT_SERVER_SETTINGS, DEFAULT_USER_SETTINGS };
+
 // ============================================================================
 // RATE LIMITING STATE
 // ============================================================================
