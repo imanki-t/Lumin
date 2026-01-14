@@ -1,7 +1,7 @@
 import { EmbedBuilder, MessageFlags, ButtonBuilder, ButtonStyle, ActionRowBuilder, AttachmentBuilder } from 'discord.js';
 import path from 'path';
 import fs from 'fs/promises';
-import { genAI, state, TEMP_DIR } from '../botManager.js';
+import { genAI, state, TEMP_DIR, BOT_CONFIG } from '../botManager.js';
 import config from '../config.js';
 import { MODELS, safetySettings, getGenerationConfig, RATE_LIMIT_ERRORS, DEFAULT_MODEL } from './config.js';
 import { initializeBlacklistForGuild } from './utils.js';
@@ -547,7 +547,7 @@ export async function executeSearchInteraction(interaction) {
     const selectedModel = effectiveSettings.selectedModel || DEFAULT_MODEL;
     const modelName = MODELS[selectedModel];
     const responseFormat = effectiveSettings.responseFormat || 'Normal';
-    const embedColor = effectiveSettings.embedColor || config.hexColour;
+    const embedColor = effectiveSettings.embedColor || BOT_CONFIG.HEX_COLOUR;
 
     const tools = buildSearchTools(hasMedia);
     const generationConfig = getGenerationConfig(modelName);
