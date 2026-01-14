@@ -295,6 +295,7 @@ async function replaceUserMentionsWithUsernames(content, message) {
   const userMentionRegex = /<@!?(\d+)>/g;
   let match;
   const replacements = new Map();
+  const userIds = [];
 
   while ((match = userMentionRegex.exec(content)) !== null) {
     const userId = match[1];
@@ -304,7 +305,8 @@ async function replaceUserMentionsWithUsernames(content, message) {
       try {
         const user = await client.users.fetch(userId).catch(() => null);
         if (user) {
-          replacements.set(userId, `@${user.username}`);
+          replacements.set(userId, `@${user.username} (ID: ${userId})`);
+          userIds.push({ username: user.username, id: userId });
         } else {
           replacements.set(userId, mentionText);
         }
@@ -319,6 +321,15 @@ async function replaceUserMentionsWithUsernames(content, message) {
   for (const [userId, username] of replacements.entries()) {
     const mentionRegex = new RegExp(`<@!?${userId}>`, 'g');
     result = result.replace(mentionRegex, username);
+  }
+
+  // Add mention guide if there were any user mentions
+  if (userIds.length > 0) {
+    result += '\n\n[Mention Guide: To tag/mention users, use the format: <@USER_ID>]';
+    result += '\nExample: To mention the user(s) above, use:';
+    userIds.forEach(user => {
+      result += `\n  • <@${user.id}> for @${user.username}`;
+    });
   }
 
   return result;
