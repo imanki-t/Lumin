@@ -115,7 +115,7 @@ const STATE_CONFIG = {
 /**
  * Bot behavior configuration
  */
-const BOT_CONFIG = {
+export const BOT_CONFIG = {
   /** Default response format */
   DEFAULT_RESPONSE_FORMAT: "Normal",
   
@@ -1558,7 +1558,7 @@ function formatDuration(milliseconds) {
  * @returns {string} Response format ('Normal' or 'Embedded')
  */
 export function getUserResponsePreference(userId) {
-  return state.userResponsePreference[userId] || config.defaultResponseFormat;
+  return state.userResponsePreference[userId] || BOT_CONFIG.DEFAULT_RESPONSE_FORMAT;
 }
 
 /**
@@ -1578,7 +1578,7 @@ export function initializeBlacklistForGuild(guildId) {
         showActionButtons: false,
         continuousReply: false,
         customPersonality: null,
-        embedColor: config.hexColour,
+        embedColor: BOT_CONFIG.HEX_COLOUR,
         overrideUserSettings: true,
         serverChatHistory: false,
         allowedChannels: []
