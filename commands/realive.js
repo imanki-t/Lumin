@@ -3,9 +3,12 @@ import { state, saveStateToFile, genAI } from '../botManager.js';
 import * as db from '../database.js';
 import { memorySystem } from '../memorySystem.js';
 import config from '../config.js';
+import { MODELS } from '../modules/config.js';
+
 
 // Model for generating revival messages
-const REVIVAL_MODEL = 'gemini-2.5-flash-lite';
+const REVIVAL_MODEL = MODELS['gemini-2.5-flash-lite'];
+
 
 export const realiveCommand = {
   name: 'realive',
