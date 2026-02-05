@@ -5,7 +5,7 @@ import axios from 'axios';
 import { getTextExtractor } from 'office-text-extractor';
 import ffmpeg from 'fluent-ffmpeg';
 import { delay } from '../tools/others.js';
-import { functionTools } from './functionTools.js';
+import { functionTools, executeFunctionCalls } from './functionTools.js';
 import { genAI, state, chatHistoryLock, updateChatHistory, saveStateToFile, TEMP_DIR, client, switchToNextKey, BOT_CONFIG, DEFAULT_SERVER_SETTINGS, DEFAULT_USER_SETTINGS } from '../botManager.js';
 import { memorySystem } from '../memorySystem.js';
 import config from '../config.js';
@@ -1151,69 +1151,7 @@ const allTools = [
   }
 }
 
-async function executeFunctionCalls(functionCalls, userId, guildId) {
-  const responses = [];
-  
-  for (const call of functionCalls) {
-    try {
-      const functionName = call.name;
-      const args = call.args || {};
-      
-      let result;
-      
-      if (functionName === 'remember_fact') {
-        const fact = args.fact;
-        if (fact && userId) {
-          const success = await memorySystem.addPersonalData(userId, fact);
-          result = success ? 
-            `Successfully remembered: ${fact}` : 
-            'Failed to save the information';
-        } else {
-          result = 'Missing fact or user context';
-        }
-      } else if (functionName === 'forget_fact') {
-        const keyword = args.keyword;
-        if (keyword && userId) {
-          const success = await memorySystem.removePersonalData(userId, keyword);
-          result = success ? 
-            `Successfully removed information related to: ${keyword}` : 
-            `No information found related to: ${keyword}`;
-        } else {
-          result = 'Missing keyword or user context';
-        }
-      } else if (functionName === 'search_memory') {
-        const query = args.query;
-        if (query && userId) {
-          const memories = await memorySystem.searchMemory(userId, guildId, query);
-          result = memories.length > 0 ? 
-            memories.join('\n') : 
-            'No relevant memories found';
-        } else {
-          result = 'Missing query or user context';
-        }
-      } else {
-        result = `Unknown function: ${functionName}`;
-      }
-      
-      responses.push({
-        functionResponse: {
-          name: functionName,
-          response: { result }
-        }
-      });
-    } catch (error) {
-      console.error(`Error executing function ${call.name}:`, error);
-      responses.push({
-        functionResponse: {
-          name: call.name,
-          response: { error: error.message }
-        }
-      });
-    }
-  }
-  
-  return responses;
-}
+
 
 async function handleModelResponse(
   initialBotMessage,
