@@ -129,9 +129,11 @@ function getGemini3Config() {
   return {
     temperature: GENERATION_CONFIG_DEFAULTS.TEMPERATURE,
     topP: GENERATION_CONFIG_DEFAULTS.TOP_P,
-    thinkingConfig: {
+    // Thinking disabled to allow tool use
+    /* thinkingConfig: {
       thinkingLevel: THINKING_CONFIG.GEMINI_3.DEFAULT
     }
+    */
   };
 }
 
@@ -143,9 +145,12 @@ function getGemini2Config() {
   return {
     temperature: GENERATION_CONFIG_DEFAULTS.TEMPERATURE,
     topP: GENERATION_CONFIG_DEFAULTS.TOP_P,
+    // Thinking disabled to allow tool use
+    /*
     thinkingConfig: {
       thinkingBudget: THINKING_CONFIG.GEMINI_2.DEFAULT
     }
+    */
   };
 }
 
