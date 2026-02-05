@@ -1105,9 +1105,8 @@ async function handleTextMessage(message) {
     // Enable all tools - let the model decide what to use
 const allTools = [
    { googleSearch: {} }, 
-  // { urlContext: {} },   // Commented out to prevent mixing with functions
-  // { codeExecution: {} },
-  ...functionTools
+   { urlContext: {} },   
+   { codeExecution: {} },
 ];
 
     const history = await memorySystem.getOptimizedHistory(
