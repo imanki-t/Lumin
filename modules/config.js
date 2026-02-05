@@ -35,8 +35,7 @@ export const GEMINI_3_MODELS = [
  */
 export const MODEL_FALLBACK_CHAIN = [
   'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash-lite'
+  'gemini-2.5-flash-lite'
 ];
 
 /**
