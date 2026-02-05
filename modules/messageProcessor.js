@@ -5,6 +5,7 @@ import axios from 'axios';
 import { getTextExtractor } from 'office-text-extractor';
 import ffmpeg from 'fluent-ffmpeg';
 import { delay } from '../tools/others.js';
+import { functionTools } from './functionTools.js';
 import { genAI, state, chatHistoryLock, updateChatHistory, saveStateToFile, TEMP_DIR, client, switchToNextKey, BOT_CONFIG, DEFAULT_SERVER_SETTINGS, DEFAULT_USER_SETTINGS } from '../botManager.js';
 import { memorySystem } from '../memorySystem.js';
 import config from '../config.js';
@@ -1101,12 +1102,13 @@ async function handleTextMessage(message) {
     const selectedModel = effectiveSettings.selectedModel || DEFAULT_MODEL;
     const modelName = MODELS[selectedModel];
 
-    const allTools = [];
-    allTools.push({ googleSearch: {} });
-    allTools.push({ urlContext: {} });
-    if (!hasMedia) {
-      allTools.push({ codeExecution: {} });
-    }
+    // Enable all tools - let the model decide what to use
+const allTools = [
+  { googleSearch: {} },
+  { urlContext: {} },
+  { codeExecution: {} },
+  ...functionTools  // Add function calling capabilities
+];
 
     const history = await memorySystem.getOptimizedHistory(
       historyId,
