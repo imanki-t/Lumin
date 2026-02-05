@@ -1348,7 +1348,7 @@ async function handleModelResponse(
             functionTurnCount++;
             console.log(`🔄 Function turn ${functionTurnCount}/${MAX_FUNCTION_CALLING_TURNS}`);
             
-            const functionResponses = await executeFunctionCalls(functionCallParts, userId, guildId);
+            const functionResponses = await executeFunctionCalls(functionCallParts, userId, guildId, historyId);
             
             const functionTurnParts = [
               ...parts,
