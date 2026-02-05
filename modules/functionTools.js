@@ -313,4 +313,4 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId) {
   }));
 
   return results;
-          }
+}
