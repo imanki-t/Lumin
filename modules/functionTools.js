@@ -8,7 +8,8 @@ const FUNCTION_NAMES = {
   SEARCH_MEMORY: 'search_memory',
   SET_REMINDER: 'set_reminder',
   SET_BIRTHDAY: 'set_birthday',
-  SET_TIMEZONE: 'set_timezone'
+  SET_TIMEZONE: 'set_timezone',
+  CHECK_TIME: 'check_time_elapsed'
 };
 
 const MEMORY_ACTIONS = {
@@ -29,6 +30,7 @@ const ERROR_MESSAGES = {
   REMINDER_SET: 'Reminder set for',
   BIRTHDAY_SET: 'Birthday set to',
   TIMEZONE_SET: 'Timezone set to',
+  TIME_CHECKED: 'Time elapsed since last message:',
   OPERATION_FAILED: 'Failed'
 };
 
@@ -122,6 +124,19 @@ export const functionTools = [
             }
           },
           required: ["timezone"]
+        }
+      },
+      {
+        name: FUNCTION_NAMES.CHECK_TIME,
+        description: "Check the exact time elapsed since the last message in this conversation. Use this if the user asks 'how long has it been' or if you need to know the passage of time for context.",
+        parameters: {
+          type: PARAMETER_TYPES.OBJECT,
+          properties: {
+            reason: {
+              type: PARAMETER_TYPES.STRING,
+              description: "Optional reason for checking the time passage."
+            }
+          }
         }
       }
     ]
@@ -222,7 +237,35 @@ async function handleSetTimezone(userId, timezone) {
   return { result: `${ERROR_MESSAGES.TIMEZONE_SET} ${timezone}` };
 }
 
-export async function executeFunctionCalls(calls, userId, guildId) {
+async function handleCheckTimeElapsed(historyId, userId, guildId) {
+  const targetId = historyId || guildId || userId;
+  try {
+    const allHistory = await db.getChatHistory(targetId);
+    if (!allHistory) return { result: "No conversation history found." };
+
+    const historyArray = [];
+    for (const key in allHistory) {
+      if (allHistory.hasOwnProperty(key)) {
+        historyArray.push(...allHistory[key]);
+      }
+    }
+
+    if (historyArray.length === 0) return { result: "No previous messages found." };
+
+    // Find the message with the latest timestamp
+    historyArray.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    
+    const lastMsg = historyArray[historyArray.length - 1];
+    const diff = Date.now() - (lastMsg.timestamp || Date.now());
+    
+    return { result: `${ERROR_MESSAGES.TIME_CHECKED} ${memorySystem.formatDuration(diff)}` };
+  } catch (e) {
+    console.error('Error checking time elapsed:', e);
+    return { result: `${ERROR_MESSAGES.OPERATION_FAILED}: ${e.message}` };
+  }
+}
+
+export async function executeFunctionCalls(calls, userId, guildId, historyId) {
   const results = await Promise.all(calls.map(async (call) => {
     let response = {};
     const args = call.args || {};
@@ -249,6 +292,10 @@ export async function executeFunctionCalls(calls, userId, guildId) {
           response = await handleSetTimezone(userId, args.timezone);
           break;
 
+        case FUNCTION_NAMES.CHECK_TIME:
+          response = await handleCheckTimeElapsed(historyId, userId, guildId);
+          break;
+
         default:
           response = { error: `Unknown function: ${call.name}` };
       }
@@ -266,4 +313,4 @@ export async function executeFunctionCalls(calls, userId, guildId) {
   }));
 
   return results;
-}
+          }
