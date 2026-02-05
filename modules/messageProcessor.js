@@ -5,7 +5,7 @@ import axios from 'axios';
 import { getTextExtractor } from 'office-text-extractor';
 import ffmpeg from 'fluent-ffmpeg';
 import { delay } from '../tools/others.js';
-import { functionTools, executeFunctionCalls } from './functionTools.js';
+import { functionTools } from './functionTools.js';
 import { genAI, state, chatHistoryLock, updateChatHistory, saveStateToFile, TEMP_DIR, client, switchToNextKey, BOT_CONFIG, DEFAULT_SERVER_SETTINGS, DEFAULT_USER_SETTINGS } from '../botManager.js';
 import { memorySystem } from '../memorySystem.js';
 import config from '../config.js';
