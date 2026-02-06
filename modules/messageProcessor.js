@@ -155,7 +155,9 @@ const CONTEXT_MARKERS = {
   LINK_PROCESSED: '[Link Processed:',
   CONTEXT_FILE: '[Context: Attached file contains',
   DISCORD_MESSAGES: 'Discord messages to summarize from',
-  FILE_REMOVAL: '[Previous file attachments were removed due to API key limitations. Please re-upload files if needed, or continue the conversation without them.]'
+  FILE_REMOVAL: '[Previous file attachments were removed due to API key limitations. Please re-upload files if needed, or continue the conversation without them.]',
+  QUEUED_MESSAGE: '[QUEUED MESSAGE',
+  BATCH_SEPARATOR: '\n\n' + '='.repeat(50) + '\n\n'
 };
 
 const FILE_NAMES = {
@@ -802,6 +804,383 @@ async function processGifLinks(messageContent, message) {
   return { messageContent, gifLinkAttachments };
 }
 
+/**
+ * Process a single message and prepare its content
+ * Returns prepared message data for batching
+ */
+async function prepareMessageContent(message) {
+  const botId = client.user.id;
+  const userId = message.author.id;
+  const guildId = message.guild?.id;
+  
+  let messageContent = message.content.replace(new RegExp(`<@!?${botId}>`), '').trim();
+  messageContent = await replaceAllMentions(messageContent, message);
+
+  const gifRegex = new RegExp(TENOR_GIPHY_REGEX);
+  if (gifRegex.test(messageContent) && (!message.embeds || message.embeds.length === 0)) {
+    await delay(GIF_EMBED_DELAY_MS);
+    try {
+      message = await message.channel.messages.fetch(message.id);
+      messageContent = message.content.replace(new RegExp(`<@!?${botId}>`), '').trim();
+      messageContent = await replaceAllMentions(messageContent, message);
+    } catch (e) {}
+  }
+
+  let repliedMessageText = '';
+  let repliedAttachments = [];
+
+  if (message.reference && message.reference.messageId) {
+    try {
+      const repliedMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+
+      if (repliedMsg) {
+        let contextBuffer = `${CONTEXT_MARKERS.REPLY_PREFIX} ${repliedMsg.author.username}]:\n`;
+
+        if (repliedMsg.content) {
+          const repliedContent = await replaceAllMentions(repliedMsg.content, message);
+          contextBuffer += `${repliedContent}\n`;
+        }
+
+        if (repliedMsg.embeds.length > 0) {
+          for (const [index, embed] of repliedMsg.embeds.entries()) {
+            contextBuffer += `${CONTEXT_MARKERS.EMBED_PREFIX} ${index + 1} ${CONTEXT_MARKERS.CONTENT_SUFFIX}:\n`;
+            
+            if (embed.title) {
+              const cleanTitle = await replaceAllMentions(embed.title, message);
+              contextBuffer += `Title: ${cleanTitle}\n`;
+            }
+            
+            if (embed.description) {
+              const cleanDescription = await replaceAllMentions(embed.description, message);
+              contextBuffer += `Description: ${cleanDescription}\n`;
+            }
+            
+            if (embed.fields && embed.fields.length > 0) {
+              for (const field of embed.fields) {
+                const cleanFieldName = await replaceAllMentions(field.name, message);
+                const cleanFieldValue = await replaceAllMentions(field.value, message);
+                contextBuffer += `${cleanFieldName}: ${cleanFieldValue}\n`;
+              }
+            }
+          }
+        }
+
+        if (repliedMsg.attachments.size > 0) {
+          repliedAttachments = Array.from(repliedMsg.attachments.values()).map(att => ({
+            ...att,
+            sourceContext: 'replied_message'
+          }));
+          contextBuffer += `[Contains ${repliedMsg.attachments.size} attachment(s)]\n`;
+        }
+
+        if (repliedMsg.stickers.size > 0) {
+          repliedMsg.stickers.forEach(sticker => {
+            contextBuffer += `[Sticker: ${sticker.name}]\n`;
+          });
+        }
+
+        const { forwardedText: repliedForwardedText, forwardedAttachments: repliedForwardedAttachments } = await extractForwardedContent(repliedMsg);
+        
+        if (repliedForwardedText) {
+          contextBuffer += `${CONTEXT_MARKERS.FORWARDED}:\n${repliedForwardedText}\n`;
+          
+          if (repliedForwardedAttachments.length > 0) {
+            contextBuffer += `[Contains ${repliedForwardedAttachments.length} forwarded attachment(s)]\n`;
+          }
+        }
+        
+        if (repliedForwardedAttachments.length > 0) {
+          const taggedForwardedAttachments = repliedForwardedAttachments.map(att => ({
+            ...att,
+            sourceContext: 'replied_message_forwarded'
+          }));
+          repliedAttachments = [...repliedAttachments, ...taggedForwardedAttachments];
+        }
+
+        repliedMessageText = contextBuffer + "\n" + CONTEXT_MARKERS.SEPARATOR + "\n";
+      }
+    } catch (error) {
+      console.error("Error processing reply context:", error);
+    }
+  }
+
+  if (repliedMessageText) {
+    const userText = messageContent ? messageContent : CONTEXT_MARKERS.NO_TEXT;
+    messageContent = `${repliedMessageText}${CONTEXT_MARKERS.USER_RESPONSE}:\n${userText}`;
+  }
+
+  const gifResult = await processGifLinks(messageContent, message);
+  messageContent = gifResult.messageContent;
+  const gifLinkAttachments = gifResult.gifLinkAttachments;
+
+  const { forwardedText, forwardedAttachments, forwardedStickers } = await extractForwardedContent(message);
+
+  if (forwardedText) {
+    if (messageContent === '') {
+      messageContent = `${CONTEXT_MARKERS.FORWARDED}:\n${forwardedText}`;
+    } else {
+      messageContent = `${messageContent}\n\n${CONTEXT_MARKERS.FORWARDED}:\n${forwardedText}`;
+    }
+    
+    if (forwardedAttachments.length > 0) {
+      messageContent += `\n[Contains ${forwardedAttachments.length} forwarded attachment(s)]`;
+    }
+  }
+  
+  const taggedForwardedAttachments = forwardedAttachments.map(att => ({
+    ...att,
+    sourceContext: 'current_message_forwarded'
+  }));
+
+  const currentStickers = message.stickers ? Array.from(message.stickers.values()) : [];
+  const allStickers = [...currentStickers, ...forwardedStickers];
+
+  const stickerAttachments = [];
+  for (const sticker of allStickers) {
+    const stickerAttachment = await processStickerAsAttachment(sticker);
+    if (stickerAttachment) {
+      stickerAttachments.push(stickerAttachment);
+      const stickerType = stickerAttachment.isAnimated ? CONTEXT_MARKERS.STICKER_ANIMATED : CONTEXT_MARKERS.STICKER_STATIC;
+      if (!messageContent.includes(sticker.name)) {
+        messageContent += `\n[${stickerType}: ${sticker.name}]`;
+      }
+    }
+  }
+
+  const customEmojis = extractCustomEmojis(messageContent);
+  const limitedEmojis = customEmojis.slice(0, ATTACHMENT_LIMITS.MAX_EMOJIS);
+  const exceededEmojis = customEmojis.slice(ATTACHMENT_LIMITS.MAX_EMOJIS);
+
+  const emojiAttachments = [];
+  if (limitedEmojis.length > 0) {
+    for (const emoji of limitedEmojis) {
+      const emojiAttachment = await processEmojiAsAttachment(emoji);
+      if (emojiAttachment) {
+        emojiAttachments.push(emojiAttachment);
+      }
+    }
+  }
+
+  if (exceededEmojis.length > 0) {
+    for (const emoji of exceededEmojis) {
+      messageContent = messageContent.replace(emoji.fullMatch, `${CONTEXT_MARKERS.EMOJI_PREFIX}${emoji.name}${CONTEXT_MARKERS.EMOJI_SUFFIX}`);
+    }
+  }
+
+  const regularAttachments = Array.from(message.attachments.values()).map(att => ({
+    ...att,
+    sourceContext: 'current_message'
+  }));
+
+  const allAttachments = [
+    ...repliedAttachments,
+    ...regularAttachments,
+    ...taggedForwardedAttachments,
+    ...stickerAttachments,
+    ...emojiAttachments,
+    ...gifLinkAttachments
+  ];
+
+  const { finalPrompt, summaryParts } = await extractFileText(message, messageContent);
+
+  return {
+    message,
+    messageContent: finalPrompt,
+    allAttachments,
+    summaryParts: summaryParts || [],
+    timestamp: message.createdTimestamp
+  };
+}
+
+/**
+ * Handle batched messages - process multiple messages together
+ * Each message is tracked separately in history but sent as one combined request
+ */
+async function handleBatchedMessages(queuedMessages) {
+  const firstMessage = queuedMessages[0];
+  const botId = client.user.id;
+  const userId = firstMessage.author.id;
+  const guildId = firstMessage.guild?.id;
+  const channelId = firstMessage.channel.id;
+
+  typingManager.start(firstMessage.channel);
+
+  try {
+    if (guildId && state.realive && state.realive[guildId]) {
+      const realiveConfig = state.realive[guildId];
+      if (realiveConfig.enabled && realiveConfig.lastChannelId !== channelId) {
+        realiveConfig.lastChannelId = channelId;
+        db.saveRealiveConfig(guildId, realiveConfig).catch(e => console.error("Realive update failed", e));
+      }
+    }
+
+    // Prepare all messages in parallel
+    const preparedMessages = await Promise.all(
+      queuedMessages.map((msg, index) => prepareMessageContent(msg))
+    );
+
+    // Combine all messages into one prompt with metadata
+    let combinedPrompt = '';
+    let allAttachments = [];
+    let allSummaryParts = [];
+    
+    preparedMessages.forEach((prepared, index) => {
+      const queuePosition = index + 1;
+      const totalInQueue = preparedMessages.length;
+      const timestamp = new Date(prepared.timestamp).toLocaleTimeString();
+      
+      // Add queue metadata for each message
+      const messageHeader = `${CONTEXT_MARKERS.QUEUED_MESSAGE} #${queuePosition} of ${totalInQueue} - Sent at ${timestamp}]:\n`;
+      
+      combinedPrompt += messageHeader + prepared.messageContent;
+      
+      // Add separator between messages (except last one)
+      if (index < preparedMessages.length - 1) {
+        combinedPrompt += CONTEXT_MARKERS.BATCH_SEPARATOR;
+      }
+      
+      // Collect all attachments and summary parts
+      allAttachments.push(...prepared.allAttachments);
+      allSummaryParts.push(...prepared.summaryParts);
+    });
+
+    // Check if we have any content
+    const hasAnyContent = combinedPrompt.trim() !== '' ||
+      (allAttachments.length > 0 && allAttachments.some(att => {
+        const contentType = (att.contentType || "").toLowerCase();
+        const fileExtension = path.extname(att.name).toLowerCase();
+        return contentType.startsWith(SUPPORTED_CONTENT_TYPES.IMAGE) ||
+               contentType.startsWith(SUPPORTED_CONTENT_TYPES.AUDIO) ||
+               contentType.startsWith(SUPPORTED_CONTENT_TYPES.VIDEO) ||
+               contentType.startsWith(SUPPORTED_CONTENT_TYPES.PDF) ||
+               SUPPORTED_EXTENSIONS.AUDIO.includes(fileExtension) ||
+               SUPPORTED_EXTENSIONS.VIDEO.includes(fileExtension) ||
+               SUPPORTED_EXTENSIONS.IMAGE.includes(fileExtension) ||
+               SUPPORTED_EXTENSIONS.DOCUMENT.includes(fileExtension);
+      }));
+
+    if (!hasAnyContent) {
+      typingManager.stop(channelId);
+      const embed = new EmbedBuilder()
+        .setColor(COLORS.INFO)
+        .setTitle(EMBED_TITLES.EMPTY_MESSAGE)
+        .setDescription(ERROR_MESSAGES.EMPTY_MESSAGE);
+      await firstMessage.reply({ embeds: [embed] });
+      return;
+    }
+
+    // Process combined prompt and attachments
+    let parts = await processPromptAndMediaAttachments(combinedPrompt, firstMessage, allAttachments);
+    
+    // Add summary parts if any
+    if (allSummaryParts.length > 0) {
+      parts.push(...allSummaryParts);
+    }
+
+    // Get settings
+    const userSettings = state.userSettings[userId] || {};
+    const serverSettings = guildId ? (state.serverSettings[guildId] || {}) : {};
+    const effectiveSettings = serverSettings.overrideUserSettings ? serverSettings : userSettings;
+
+    // Build system instructions
+    let finalInstructions = config.coreSystemRules;
+
+    let customInstructions;
+    if (guildId) {
+      if (state.channelWideChatHistory[channelId]) {
+        customInstructions = state.customInstructions[channelId];
+      } else if (serverSettings.customPersonality) {
+        customInstructions = serverSettings.customPersonality;
+      } else if (effectiveSettings.customPersonality) {
+        customInstructions = effectiveSettings.customPersonality;
+      } else {
+        customInstructions = state.customInstructions[userId];
+      }
+    } else {
+      customInstructions = effectiveSettings.customPersonality || state.customInstructions[userId];
+    }
+
+    if (customInstructions) {
+      finalInstructions += `\n\nADDITIONAL PERSONALITY:\n${customInstructions}`;
+    } else {
+      finalInstructions += `\n\n${config.defaultPersonality}`;
+    }
+
+    let infoStr = '';
+    if (guildId) {
+      const userInfo = {
+        username: firstMessage.author.username,
+        displayName: firstMessage.author.displayName
+      };
+      infoStr = `\nYou are currently engaging with users in the ${firstMessage.guild.name} Discord server.\n\n## Current User Information\nUsername: \`${userInfo.username}\`\nDisplay Name: \`${userInfo.displayName}\``;
+    } else {
+      const userInfo = {
+        username: firstMessage.author.username,
+        displayName: firstMessage.author.displayName
+      };
+      infoStr = `\n## Current User Information\nUsername: \`${userInfo.username}\`\nDisplay Name: \`${userInfo.displayName}\``;
+    }
+
+    // Add batch context to instructions
+    finalInstructions += infoStr;
+    finalInstructions += `\n\nIMPORTANT: The user has sent ${preparedMessages.length} messages in quick succession. Each message is labeled with its queue position and timestamp. Respond to ALL messages together in a natural, cohesive way.`;
+
+    const isServerChatHistoryEnabled = guildId ? (serverSettings.serverChatHistory ?? DEFAULT_SERVER_SETTINGS.serverChatHistory) : false;
+    const isChannelChatHistoryEnabled = guildId ? state.channelWideChatHistory[channelId] : false;
+    const historyId = isServerChatHistoryEnabled ? guildId : (isChannelChatHistoryEnabled ? channelId : userId);
+
+    const selectedModel = effectiveSettings.selectedModel || DEFAULT_MODEL;
+    const modelName = MODELS[selectedModel];
+
+    const allTools = [
+      { googleSearch: {} }, 
+      { urlContext: {} },   
+      { codeExecution: {} },
+    ];
+
+    const history = await memorySystem.getOptimizedHistory(
+      historyId,
+      combinedPrompt,
+      modelName,
+      userId,
+      guildId
+    );
+
+    // Send to model and get response
+    await handleModelResponse(
+      null,
+      modelName,
+      finalInstructions,
+      null,
+      safetySettings,
+      allTools,
+      history,
+      parts,
+      firstMessage, // Use first message for reply
+      channelId,
+      historyId,
+      effectiveSettings,
+      combinedPrompt,
+      allAttachments,
+      preparedMessages // Pass all prepared messages for individual history tracking
+    );
+    
+  } catch (error) {
+    console.error('Error in handleBatchedMessages:', error);
+    typingManager.stop(channelId);
+    
+    try {
+      const embed = new EmbedBuilder()
+        .setColor(COLORS.ERROR)
+        .setTitle(ERROR_MESSAGES.CRITICAL_ERROR)
+        .setDescription(ERROR_MESSAGES.UNEXPECTED_ERROR);
+      await firstMessage.reply({ embeds: [embed] });
+    } catch (replyError) {
+      console.error('Failed to send error message:', replyError);
+    }
+  }
+}
+
 async function handleTextMessage(message) {
   const botId = client.user.id;
   const userId = message.author.id;
@@ -1166,7 +1545,8 @@ async function handleModelResponse(
   historyId,
   effectiveSettings,
   originalPrompt = '',
-  allAttachments = []
+  allAttachments = [],
+  preparedMessages = null // NEW: Array of prepared messages for batch history tracking
 ) {
   const userId = originalMessage.author.id;
   const guildId = originalMessage.guild?.id;
@@ -1497,12 +1877,62 @@ async function handleModelResponse(
   botMessage = await addDeleteButton(botMessage, botMessage.id, userId);
         }
 
+        // ENHANCED: Save history for batched messages individually
         if (newHistory.length > 1 && botMessage) {
-          chatHistoryLock.runExclusive(async () => {
-            const username = originalMessage.author.username;
-            const displayName = originalMessage.author.displayName;
-            updateChatHistory(historyId, newHistory, botMessage.id, username, displayName);
+          await chatHistoryLock.runExclusive(async () => {
+            if (preparedMessages && preparedMessages.length > 1) {
+              // Batched messages - save each one separately to history
+              console.log(`💾 Saving ${preparedMessages.length} batched messages to history individually`);
+              
+              for (let i = 0; i < preparedMessages.length; i++) {
+                const prepared = preparedMessages[i];
+                const msg = prepared.message;
+                
+                // Create individual history entry for this message
+                const individualUserHistory = {
+                  role: 'user',
+                  content: [{ text: prepared.messageContent }],
+                  timestamp: prepared.timestamp
+                };
+                
+                // For the assistant response, only save it once with the last message
+                const isLastMessage = i === preparedMessages.length - 1;
+                
+                if (isLastMessage) {
+                  // Save both user message and assistant response
+                  updateChatHistory(
+                    historyId,
+                    [
+                      individualUserHistory,
+                      {
+                        role: 'assistant',
+                        content: [{ text: finalResponse }],
+                        timestamp: Date.now()
+                      }
+                    ],
+                    botMessage.id,
+                    msg.author.username,
+                    msg.author.displayName
+                  );
+                } else {
+                  // Save only user message (assistant responds to all at once)
+                  updateChatHistory(
+                    historyId,
+                    [individualUserHistory],
+                    msg.id, // Use original message ID
+                    msg.author.username,
+                    msg.author.displayName
+                  );
+                }
+              }
+            } else {
+              // Single message - save normally
+              const username = originalMessage.author.username;
+              const displayName = originalMessage.author.displayName;
+              updateChatHistory(historyId, newHistory, botMessage.id, username, displayName);
+            }
             
+            // Memory indexing (works with batched context)
             memorySystem.storeMemoryWithEmbedding(
               historyId,
               newHistory,
@@ -1637,17 +2067,34 @@ export async function processUserQueue(userId) {
 
     try {
       if (currentItem.isChatInputCommand && currentItem.isChatInputCommand()) {
+        // Handle slash command
         const { executeSearchInteraction } = await import('./searchCommand.js');
         await executeSearchInteraction(currentItem);
+        userQueueData.queue.shift();
       } else {
-        await handleTextMessage(currentItem);
+        // Check if there are multiple regular messages in queue - batch them
+        const queuedMessages = userQueueData.queue.filter(
+          item => !item.isChatInputCommand || !item.isChatInputCommand()
+        );
+        
+        if (queuedMessages.length > 1) {
+          console.log(`📦 Batching ${queuedMessages.length} queued messages for ${userId}`);
+          await handleBatchedMessages(queuedMessages);
+          // Remove all processed messages from queue
+          userQueueData.queue = userQueueData.queue.filter(
+            item => item.isChatInputCommand && item.isChatInputCommand()
+          );
+        } else {
+          // Single message - process normally
+          await handleTextMessage(currentItem);
+          userQueueData.queue.shift();
+        }
       }
     } catch (error) {
       console.error(`Error processing queued item for ${userId}:`, error);
       if (currentItem.channel) {
         typingManager.stop(currentItem.channel.id);
       }
-    } finally {
       userQueueData.queue.shift();
     }
   }
