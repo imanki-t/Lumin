@@ -2,11 +2,63 @@ import { EmbedBuilder, MessageFlags, ButtonBuilder, ButtonStyle, ActionRowBuilde
 import path from 'path';
 import fs from 'fs/promises';
 import { state, saveStateToFile, chatHistoryLock, getHistory, TEMP_DIR, BOT_CONFIG, DEFAULT_USER_SETTINGS, DEFAULT_SERVER_SETTINGS } from '../botManager.js';
+import * as db from '../database.js';
 import config from '../config.js';
 import { DEFAULT_MODEL } from './config.js';
 
 const hexColour = BOT_CONFIG.HEX_COLOUR;
 const DEFAULT_BLACK = 0x000000;
+
+// ============================================================================
+// TARGETED SAVE HELPERS
+// These write ONLY what changed directly to MongoDB, bypassing the slow
+// saveStateToFile() full-state dump. This fixes two bugs:
+// 1. Speed: no longer re-saving every user/history/setting on each interaction.
+// 2. Reliability: changes are persisted immediately — not lost if the bot is
+//    force-killed before a pending batch save fires.
+// saveStateToFile() (5-min periodic in botManager) still runs as a full backup.
+// ============================================================================
+
+async function persistUser(userId) {
+  try {
+    await db.saveUserSettings(userId, state.userSettings[userId]);
+  } catch (err) {
+    console.error(`❌ Failed to persist user settings for ${userId}:`, err.message);
+  }
+}
+
+async function persistServer(guildId) {
+  try {
+    await db.saveServerSettings(guildId, state.serverSettings[guildId]);
+  } catch (err) {
+    console.error(`❌ Failed to persist server settings for ${guildId}:`, err.message);
+  }
+}
+
+async function persistInstructions(id, instructions) {
+  try {
+    // null/undefined/empty means the instructions were deleted — persist that too
+    await db.saveCustomInstructions(id, instructions ?? null);
+  } catch (err) {
+    console.error(`❌ Failed to persist custom instructions for ${id}:`, err.message);
+  }
+}
+
+async function persistChannelSetting(channelId, type, value) {
+  try {
+    await db.saveChannelSetting(channelId, type, value);
+  } catch (err) {
+    console.error(`❌ Failed to persist channel setting for ${channelId}:`, err.message);
+  }
+}
+
+async function persistChatHistory(id) {
+  try {
+    await db.saveChatHistory(id, state.chatHistories[id] ?? {});
+  } catch (err) {
+    console.error(`❌ Failed to persist chat history for ${id}:`, err.message);
+  }
+}
 
 export async function handleButtonInteraction(interaction) {
   if (!interaction.isButton()) return;
@@ -117,9 +169,7 @@ export async function handleSelectMenuInteraction(interaction) {
       state.userSettings[userId] = {};
     }
     state.userSettings[userId].selectedModel = selectedModel;
-    await saveStateToFile();
-    await showUserSettings(interaction, true);
-  } else if (interaction.customId === 'server_model_select') {
+    await persistUser(userId);
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
       return sendPermError(interaction);
     }
@@ -128,7 +178,7 @@ export async function handleSelectMenuInteraction(interaction) {
       state.serverSettings[guildId] = {};
     }
     state.serverSettings[guildId].selectedModel = selectedModel;
-    await saveStateToFile();
+    await persistServer(guildId);
     await showServerSettings(interaction, true);
   } else if (interaction.customId === 'user_response_format') {
     const selectedFormat = interaction.values[0];
@@ -136,7 +186,7 @@ export async function handleSelectMenuInteraction(interaction) {
       state.userSettings[userId] = {};
     }
     state.userSettings[userId].responseFormat = selectedFormat;
-    await saveStateToFile();
+    await persistUser(userId);
     await showUserSettings(interaction, true);
   } else if (interaction.customId === 'server_response_format') {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
@@ -147,7 +197,7 @@ export async function handleSelectMenuInteraction(interaction) {
       state.serverSettings[guildId] = {};
     }
     state.serverSettings[guildId].responseFormat = selectedFormat;
-    await saveStateToFile();
+    await persistServer(guildId);
     await showServerSettings(interaction, true);
   } else if (interaction.customId === 'user_action_buttons') {
     const selectedValue = interaction.values[0];
@@ -155,7 +205,7 @@ export async function handleSelectMenuInteraction(interaction) {
       state.userSettings[userId] = {};
     }
     state.userSettings[userId].showActionButtons = selectedValue === 'show';
-    await saveStateToFile();
+    await persistUser(userId);
     await showUserSettings(interaction, true);
   } else if (interaction.customId === 'server_action_buttons') {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
@@ -166,7 +216,7 @@ export async function handleSelectMenuInteraction(interaction) {
       state.serverSettings[guildId] = {};
     }
     state.serverSettings[guildId].showActionButtons = selectedValue === 'show';
-    await saveStateToFile();
+    await persistServer(guildId);
     await showServerSettings(interaction, true);
   } else if (interaction.customId === 'user_continuous_reply') {
     const selectedValue = interaction.values[0];
@@ -174,7 +224,7 @@ export async function handleSelectMenuInteraction(interaction) {
       state.userSettings[userId] = {};
     }
     state.userSettings[userId].continuousReply = selectedValue === 'enabled';
-    await saveStateToFile();
+    await persistUser(userId);
     await showUserSettingsPage2(interaction, true);
   } else if (interaction.customId === 'server_continuous_reply') {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
@@ -185,7 +235,7 @@ export async function handleSelectMenuInteraction(interaction) {
       state.serverSettings[guildId] = {};
     }
     state.serverSettings[guildId].continuousReply = selectedValue === 'enabled';
-    await saveStateToFile();
+    await persistServer(guildId);
     await showServerSettingsPage2(interaction, true);
   } else if (interaction.customId === 'server_override') {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
@@ -196,7 +246,7 @@ export async function handleSelectMenuInteraction(interaction) {
       state.serverSettings[guildId] = {};
     }
     state.serverSettings[guildId].overrideUserSettings = selectedValue === 'enabled';
-    await saveStateToFile();
+    await persistServer(guildId);
     await showServerSettingsPage2(interaction, true);
   } else if (interaction.customId === 'server_chat_history') {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
@@ -207,7 +257,7 @@ export async function handleSelectMenuInteraction(interaction) {
       state.serverSettings[guildId] = {};
     }
     state.serverSettings[guildId].serverChatHistory = selectedValue === 'enabled';
-    await saveStateToFile();
+    await persistServer(guildId);
     await showServerSettingsPage2(interaction, true);
   } else if (interaction.customId === 'channel_manage_select') {
     await handleChannelManageSelect(interaction);
@@ -225,7 +275,8 @@ export async function handleModalSubmit(interaction) {
         state.userSettings[userId] = {};
       }
       state.userSettings[userId].customPersonality = personalityInput.trim();
-      await saveStateToFile();
+      // Write directly to DB — this is the setting most likely to revert on redeploy
+      await persistUser(userId);
 
       const embed = new EmbedBuilder()
         .setColor(0x00FF00)
@@ -248,7 +299,7 @@ export async function handleModalSubmit(interaction) {
         state.serverSettings[guildId] = {};
       }
       state.serverSettings[guildId].customPersonality = personalityInput.trim();
-      await saveStateToFile();
+      await persistServer(guildId);
 
       const embed = new EmbedBuilder()
         .setColor(0x00FF00)
@@ -280,7 +331,7 @@ export async function handleModalSubmit(interaction) {
         state.userSettings[userId] = {};
       }
       state.userSettings[userId].embedColor = hexColor;
-      await saveStateToFile();
+      await persistUser(userId);
 
       const embed = new EmbedBuilder()
         .setColor(hexColor)
@@ -315,7 +366,7 @@ export async function handleModalSubmit(interaction) {
         state.serverSettings[guildId] = {};
       }
       state.serverSettings[guildId].embedColor = hexColor;
-      await saveStateToFile();
+      await persistServer(guildId);
 
       const embed = new EmbedBuilder()
         .setColor(hexColor)
@@ -455,11 +506,11 @@ async function showUserSettings(interaction, isUpdate = false) {
     .setPlaceholder('Select AI Model')
     .addOptions(
       new StringSelectMenuOptionBuilder()
-        .setLabel('Gemini 3.1 Flash-Lite')
-        .setDescription('Latest preview model - fast, efficient, frontier-class')
-        .setValue('gemini-3.1-flash-lite-preview')
+        .setLabel('Gemini 3.0 Flash')
+        .setDescription('Latest AI model - Pro-level intelligence at Flash speed')
+        .setValue('gemini-2.5-flash')
         .setEmoji('⚡')
-        .setDefault(selectedModel === 'gemini-3.1-flash-lite-preview' || selectedModel === DEFAULT_MODEL)
+        .setDefault(true)
     );
 
   const responseFormatSelect = new StringSelectMenuBuilder()
@@ -752,11 +803,11 @@ async function showServerSettings(interaction, isUpdate = false) {
     .setPlaceholder('Select AI Model')
     .addOptions(
       new StringSelectMenuOptionBuilder()
-        .setLabel('Gemini 3.1 Flash-Lite')
-        .setDescription('Latest preview model - fast, efficient, frontier-class')
-        .setValue('gemini-3.1-flash-lite-preview')
+        .setLabel('Gemini 3.0 Flash')
+        .setDescription('Latest AI model - Pro-level intelligence at Flash speed')
+        .setValue('gemini-2.5-flash')
         .setEmoji('⚡')
-        .setDefault(selectedModel === 'gemini-3.1-flash-lite-preview' || selectedModel === DEFAULT_MODEL)
+        .setDefault(true)
     );
 
   const responseFormatSelect = new StringSelectMenuBuilder()
@@ -1296,7 +1347,7 @@ async function showChannelManagementMenu(interaction, isUpdate = false) {
 async function clearUserMemory(interaction) {
   const userId = interaction.user.id;
   state.chatHistories[userId] = {};
-  await saveStateToFile();
+  await persistChatHistory(userId);
 
   const embed = new EmbedBuilder()
     .setColor(0x00FF00)
@@ -1315,7 +1366,7 @@ async function clearServerMemory(interaction) {
 
   const guildId = interaction.guild.id;
   state.chatHistories[guildId] = {};
-  await saveStateToFile();
+  await persistChatHistory(guildId);
 
   const embed = new EmbedBuilder()
     .setColor(0x00FF00)
@@ -1614,7 +1665,11 @@ async function removeUserPersonality(interaction) {
   if (state.customInstructions && state.customInstructions[userId]) {
     delete state.customInstructions[userId]; 
   }
-  await saveStateToFile();
+  // Write both affected records directly to DB so they survive a force-kill
+  await Promise.all([
+    persistUser(userId),
+    persistInstructions(userId, null)
+  ]);
 
   const embed = new EmbedBuilder()
     .setColor(0x00FF00)
@@ -1638,7 +1693,10 @@ async function removeServerPersonality(interaction) {
   if (state.customInstructions && state.customInstructions[guildId]) {
     delete state.customInstructions[guildId];
   }
-  await saveStateToFile();
+  await Promise.all([
+    persistServer(guildId),
+    persistInstructions(guildId, null)
+  ]);
 
   const embed = new EmbedBuilder()
     .setColor(0x00FF00)
@@ -1717,7 +1775,7 @@ async function handleChannelManageSelect(interaction) {
   }
 
   state.serverSettings[guildId].allowedChannels = selectedChannelIds;
-  await saveStateToFile();
+  await persistServer(guildId);
 
   await showChannelManagementMenu(interaction, true);
 }
@@ -1733,7 +1791,7 @@ async function handleSetAllChannels(interaction) {
   }
 
   state.serverSettings[guildId].allowedChannels = [];
-  await saveStateToFile();
+  await persistServer(guildId);
 
   await showChannelManagementMenu(interaction, true);
 }
@@ -1748,29 +1806,28 @@ async function toggleContinuousReplyChannel(interaction) {
     state.continuousReplyChannels = {};
   }
 
-  if (state.continuousReplyChannels[channelId]) {
-    delete state.continuousReplyChannels[channelId];
-    const embed = new EmbedBuilder()
-      .setColor(0xFFAA00)
-      .setTitle('📢 Continuous Reply Disabled')
-      .setDescription(`The bot will no longer reply to all messages in <#${channelId}>.`);
-    await interaction.reply({
-      embeds: [embed],
-      flags: MessageFlags.Ephemeral
-    });
-  } else {
+  const newValue = !state.continuousReplyChannels[channelId];
+  if (newValue) {
     state.continuousReplyChannels[channelId] = true;
-    const embed = new EmbedBuilder()
-      .setColor(0x00FF00)
-      .setTitle('📢 Continuous Reply Enabled')
-      .setDescription(`The bot will now reply to all messages in <#${channelId}> without requiring mentions.`);
-    await interaction.reply({
-      embeds: [embed],
-      flags: MessageFlags.Ephemeral
-    });
+  } else {
+    delete state.continuousReplyChannels[channelId];
   }
+  await persistChannelSetting(channelId, 'continuousReply', newValue || null);
 
-  await saveStateToFile();
+  const embed = newValue
+    ? new EmbedBuilder()
+        .setColor(0x00FF00)
+        .setTitle('📢 Continuous Reply Enabled')
+        .setDescription(`The bot will now reply to all messages in <#${channelId}> without requiring mentions.`)
+    : new EmbedBuilder()
+        .setColor(0xFFAA00)
+        .setTitle('📢 Continuous Reply Disabled')
+        .setDescription(`The bot will no longer reply to all messages in <#${channelId}>.`);
+
+  await interaction.reply({
+    embeds: [embed],
+    flags: MessageFlags.Ephemeral
+  });
 }
 
 async function handleDeleteMessageInteraction(interaction, customIdData) {

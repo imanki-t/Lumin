@@ -16,8 +16,11 @@ import { updateEmbed, sendAsTextFile } from './responseHandler.js';
 const TYPING_INTERVAL_MS = 4000;
 const TYPING_TIMEOUT_MS = 120000;
 const MAX_USER_QUEUE_SIZE = 5;
-const WORD_THRESHOLD_FOR_INITIAL_MESSAGE = 150;
-const MESSAGE_UPDATE_DEBOUNCE_MS = 800;
+// Send the first visible message after only ~20 words so users see something fast.
+// The message will keep updating via DEBOUNCE as more tokens stream in.
+const WORD_THRESHOLD_FOR_INITIAL_MESSAGE = 20;
+// How often the in-progress stream message is edited (ms). Lower = more responsive.
+const MESSAGE_UPDATE_DEBOUNCE_MS = 350;
 
 const RETRY_DELAYS = {
   DEFAULT: 1500,
@@ -1940,7 +1943,11 @@ async function handleModelResponse(
               guildId
             ).catch(err => console.error('Background memory save failed:', err));
             
-            await saveStateToFile();
+            // Save ONLY this conversation's history directly to DB.
+            // This is orders of magnitude faster than saveStateToFile() which
+            // dumps ALL state (every user, history, setting) while holding the lock.
+            db.saveChatHistory(historyId, state.chatHistories[historyId])
+              .catch(err => console.error(`Failed to save chat history for ${historyId}:`, err.message));
           }).catch(err => console.error('Background history save failed:', err));
         }
         
