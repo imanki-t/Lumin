@@ -261,7 +261,6 @@ function loadApiKeys() {
     throw new Error('No valid API keys found in environment variables');
   }
 
-  console.log(`✅ Loaded ${keys.length} API key(s)`);
   return keys;
 }
 
@@ -277,8 +276,8 @@ function validateApiKey(key) {
 /** Array of Google Gemini API keys */
 const apiKeys = loadApiKeys();
 // Update MAX_TOTAL_ATTEMPTS now that apiKeys is loaded
-RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS = Math.max(3, apiKeys.length * 3); // Changed from Math.max(90, ...)
-console.log(`✅ Retry strategy configured: ${RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS} total attempts (${apiKeys.length} keys × 3)`);
+RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS = Math.max(3, apiKeys.length * 3);
+console.log(`✅ Loaded ${apiKeys.length} API key(s) | Retry strategy: ${RETRY_STRATEGY.MAX_TOTAL_ATTEMPTS} total attempts (${apiKeys.length} keys × 3)`);
 
 /** Current active API key index */
 let currentKeyIdx = 0;
@@ -1159,7 +1158,7 @@ export async function saveStateToFile() {
     const savePromises = [];
 
     // User settings
-    for (const [userId, settings] of Object.entries(state.userSettings)) {
+    for (const [userId, settings] of Object.entries(state.userSettings ?? {})) {
       savePromises.push(
         db.saveUserSettings(userId, settings).catch(err => 
           console.error(`Failed to save user settings for ${userId}:`, err.message)
@@ -1168,7 +1167,7 @@ export async function saveStateToFile() {
     }
 
     // Server settings
-    for (const [guildId, settings] of Object.entries(state.serverSettings)) {
+    for (const [guildId, settings] of Object.entries(state.serverSettings ?? {})) {
       savePromises.push(
         db.saveServerSettings(guildId, settings).catch(err => 
           console.error(`Failed to save server settings for ${guildId}:`, err.message)
@@ -1177,7 +1176,7 @@ export async function saveStateToFile() {
     }
 
     // Chat histories
-    for (const [id, history] of Object.entries(state.chatHistories)) {
+    for (const [id, history] of Object.entries(state.chatHistories ?? {})) {
       savePromises.push(
         db.saveChatHistory(id, history).catch(err => 
           console.error(`Failed to save chat history for ${id}:`, err.message)
@@ -1186,7 +1185,7 @@ export async function saveStateToFile() {
     }
 
     // Custom instructions
-    for (const [id, instructions] of Object.entries(state.customInstructions)) {
+    for (const [id, instructions] of Object.entries(state.customInstructions ?? {})) {
       savePromises.push(
         db.saveCustomInstructions(id, instructions).catch(err => 
           console.error(`Failed to save custom instructions for ${id}:`, err.message)
@@ -1195,7 +1194,7 @@ export async function saveStateToFile() {
     }
 
     // Blacklisted users
-    for (const [guildId, users] of Object.entries(state.blacklistedUsers)) {
+    for (const [guildId, users] of Object.entries(state.blacklistedUsers ?? {})) {
       savePromises.push(
         db.saveBlacklistedUsers(guildId, users).catch(err => 
           console.error(`Failed to save blacklist for ${guildId}:`, err.message)
@@ -1204,21 +1203,21 @@ export async function saveStateToFile() {
     }
 
     // Channel settings
-    for (const [channelId, value] of Object.entries(state.alwaysRespondChannels)) {
+    for (const [channelId, value] of Object.entries(state.alwaysRespondChannels ?? {})) {
       savePromises.push(
         db.saveChannelSetting(channelId, 'alwaysRespond', value).catch(err => 
           console.error(`Failed to save channel setting for ${channelId}:`, err.message)
         )
       );
     }
-    for (const [channelId, value] of Object.entries(state.channelWideChatHistory)) {
+    for (const [channelId, value] of Object.entries(state.channelWideChatHistory ?? {})) {
       savePromises.push(
         db.saveChannelSetting(channelId, 'wideChatHistory', value).catch(err => 
           console.error(`Failed to save channel setting for ${channelId}:`, err.message)
         )
       );
     }
-    for (const [channelId, value] of Object.entries(state.continuousReplyChannels)) {
+    for (const [channelId, value] of Object.entries(state.continuousReplyChannels ?? {})) {
       savePromises.push(
         db.saveChannelSetting(channelId, 'continuousReply', value).catch(err => 
           console.error(`Failed to save channel setting for ${channelId}:`, err.message)
@@ -1227,7 +1226,7 @@ export async function saveStateToFile() {
     }
 
     // User response preferences
-    for (const [userId, preference] of Object.entries(state.userResponsePreference)) {
+    for (const [userId, preference] of Object.entries(state.userResponsePreference ?? {})) {
       savePromises.push(
         db.saveUserResponsePreference(userId, preference).catch(err => 
           console.error(`Failed to save response preference for ${userId}:`, err.message)
@@ -1236,7 +1235,7 @@ export async function saveStateToFile() {
     }
 
     // Image usage
-    for (const [userId, usage] of Object.entries(state.imageUsage)) {
+    for (const [userId, usage] of Object.entries(state.imageUsage ?? {})) {
       savePromises.push(
         db.saveImageUsage(userId, usage).catch(err => 
           console.error(`Failed to save image usage for ${userId}:`, err.message)
@@ -1245,7 +1244,7 @@ export async function saveStateToFile() {
     }
 
     // Birthdays
-    for (const [userId, data] of Object.entries(state.birthdays)) {
+    for (const [userId, data] of Object.entries(state.birthdays ?? {})) {
       savePromises.push(
         db.saveBirthday(userId, data).catch(err => 
           console.error(`Failed to save birthday for ${userId}:`, err.message)
@@ -1254,7 +1253,7 @@ export async function saveStateToFile() {
     }
 
     // Roulette configurations
-    for (const [channelId, config] of Object.entries(state.roulette)) {
+    for (const [channelId, config] of Object.entries(state.roulette ?? {})) {
       savePromises.push(
         db.saveRouletteConfig(channelId, config).catch(err => 
           console.error(`Failed to save roulette config for ${channelId}:`, err.message)
@@ -1263,7 +1262,7 @@ export async function saveStateToFile() {
     }
 
     // Daily quotes
-    for (const [userId, config] of Object.entries(state.dailyQuotes)) {
+    for (const [userId, config] of Object.entries(state.dailyQuotes ?? {})) {
       savePromises.push(
         db.saveDailyQuote(userId, config).catch(err => 
           console.error(`Failed to save daily quote for ${userId}:`, err.message)
@@ -1272,7 +1271,7 @@ export async function saveStateToFile() {
     }
 
     // Compliment counts
-    for (const [userId, count] of Object.entries(state.complimentCounts)) {
+    for (const [userId, count] of Object.entries(state.complimentCounts ?? {})) {
       savePromises.push(
         db.saveComplimentCount(userId, count).catch(err => 
           console.error(`Failed to save compliment count for ${userId}:`, err.message)
@@ -1281,7 +1280,7 @@ export async function saveStateToFile() {
     }
 
     // User timezones
-    for (const [userId, timezone] of Object.entries(state.userTimezones)) {
+    for (const [userId, timezone] of Object.entries(state.userTimezones ?? {})) {
       savePromises.push(
         db.saveUserTimezone(userId, timezone).catch(err => 
           console.error(`Failed to save timezone for ${userId}:`, err.message)
@@ -1290,7 +1289,7 @@ export async function saveStateToFile() {
     }
 
     // Server digests
-    for (const [guildId, digest] of Object.entries(state.serverDigests)) {
+    for (const [guildId, digest] of Object.entries(state.serverDigests ?? {})) {
       savePromises.push(
         db.saveServerDigest(guildId, digest).catch(err => 
           console.error(`Failed to save server digest for ${guildId}:`, err.message)
@@ -1299,7 +1298,7 @@ export async function saveStateToFile() {
     }
 
     // Quote usage
-    for (const [userId, usage] of Object.entries(state.quoteUsage)) {
+    for (const [userId, usage] of Object.entries(state.quoteUsage ?? {})) {
       savePromises.push(
         db.saveQuoteUsage(userId, usage).catch(err => 
           console.error(`Failed to save quote usage for ${userId}:`, err.message)
@@ -1308,7 +1307,7 @@ export async function saveStateToFile() {
     }
 
     // Realive configurations
-    for (const [guildId, config] of Object.entries(state.realive)) {
+    for (const [guildId, config] of Object.entries(state.realive ?? {})) {
       savePromises.push(
         db.saveRealiveConfig(guildId, config).catch(err => 
           console.error(`Failed to save realive config for ${guildId}:`, err.message)
@@ -1317,7 +1316,7 @@ export async function saveStateToFile() {
     }
     
     // Summary usage
-    for (const [userId, usage] of Object.entries(state.summaryUsage)) {
+    for (const [userId, usage] of Object.entries(state.summaryUsage ?? {})) {
       savePromises.push(
         db.saveSummaryUsage(userId, usage).catch(err => 
           console.error(`Failed to save summary usage for ${userId}:`, err.message)
@@ -1401,31 +1400,31 @@ async function loadStateFromDB() {
       db.getAllSummaryUsages()
     ]);
 
-    // Assign loaded data to state
-    state.chatHistories = chatHistories;
-    state.userSettings = userSettings;
-    state.serverSettings = serverSettings;
-    state.customInstructions = customInstructions;
-    state.blacklistedUsers = blacklistedUsers;
-    state.userResponsePreference = userResponsePreference;
-    state.activeUsersInChannels = activeUsersInChannels;
-    state.imageUsage = imageUsage;
-    state.birthdays = birthdays;
-    state.reminders = reminders;
-    state.dailyQuotes = dailyQuotes;
-    state.roulette = roulette;
-    state.complimentCounts = complimentCounts;
-    state.complimentOptOut = complimentOptOut;
-    state.userTimezones = userTimezones;
-    state.serverDigests = serverDigests;
-    state.quoteUsage = quoteUsage;
-    state.realive = realive;
-    state.summaryUsage = summaryUsage;
+    // Assign loaded data to state — ?? {} guards against null/undefined from DB
+    state.chatHistories = chatHistories ?? {};
+    state.userSettings = userSettings ?? {};
+    state.serverSettings = serverSettings ?? {};
+    state.customInstructions = customInstructions ?? {};
+    state.blacklistedUsers = blacklistedUsers ?? {};
+    state.userResponsePreference = userResponsePreference ?? {};
+    state.activeUsersInChannels = activeUsersInChannels ?? {};
+    state.imageUsage = imageUsage ?? {};
+    state.birthdays = birthdays ?? {};
+    state.reminders = reminders ?? {};
+    state.dailyQuotes = dailyQuotes ?? {};
+    state.roulette = roulette ?? {};
+    state.complimentCounts = complimentCounts ?? {};
+    state.complimentOptOut = complimentOptOut ?? {};
+    state.userTimezones = userTimezones ?? {};
+    state.serverDigests = serverDigests ?? {};
+    state.quoteUsage = quoteUsage ?? {};
+    state.realive = realive ?? {};
+    state.summaryUsage = summaryUsage ?? {};
 
     // Load channel settings
-    state.alwaysRespondChannels = await db.getAllChannelSettings('alwaysRespond');
-    state.channelWideChatHistory = await db.getAllChannelSettings('wideChatHistory');
-    state.continuousReplyChannels = await db.getAllChannelSettings('continuousReply');
+    state.alwaysRespondChannels = (await db.getAllChannelSettings('alwaysRespond')) ?? {};
+    state.channelWideChatHistory = (await db.getAllChannelSettings('wideChatHistory')) ?? {};
+    state.continuousReplyChannels = (await db.getAllChannelSettings('continuousReply')) ?? {};
 
     console.log('✅ Bot state loaded successfully from database');
 
@@ -1454,7 +1453,7 @@ export function getHistory(id, guildId = null) {
     const guildHistory = state.chatHistories[guildId] || {};
     for (const messagesId in guildHistory) {
       if (Object.prototype.hasOwnProperty.call(guildHistory, messagesId)) {
-        combinedHistory = [...combinedHistory, ...guildHistory[messagesId]];
+        combinedHistory = [...combinedHistory, ...(guildHistory[messagesId] || [])];
       }
     }
   }
@@ -1462,9 +1461,12 @@ export function getHistory(id, guildId = null) {
   // Add user/channel specific history
   for (const messagesId in historyObject) {
     if (Object.prototype.hasOwnProperty.call(historyObject, messagesId)) {
-      combinedHistory = [...combinedHistory, ...historyObject[messagesId]];
+      combinedHistory = [...combinedHistory, ...(historyObject[messagesId] || [])];
     }
   }
+
+  // Filter out any null/undefined entries before sort
+  combinedHistory = combinedHistory.filter(Boolean);
 
   // Sort by timestamp
   combinedHistory.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
@@ -2048,9 +2050,10 @@ export async function initialize() {
       })));
     }, RESOURCE_CONFIG.STATS_LOG_INTERVAL);
 
-    // Display startup statistics
-    console.log('📊 Startup Statistics:');
-    console.log(JSON.stringify(getApiKeyStats(), null, 2));
+    // Display startup statistics (compact - one line per key)
+    const startupStats = getApiKeyStats();
+    console.log('📊 Startup: ' + startupStats.totalKeys + ' keys | Current: Key ' + startupStats.currentKey + ' | ' +
+      startupStats.keys.map(k => 'Key' + k.keyNumber + '[' + k.status.replace(/[^w ]/g, '').trim() + ' req:' + k.totalRequests + ' err:' + k.errors + (k.isCurrent ? ' *' : '') + ']').join(' '));
     
     console.log('✅ Bot Manager initialized successfully');
   } catch (error) {
@@ -2081,9 +2084,10 @@ async function gracefulShutdown(signal) {
     await db.closeDB();
     console.log('✅ Database connection closed');
     
-    // Display final statistics
-    console.log('📊 Shutdown Statistics:');
-    console.log(JSON.stringify(getApiKeyStats(), null, 2));
+    // Display final statistics (compact - one line per key)
+    const shutdownStats = getApiKeyStats();
+    console.log('📊 Shutdown: ' + shutdownStats.totalKeys + ' keys | ' +
+      shutdownStats.keys.map(k => 'Key' + k.keyNumber + '[req:' + k.totalRequests + ' ok:' + k.successfulRequests + ' err:' + k.errors + ']').join(' '));
     
     console.log('✅ Graceful shutdown completed');
     process.exit(0);
