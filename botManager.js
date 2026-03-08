@@ -26,7 +26,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import config from './config.js';
 import * as db from './database.js';
-import { MODEL_FALLBACK_CHAIN, DEFAULT_MODEL } from './modules/config.js';
+import { MODEL_FALLBACK_CHAIN, MODEL_CALL_THRESHOLDS, DEFAULT_MODEL } from './modules/config.js';
 
 // ============================================================================
 // CONFIGURATION CONSTANTS
@@ -37,8 +37,18 @@ import { MODEL_FALLBACK_CHAIN, DEFAULT_MODEL } from './modules/config.js';
  * Adjust these values to control API usage patterns
  */
 const RATE_LIMIT_CONFIG = {
-  /** Requests per minute per model per API key */
+  /** Requests per minute per model per API key (default, used by 2.5 variants) */
   REQUESTS_PER_MINUTE: 15,
+  
+  /**
+   * Per-model RPM override.
+   * gemini-3.1-flash-lite-preview: Infinity = no proactive RPM switching,
+   *   only reacts to actual 429s or the MODEL_CALL_THRESHOLDS count.
+   * Models not listed here fall back to REQUESTS_PER_MINUTE above.
+   */
+  MODEL_REQUESTS_PER_MINUTE: {
+    'gemini-3.1-flash-lite-preview': Infinity
+  },
   
   /** Time window for rate limiting in milliseconds */
   WINDOW_DURATION_MS: 60000,
@@ -302,6 +312,15 @@ const keyErrorTracking = new Map();
 const keyCooldowns = new Map();
 
 /**
+ * Global successful call counter per model (across all keys).
+ * Used to proactively switch away from models with a MODEL_CALL_THRESHOLDS entry.
+ * Resets when the model is switched away from and becomes primary again.
+ * @type {Map<string, number>}
+ */
+const modelGlobalCallCounts = new Map();
+MODEL_FALLBACK_CHAIN.forEach(m => modelGlobalCallCounts.set(m, 0));
+
+/**
  * Per-model per-key rate limit tracking
  * Structure: Map<keyIdx, Map<modelName, {count: number, windowStart: number}>>
  * @type {Map<number, Map<string, {count: number, windowStart: number}>>}
@@ -356,7 +375,11 @@ function isModelRateLimited(keyIdx, modelName) {
     return false;
   }
 
-  return rateLimitData.count >= RATE_LIMIT_CONFIG.REQUESTS_PER_MINUTE;
+  // Use per-model RPM limit if defined, otherwise fall back to global default
+  const rpmLimit = RATE_LIMIT_CONFIG.MODEL_REQUESTS_PER_MINUTE?.[modelName]
+    ?? RATE_LIMIT_CONFIG.REQUESTS_PER_MINUTE;
+
+  return rateLimitData.count >= rpmLimit;
 }
 
 /**
@@ -568,7 +591,7 @@ export function switchToNextKeyOrModel(error, currentModelName) {
  * @deprecated Use switchToNextKeyOrModel instead
  */
 export function switchToNextKey(error) {
-  const result = switchToNextKeyOrModel(error, 'gemini-2.5-flash');
+  const result = switchToNextKeyOrModel(error, 'gemini-3.1-flash-lite-preview');
   return result.keyRotated || result.modelChanged;
 }
 
@@ -660,6 +683,22 @@ async function withRetryPerModel(apiCall, initialModelName) {
 
       if (stats) {
         stats.successfulRequests++;
+      }
+
+      // Track global call count and proactively switch if threshold reached
+      const newCount = (modelGlobalCallCounts.get(currentModel) || 0) + 1;
+      modelGlobalCallCounts.set(currentModel, newCount);
+      const callThreshold = MODEL_CALL_THRESHOLDS[currentModel];
+      if (callThreshold && newCount >= callThreshold) {
+        const nextModelIdx = (MODEL_FALLBACK_CHAIN.indexOf(currentModel) + 1) % MODEL_FALLBACK_CHAIN.length;
+        const nextModel = MODEL_FALLBACK_CHAIN[nextModelIdx];
+        if (nextModel && nextModel !== currentModel) {
+          console.log(`🔄 Proactive switch: ${currentModel} hit ${callThreshold} calls → switching to ${nextModel} (next key rotation will reset)`);
+          // Reset counter for this model so it can be used again after key rotation
+          modelGlobalCallCounts.set(currentModel, 0);
+          // Mark it on cooldown for current key so the fallback chain picks up nextModel
+          setModelCooldown(currentKeyIdx, currentModel, RATE_LIMIT_CONFIG.COOLDOWN_DURATION_MS);
+        }
       }
 
       return result;
