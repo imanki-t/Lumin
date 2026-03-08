@@ -876,13 +876,14 @@ class MemorySystem {
    * Extract text from message content parts
    */
   extractTextFromMessage(message) {
-    if (!message || !message.content) {
+    if (!message || (!message.content && !message.parts)) {
       return '';
     }
 
     let text = '';
-    if (Array.isArray(message.content)) {
-      for (const part of message.content) {
+    const contentArray = message.content || message.parts;
+    if (Array.isArray(contentArray)) {
+      for (const part of contentArray) {
         if (part && part.text) {
           text += part.text + ' ';
         }
@@ -1210,7 +1211,7 @@ class MemorySystem {
       const historyArray = [];
       for (const messagesId in allHistory) {
         if (allHistory.hasOwnProperty(messagesId)) {
-          historyArray.push(...allHistory[messagesId]);
+          historyArray.push(...(allHistory[messagesId] || []));
         }
       }
 
@@ -1337,7 +1338,7 @@ class MemorySystem {
       const historyArray = [];
       for (const messagesId in allHistory) {
         if (allHistory.hasOwnProperty(messagesId)) {
-          historyArray.push(...allHistory[messagesId]);
+          historyArray.push(...(allHistory[messagesId] || []));
         }
       }
 
@@ -1510,7 +1511,7 @@ class MemorySystem {
       previousTimestamp = entry.timestamp;
 
       let userInfoAdded = false;
-      for (const part of entry.content) {
+      for (const part of (entry.content || entry.parts || [])) {
         if (part.text !== undefined && part.text !== '') {
           let textVal = part.text;
 
@@ -1630,7 +1631,7 @@ class MemorySystem {
       const historyArray = [];
       for (const messagesId in allHistory) {
         if (allHistory.hasOwnProperty(messagesId)) {
-          historyArray.push(...allHistory[messagesId]);
+          historyArray.push(...(allHistory[messagesId] || []));
         }
       }
 
