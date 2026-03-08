@@ -757,12 +757,25 @@ async function withRetryPerModel(apiCall, initialModelName) {
         continue;
       }
 
-      // For non-rate-limit errors, we just check global limits
+      // Local JS errors (no HTTP status/code) are bugs, not transient API failures.
+      // Retrying them wastes all 90 attempts and burns quota — throw immediately.
+      const isApiError = error?.status || error?.code || 
+        error?.message?.includes('fetch') ||
+        error?.message?.includes('network') ||
+        error?.message?.includes('timeout') ||
+        error?.message?.includes('500') ||
+        error?.message?.includes('503') ||
+        error?.message?.includes('502');
+      
+      if (!isApiError) {
+        throw error; // local crash — no point retrying
+      }
+
+      // For transient API errors, check global limits then retry with delay
       if (totalAttempts >= maxTotalAttempts) {
         throw new Error(`All global retry attempts exhausted (${maxTotalAttempts} attempts). Last error: ${error.message}`);
       }
       
-      // Calculate delay based on error type
       let delay = RATE_LIMIT_CONFIG.RETRY_DELAYS.DEFAULT;
       if (error?.message?.includes('500') || error?.message?.includes('503')) {
         delay = RATE_LIMIT_CONFIG.RETRY_DELAYS.SERVER_ERROR;
