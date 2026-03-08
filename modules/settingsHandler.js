@@ -455,11 +455,11 @@ async function showUserSettings(interaction, isUpdate = false) {
     .setPlaceholder('Select AI Model')
     .addOptions(
       new StringSelectMenuOptionBuilder()
-        .setLabel('Gemini 3.0 Flash')
-        .setDescription('Latest AI model - Pro-level intelligence at Flash speed')
-        .setValue('gemini-2.5-flash')
+        .setLabel('Gemini 3.1 Flash-Lite')
+        .setDescription('Latest preview model - fast, efficient, frontier-class')
+        .setValue('gemini-3.1-flash-lite-preview')
         .setEmoji('⚡')
-        .setDefault(true)
+        .setDefault(selectedModel === 'gemini-3.1-flash-lite-preview' || selectedModel === DEFAULT_MODEL)
     );
 
   const responseFormatSelect = new StringSelectMenuBuilder()
@@ -752,11 +752,11 @@ async function showServerSettings(interaction, isUpdate = false) {
     .setPlaceholder('Select AI Model')
     .addOptions(
       new StringSelectMenuOptionBuilder()
-        .setLabel('Gemini 3.0 Flash')
-        .setDescription('Latest AI model - Pro-level intelligence at Flash speed')
-        .setValue('gemini-2.5-flash')
+        .setLabel('Gemini 3.1 Flash-Lite')
+        .setDescription('Latest preview model - fast, efficient, frontier-class')
+        .setValue('gemini-3.1-flash-lite-preview')
         .setEmoji('⚡')
-        .setDefault(true)
+        .setDefault(selectedModel === 'gemini-3.1-flash-lite-preview' || selectedModel === DEFAULT_MODEL)
     );
 
   const responseFormatSelect = new StringSelectMenuBuilder()

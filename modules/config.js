@@ -7,16 +7,16 @@ import { HarmBlockThreshold, HarmCategory } from '@google/genai';
 /**
  * Default model to use when no preference is set
  */
-export const DEFAULT_MODEL = 'gemini-2.5-flash';
+export const DEFAULT_MODEL = 'gemini-3.1-flash-lite-preview';
 
 /**
  * Available models mapping
  * Maps user-friendly names to actual API model identifiers
  */
 export const MODELS = {
+  'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',
   'gemini-3-flash': 'gemini-3-flash-preview',
   'gemini-2.5-flash': 'gemini-2.5-flash',
-  'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite',
   'gemini-2.5-pro': 'gemini-2.5-pro',
   'gemini-2.0-flash-lite': 'gemini-2.0-flash-lite'
 };
@@ -25,18 +25,33 @@ export const MODELS = {
  * Gemini 3 model identifiers
  */
 export const GEMINI_3_MODELS = [
+  'gemini-3.1-flash-lite-preview',
   'gemini-3-flash-preview',
   'gemini-3-pro-preview'
 ];
 
 /**
  * Model fallback chain for rate limiting
- * Models are tried in order when rate limits are hit
+ * Models are tried in order when rate limits are hit.
+ * - gemini-3.1-flash-lite-preview: Primary model, switches after 500 calls or on actual 429
+ * - gemini-2.5-flash: Fallback, uses standard 15 RPM proactive rotation
+ * Note: gemini-2.5-flash-lite is intentionally excluded — it shares the same
+ * quota as gemini-3.1-flash-lite-preview, so keeping both would waste quota.
  */
 export const MODEL_FALLBACK_CHAIN = [
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite'
+  'gemini-3.1-flash-lite-preview',
+  'gemini-2.5-flash'
 ];
+
+/**
+ * Proactive call-count threshold per model.
+ * After this many successful calls, the bot will proactively switch to the
+ * next model in MODEL_FALLBACK_CHAIN rather than waiting for a 429 error.
+ * Models not listed here use only reactive switching (on actual 429 errors).
+ */
+export const MODEL_CALL_THRESHOLDS = {
+  'gemini-3.1-flash-lite-preview': 500  // Switch to 2.5-flash after 500 calls
+};
 
 /**
  * Rate limit error identifiers
@@ -180,6 +195,7 @@ export default {
   MODELS,
   GEMINI_3_MODELS,
   MODEL_FALLBACK_CHAIN,
+  MODEL_CALL_THRESHOLDS,
   RATE_LIMIT_ERRORS,
   safetySettings,
   getGenerationConfig,
