@@ -577,12 +577,29 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 // Handle uncaught errors
 process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
-  gracefulShutdown('uncaughtException');
+  // Only crash for truly fatal errors - not for common async errors
+  const fatalPatterns = ['ENOMEM', 'ENOSPC', 'MODULE_NOT_FOUND'];
+  const isFatal = fatalPatterns.some(p => error.message?.includes(p) || error.code?.includes?.(p));
+  if (isFatal) {
+    gracefulShutdown('uncaughtException');
+  }
+  // Otherwise log and continue - the event loop is not corrupted
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-  gracefulShutdown('unhandledRejection');
+  // Unhandled promise rejections are NOT process-corrupting - just log them.
+  // Common sources: Discord API errors (Unknown Interaction, Missing Permissions),
+  // network timeouts, etc. None of these warrant killing the whole bot.
+  const message = reason?.message || String(reason);
+  const isDiscordError = reason?.code && typeof reason.code === 'number';
+  
+  if (isDiscordError) {
+    // Discord errors (Unknown Interaction 10062, Missing Permissions 50013, etc.)
+    console.warn(`⚠️ Unhandled Discord error [${reason.code}]: ${message}`);
+  } else {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  }
+  // Never call gracefulShutdown here - it would kill the bot on any stray rejected promise
 });
 
 // ============================================================================

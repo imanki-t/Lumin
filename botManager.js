@@ -318,7 +318,7 @@ const keyCooldowns = new Map();
  * @type {Map<string, number>}
  */
 const modelGlobalCallCounts = new Map();
-MODEL_FALLBACK_CHAIN.forEach(m => modelGlobalCallCounts.set(m, 0));
+(MODEL_FALLBACK_CHAIN || []).forEach(m => modelGlobalCallCounts.set(m, 0));
 
 /**
  * Per-model per-key rate limit tracking
@@ -685,18 +685,18 @@ async function withRetryPerModel(apiCall, initialModelName) {
         stats.successfulRequests++;
       }
 
-      // Track global call count and proactively switch if threshold reached
+      // Track global call count and proactively switch if threshold reached.
+      // Uses optional chaining (?.) so this is safe even if config.js hasn't
+      // been updated yet and MODEL_CALL_THRESHOLDS is undefined.
       const newCount = (modelGlobalCallCounts.get(currentModel) || 0) + 1;
       modelGlobalCallCounts.set(currentModel, newCount);
-      const callThreshold = MODEL_CALL_THRESHOLDS[currentModel];
+      const callThreshold = MODEL_CALL_THRESHOLDS?.[currentModel];
       if (callThreshold && newCount >= callThreshold) {
         const nextModelIdx = (MODEL_FALLBACK_CHAIN.indexOf(currentModel) + 1) % MODEL_FALLBACK_CHAIN.length;
         const nextModel = MODEL_FALLBACK_CHAIN[nextModelIdx];
         if (nextModel && nextModel !== currentModel) {
           console.log(`🔄 Proactive switch: ${currentModel} hit ${callThreshold} calls → switching to ${nextModel} (next key rotation will reset)`);
-          // Reset counter for this model so it can be used again after key rotation
           modelGlobalCallCounts.set(currentModel, 0);
-          // Mark it on cooldown for current key so the fallback chain picks up nextModel
           setModelCooldown(currentKeyIdx, currentModel, RATE_LIMIT_CONFIG.COOLDOWN_DURATION_MS);
         }
       }
@@ -2093,20 +2093,10 @@ async function gracefulShutdown(signal) {
   }
 }
 
-// Register shutdown handlers
+// Register shutdown handlers (SIGINT/SIGTERM only - uncaughtException/unhandledRejection
+// are handled in index.js to avoid duplicate handlers and double-shutdown races)
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-
-// Handle uncaught errors
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-  gracefulShutdown('uncaughtException');
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-  gracefulShutdown('unhandledRejection');
-});
 
 // ============================================================================
 // EXPORTS
