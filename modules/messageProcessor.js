@@ -16,9 +16,10 @@ import { updateEmbed, sendAsTextFile } from './responseHandler.js';
 const TYPING_INTERVAL_MS = 4000;
 const TYPING_TIMEOUT_MS = 120000;
 const MAX_USER_QUEUE_SIZE = 5;
-// Send the first visible message after only ~20 words so users see something fast.
-// The message will keep updating via DEBOUNCE as more tokens stream in.
-const WORD_THRESHOLD_FOR_INITIAL_MESSAGE = 20;
+// Only send the first visible message once ~150 characters have streamed in.
+// This matches the previous behaviour and prevents Discord from showing "(edited)"
+// on nearly every response — the message is far enough along that few/no edits follow.
+const CHAR_THRESHOLD_FOR_INITIAL_MESSAGE = 150;
 // How often the in-progress stream message is edited (ms). Lower = more responsive.
 const MESSAGE_UPDATE_DEBOUNCE_MS = 350;
 
@@ -1635,7 +1636,7 @@ async function handleModelResponse(
           contents: [...(history || []).filter(Boolean), { role: 'user', parts: (parts || []).filter(Boolean) }], 
           config: {
             systemInstruction: systemInstruction,
-            ...generationConfig,
+            ...(generationConfig || {}),
             tools: tools
           },
           safetySettings
@@ -1681,9 +1682,8 @@ async function handleModelResponse(
             finalResponse += combinedText;
             tempResponse += combinedText;
 
-            const currentWordCount = tempResponse.trim().split(/\s+/).length;
 
-            if (!botMessage && currentWordCount > WORD_THRESHOLD_FOR_INITIAL_MESSAGE) {
+            if (!botMessage && tempResponse.length > CHAR_THRESHOLD_FOR_INITIAL_MESSAGE) {
               try {
                 if (shouldForceReply()) {
                   botMessage = await originalMessage.reply({ content: tempResponse });
@@ -1745,7 +1745,7 @@ async function handleModelResponse(
               contents: [...(history || []).filter(Boolean), { role: 'user', parts: (functionTurnParts || []).filter(Boolean) }],
               config: { 
                 systemInstruction: systemInstruction, 
-                ...generationConfig, 
+                ...(generationConfig || {}), 
                 tools: tools 
               },
               safetySettings
@@ -1787,9 +1787,8 @@ async function handleModelResponse(
                 finalResponse += combinedText;
                 tempResponse += combinedText;
 
-                const currentWordCount = tempResponse.trim().split(/\s+/).length;
 
-                if (!botMessage && currentWordCount > WORD_THRESHOLD_FOR_INITIAL_MESSAGE) {
+                if (!botMessage && tempResponse.length > CHAR_THRESHOLD_FOR_INITIAL_MESSAGE) {
                   try {
                     if (shouldForceReply()) {
                       botMessage = await originalMessage.reply({ content: tempResponse });
