@@ -248,7 +248,7 @@ const typingManager = new TypingManager();
 function cleanHistoryFiles(history) {
   return history.map(entry => ({
     role: entry.role,
-    parts: entry.parts.map(part => {
+    parts: (entry.parts || entry.content || []).map(part => {
       if (part.fileUri || part.fileData) {
         return {
           text: CONTEXT_MARKERS.ATTACHMENT_UNAVAILABLE
@@ -1632,7 +1632,7 @@ async function handleModelResponse(
 
         const request = {
           model: modelName,
-          contents: [...history, { role: 'user', parts }], 
+          contents: [...(history || []).filter(Boolean), { role: 'user', parts: (parts || []).filter(Boolean) }], 
           config: {
             systemInstruction: systemInstruction,
             ...generationConfig,
@@ -1742,7 +1742,7 @@ async function handleModelResponse(
 
             const nextRequest = {
               model: modelName,
-              contents: [...history, { role: 'user', parts: functionTurnParts }],
+              contents: [...(history || []).filter(Boolean), { role: 'user', parts: (functionTurnParts || []).filter(Boolean) }],
               config: { 
                 systemInstruction: systemInstruction, 
                 ...generationConfig, 
