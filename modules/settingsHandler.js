@@ -170,6 +170,8 @@ export async function handleSelectMenuInteraction(interaction) {
     }
     state.userSettings[userId].selectedModel = selectedModel;
     await persistUser(userId);
+    await showUserSettings(interaction, true);
+  } else if (interaction.customId === 'server_model_select') {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
       return sendPermError(interaction);
     }
