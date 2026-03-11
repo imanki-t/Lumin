@@ -19,7 +19,7 @@ import {
 import { Logger }  from '../../core/Logger.js';
 import { Embeds, addGroundingFields, addUrlContextFields, GOOGLE_AI_ICON } from '../shared/embedBuilder.js';
 import { executeFunctionCalls }         from '../functions/FunctionExecutor.js';
-import { getGenerationConfig, RATE_LIMIT_ERRORS, MODEL_FALLBACK_CHAIN } from '../config.js';
+import { getGenerationConfig, RATE_LIMIT_ERRORS, MODEL_FALLBACK_CHAIN } from '../../modules/config.js';
 import { extractFileText }              from './PromptBuilder.js';
 import { processPromptAndMediaAttachments } from './MediaHandler.js';
 import { saveMessageHistory }           from './HistoryManager.js';

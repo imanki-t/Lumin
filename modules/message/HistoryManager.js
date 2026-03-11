@@ -6,7 +6,7 @@
 
 import { chatHistoryLock, updateChatHistory, state } from '../../managers/BotManager.js';
 import * as db        from '../../database.js';
-import { memorySystem } from '../../memorySystem.js';
+import { memorySystem } from '../../memory/MemorySystem.js';
 import { Logger }      from '../../core/Logger.js';
 
 const logger = Logger.get('HistoryManager');

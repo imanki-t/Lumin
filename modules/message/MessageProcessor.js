@@ -15,10 +15,10 @@ import {
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_USER_SETTINGS
 } from '../../managers/BotManager.js';
-import { memorySystem }  from '../../memorySystem.js';
+import { memorySystem }  from '../../memory/MemorySystem.js';
 import { Logger }         from '../../core/Logger.js';
 import { Embeds }         from '../shared/embedBuilder.js';
-import { MODELS, safetySettings, DEFAULT_MODEL } from '../config.js';
+import { MODELS, safetySettings, DEFAULT_MODEL } from '../../modules/config.js';
 import { typingManager, handleModelResponse } from './ResponseHandler.js';
 import { prepareMessageContent, extractFileText } from './PromptBuilder.js';
 import { processPromptAndMediaAttachments, isSupportedAttachment } from './MediaHandler.js';
@@ -344,7 +344,7 @@ export async function processUserQueue(userId) {
     try {
       if (currentItem.isChatInputCommand?.()) {
         // Slash command queued via the old search path
-        const { executeSearchInteraction } = await import('../searchCommand.js');
+        const { executeSearchInteraction } = await import('../../commands/search.js');
         await executeSearchInteraction(currentItem);
         userQueueData.queue.shift();
       } else {
