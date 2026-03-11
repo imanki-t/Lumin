@@ -165,8 +165,8 @@ export async function showUserSettings(interaction, isUpdate = false) {
     .setPlaceholder('Select AI Model')
     .addOptions(
       new StringSelectMenuOptionBuilder()
-        .setLabel('Gemini 2.5 Flash').setDescription('Latest AI model — Pro-level intelligence at Flash speed')
-        .setValue('gemini-2.5-flash').setEmoji('⚡').setDefault(selectedModel === 'gemini-2.5-flash')
+        .setLabel('Gemini 3.1 Flash Lite').setDescription('Latest AI model — Pro-level intelligence at Flash speed')
+        .setValue('gemini-3.1-flash-lite-preview').setEmoji('⚡').setDefault(selectedModel === 'gemini-2.5-flash')
     );
 
   const responseFormatSelect = new StringSelectMenuBuilder()
