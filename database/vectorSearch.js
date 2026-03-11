@@ -1,0 +1,186 @@
+/**
+ * @fileoverview Vector search operations and personal-data context helpers
+ *               used by the RAG memory system.
+ * @module database/vectorSearch
+ */
+
+import { Logger }                          from '../core/Logger.js';
+import { COLLECTIONS, VECTOR_SEARCH_CONFIG,
+         getCollection }                   from './connection.js';
+
+const logger = Logger.get('VectorSearch');
+
+// ============================================================================
+// VECTOR SEARCH
+// ============================================================================
+
+/**
+ * Find similar memories using Atlas $vectorSearch.
+ * Returns null (not throws) when the index is missing — callers fall back to
+ * keyword search.
+ *
+ * @param {string}   historyId      - History identifier for the filter
+ * @param {number[]} queryEmbedding - Dense vector from the embedding model
+ * @param {number}   [limit=5]      - Maximum results to return
+ * @returns {Promise<Array|null>}
+ */
+export async function findSimilarMemories(
+  historyId,
+  queryEmbedding,
+  limit = VECTOR_SEARCH_CONFIG.DEFAULT_LIMIT
+) {
+  try {
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index:         VECTOR_SEARCH_CONFIG.INDEX_NAME,
+          path:          VECTOR_SEARCH_CONFIG.PATH,
+          queryVector:   queryEmbedding,
+          numCandidates: limit * VECTOR_SEARCH_CONFIG.NUM_CANDIDATES_MULTIPLIER,
+          limit,
+          filter: { 'metadata.historyId': { $eq: historyId } }
+        }
+      },
+      {
+        $project: {
+          _id:       0,
+          messages:  1,
+          timestamp: 1,
+          text:      1,
+          metadata:  1,
+          score: { $meta: 'vectorSearchScore' }
+        }
+      }
+    ];
+
+    return await getCollection(COLLECTIONS.MEMORY_ENTRIES).aggregate(pipeline).toArray();
+
+  } catch (error) {
+    if (error.codeName === 'IndexNotFound' || error.message?.includes('$vectorSearch')) {
+      logger.info('Vector search index not available — using fallback search');
+      return null;
+    }
+    logger.error('Vector search error', error);
+    return null;
+  }
+}
+
+/**
+ * Find similar memories with additional userId / guildId filters.
+ *
+ * @param {string}   historyId
+ * @param {number[]} queryEmbedding
+ * @param {number}   [limit=5]
+ * @param {{ userId?: string, guildId?: string }} [extraFilter={}]
+ * @returns {Promise<Array|null>}
+ */
+export async function findSimilarMemoriesWithFilter(
+  historyId,
+  queryEmbedding,
+  limit = VECTOR_SEARCH_CONFIG.DEFAULT_LIMIT,
+  extraFilter = {}
+) {
+  try {
+    const filter = { 'metadata.historyId': { $eq: historyId } };
+    if (extraFilter.userId)  filter['metadata.userId']  = { $eq: extraFilter.userId };
+    if (extraFilter.guildId) filter['metadata.guildId'] = { $eq: extraFilter.guildId };
+
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index:         VECTOR_SEARCH_CONFIG.INDEX_NAME,
+          path:          VECTOR_SEARCH_CONFIG.PATH,
+          queryVector:   queryEmbedding,
+          numCandidates: limit * VECTOR_SEARCH_CONFIG.NUM_CANDIDATES_MULTIPLIER,
+          limit,
+          filter
+        }
+      },
+      {
+        $project: {
+          _id:       0,
+          messages:  1,
+          timestamp: 1,
+          text:      1,
+          metadata:  1,
+          score: { $meta: 'vectorSearchScore' }
+        }
+      }
+    ];
+
+    return await getCollection(COLLECTIONS.MEMORY_ENTRIES).aggregate(pipeline).toArray();
+
+  } catch (error) {
+    if (error.codeName === 'IndexNotFound' || error.message?.includes('$vectorSearch')) {
+      logger.info('Vector search index not available for filtered search');
+      return null;
+    }
+    logger.error('Filtered vector search error', error);
+    return null;
+  }
+}
+
+// ============================================================================
+// PERSONAL DATA CONTEXT HELPERS (used by RAG prompt builder)
+// ============================================================================
+
+/**
+ * Get a user's birthday data for personal context injection.
+ * @param {string} userId
+ * @returns {Promise<{ month: number, day: number, name: string }|null>}
+ */
+export async function getBirthday(userId) {
+  try {
+    const doc = await getCollection(COLLECTIONS.BIRTHDAYS).findOne({ userId });
+    if (!doc) return null;
+    return { month: doc.month, day: doc.day, name: doc.name };
+  } catch (error) {
+    logger.error('Error getting birthday', error);
+    return null;
+  }
+}
+
+/**
+ * Get a user's active reminders for context injection.
+ * @param {string} userId
+ * @returns {Promise<Array>}
+ */
+export async function getUserReminders(userId) {
+  try {
+    return await getCollection(COLLECTIONS.REMINDERS).find({ userId, active: true }).toArray();
+  } catch (error) {
+    logger.error('Error getting user reminders', error);
+    return [];
+  }
+}
+
+/**
+ * Get a user's compliment count for personal context injection.
+ * @param {string} userId
+ * @returns {Promise<number>}
+ */
+export async function getComplimentCount(userId) {
+  try {
+    const doc = await getCollection(COLLECTIONS.COMPLIMENTS).findOne({ userId });
+    return doc?.count ?? 0;
+  } catch (error) {
+    logger.error('Error getting compliment count', error);
+    return 0;
+  }
+}
+
+/**
+ * Get a user's daily quote configuration for context injection.
+ * @param {string} userId
+ * @returns {Promise<{ active: boolean, category: string, time: string }|null>}
+ */
+export async function getUserDailyQuote(userId) {
+  try {
+    const doc = await getCollection(COLLECTIONS.DAILY_QUOTES).findOne({ userId });
+    if (!doc) return null;
+    return { active: doc.active, category: doc.category, time: doc.time };
+  } catch (error) {
+    logger.error('Error getting daily quote', error);
+    return null;
+  }
+}
