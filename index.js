@@ -32,13 +32,13 @@ import { Logger }       from './core/Logger.js';
 import { Embeds }       from './modules/shared/embedBuilder.js';
 import { cleanTemp, startPeriodicCleanup } from './modules/shared/tempFileManager.js';
 
-import { processUserQueue }               from './modules/messageProcessor.js';
+import { processUserQueue }               from './modules/message/MessageProcessor.js';
 import {
   handleButtonInteraction,
   handleSelectMenuInteraction,
-  handleModalSubmit
-} from './modules/settingsHandler.js';
-import { handleSearchCommand }            from './modules/searchCommand.js';
+  handleModalSubmit,
+  showMainSettings
+} from './modules/settings/SettingsRouter.js';
 import { commands }                       from './commands.js';
 import {
   initializeScheduledTasks,
@@ -323,10 +323,9 @@ async function handleCommandInteraction(interaction) {
 
   const commandHandlers = {
     settings: async (i) => {
-      const { showMainSettings } = await import('./modules/settingsHandler.js');
       await showMainSettings(i, false);
     },
-    search:      handleSearchCommand,
+    search:      handleNewCommands,
     birthday:    handleNewCommands,
     reminder:    handleNewCommands,
     quote:       handleNewCommands,
