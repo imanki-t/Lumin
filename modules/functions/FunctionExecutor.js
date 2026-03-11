@@ -8,7 +8,7 @@
 import * as db                   from '../../database/index.js';
 import { memorySystem }          from '../../memory/MemorySystem.js';
 import { state, saveStateToFile, client } from '../../managers/BotManager.js';
-import { scheduleReminder }      from '../../commands/reminder.js';
+import { scheduleReminder }      from '../../commands/reminder/ReminderScheduler.js';
 import { parseRelativeTime }     from '../../utils.js';
 import { formatDuration }        from '../shared/messageFormatter.js';
 import { Logger }                from '../../core/Logger.js';
