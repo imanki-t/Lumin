@@ -150,10 +150,10 @@ function rotateActivity() {
 // ============================================================================
 
 /**
- * BUG FIX: was `client.once('clientReady', ...)` — 'clientReady' does not exist
- * in Discord.js v14.  The correct event is 'ready'.
+ * 'clientReady' is the correct event name in Discord.js v14+.
+ * 'ready' is deprecated and will be removed in v15.
  */
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   logger.info(`Logged in as ${client.user.tag}`);
 
   // Register global slash commands.
