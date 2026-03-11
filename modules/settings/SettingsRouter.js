@@ -7,7 +7,7 @@
 
 import { EmbedBuilder, MessageFlags } from 'discord.js';
 // BUG FIX: was a dynamic import inside every handler call — now static
-import { initializeBlacklistForGuild } from '../utils.js';
+import { initializeBlacklistForGuild } from '../../utils.js';
 import { state }                        from '../../managers/BotManager.js';
 import { Logger }                       from '../../core/Logger.js';
 
