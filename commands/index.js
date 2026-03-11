@@ -120,7 +120,6 @@ import {
 
 // ─── Search ──────────────────────────────────────────────────────────────────
 import {
-  searchCommand,
   handleSearchCommand
 } from './search.js';
 
@@ -310,6 +309,5 @@ export {
   gameCommand,
   timezoneCommand,
   summaryCommand,
-  searchCommand,
   realiveCommand
 };
