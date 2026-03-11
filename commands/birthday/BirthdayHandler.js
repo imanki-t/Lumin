@@ -1,1 +1,649 @@
+/**
+ * @fileoverview /birthday command — add, remove and list birthday reminders.
+ *               Pure interaction handler; scheduling lives in BirthdayScheduler.js.
+ * @module commands/birthday/BirthdayHandler
+ */
 
+import {
+  EmbedBuilder,
+  MessageFlags,
+  ButtonBuilder,
+  ButtonStyle,
+  ActionRowBuilder,
+  StringSelectMenuBuilder
+} from 'discord.js';
+
+import { state, saveStateToFile }    from '../../managers/BotManager.js';
+import { memorySystem }               from '../../memory/MemorySystem.js';
+import * as db                        from '../../database/index.js';
+import { Logger }                     from '../../core/Logger.js';
+
+const logger = Logger.get('BirthdayHandler');
+
+const MAX_BIRTHDAYS_PER_USER = 5;
+const ITEMS_PER_PAGE         = 10;
+const MENU_EXPIRY_MS         = 5 * 60 * 1000;
+
+// ============================================================================
+// COMMAND DEFINITION
+// ============================================================================
+
+export const birthdayCommand = {
+  name:        'birthday',
+  description: 'Manage your birthday reminders (max 5 birthdays)',
+  options: [
+    {
+      name:        'action',
+      description: 'What do you want to do?',
+      type:        3,
+      required:    true,
+      choices: [
+        { name: 'Set Birthday',    value: 'set'    },
+        { name: 'Remove Birthday', value: 'remove' },
+        { name: 'List Birthdays',  value: 'list'   }
+      ]
+    }
+  ]
+};
+
+// ============================================================================
+// ENTRY POINT
+// ============================================================================
+
+/**
+ * @param {import('discord.js').CommandInteraction} interaction
+ */
+export async function handleBirthdayCommand(interaction) {
+  try {
+    const action = interaction.options.getString('action');
+    if      (action === 'set')    await showBirthdaySetup(interaction);
+    else if (action === 'remove') await removeBirthday(interaction);
+    else if (action === 'list')   await listBirthdays(interaction, 0);
+  } catch (error) {
+    logger.error('handleBirthdayCommand failed', error);
+    await sendError(interaction, 'An error occurred while processing the birthday command.');
+  }
+}
+
+// ============================================================================
+// SELECT MENU HANDLERS
+// ============================================================================
+
+/**
+ * Month selected → show day pickers.
+ * @param {import('discord.js').StringSelectMenuInteraction} interaction
+ */
+export async function handleBirthdayMonthSelect(interaction) {
+  try {
+    const month   = interaction.values[0];
+    const maxDays = getDaysInMonth(month);
+
+    const embed = new EmbedBuilder()
+      .setColor(0xFF69B4)
+      .setTitle('🎂 Birthday Setup — Day')
+      .setDescription(`You selected **${getMonthName(month)}**.\nNow select the day of the month:`);
+
+    // Two select menus: days 1-15 and 16-maxDays
+    const daySelect1 = new StringSelectMenuBuilder()
+      .setCustomId(`birthday_day_${month}_1`)
+      .setPlaceholder('Select day (1–15)')
+      .addOptions(
+        Array.from({ length: 15 }, (_, i) => ({
+          label: String(i + 1),
+          value: String(i + 1).padStart(2, '0')
+        }))
+      );
+
+    const daySelect2 = new StringSelectMenuBuilder()
+      .setCustomId(`birthday_day_${month}_2`)
+      .setPlaceholder(`Select day (16–${maxDays})`)
+      .addOptions(
+        Array.from({ length: maxDays - 15 }, (_, i) => ({
+          label: String(i + 16),
+          value: String(i + 16).padStart(2, '0')
+        }))
+      );
+
+    await interaction.update({
+      embeds:     [embed],
+      components: [
+        new ActionRowBuilder().addComponents(daySelect1),
+        new ActionRowBuilder().addComponents(daySelect2)
+      ]
+    });
+  } catch (error) {
+    logger.error('handleBirthdayMonthSelect failed', error);
+    await sendError(interaction, 'Failed to update birthday month selection.', true);
+  }
+}
+
+/**
+ * Day selected → ask whose birthday it is.
+ * @param {import('discord.js').StringSelectMenuInteraction} interaction
+ */
+export async function handleBirthdayDaySelect(interaction) {
+  try {
+    const parts = interaction.customId.split('_');
+    const month = parts[2];
+    const day   = interaction.values[0];
+
+    const embed = new EmbedBuilder()
+      .setColor(0xFF69B4)
+      .setTitle("🎂 Birthday Setup — Person's Name")
+      .setDescription(`Birthday: **${getMonthName(month)} ${parseInt(day)}**\n\nWhose birthday is this?`);
+
+    const nameSelect = new StringSelectMenuBuilder()
+      .setCustomId(`birthday_name_${month}_${day}`)
+      .setPlaceholder('Choose whose birthday this is')
+      .addOptions(
+        { label: 'My Birthday',             value: 'self',  description: 'This is your own birthday',        emoji: '🎂' },
+        { label: "Someone Else's Birthday", value: 'other', description: "Track someone else's birthday", emoji: '👥' }
+      );
+
+    await interaction.update({
+      embeds:     [embed],
+      components: [new ActionRowBuilder().addComponents(nameSelect)]
+    });
+  } catch (error) {
+    logger.error('handleBirthdayDaySelect failed', error);
+    await sendError(interaction, 'Failed to update birthday day selection.', true);
+  }
+}
+
+/**
+ * Name type selected → ask notification preference.
+ * @param {import('discord.js').StringSelectMenuInteraction} interaction
+ */
+export async function handleBirthdayNameSelect(interaction) {
+  try {
+    const parts    = interaction.customId.split('_');
+    const month    = parts[2];
+    const day      = parts[3];
+    const nameType = interaction.values[0];
+    const guildId  = interaction.guild?.id;
+
+    const embed = new EmbedBuilder()
+      .setColor(0xFF69B4)
+      .setTitle('🎂 Birthday Setup — Notification Preferences')
+      .setDescription(
+        `Birthday: **${getMonthName(month)} ${parseInt(day)}**\n` +
+        `For: **${nameType === 'self' ? 'You' : 'Someone else'}**\n\n` +
+        `Where should I send birthday notifications?`
+      );
+
+    const preferenceSelect = new StringSelectMenuBuilder()
+      .setCustomId(`birthday_pref_${month}_${day}_${nameType}`)
+      .setPlaceholder('Choose notification preference');
+
+    if (guildId) {
+      preferenceSelect.addOptions(
+        { label: 'DMs Only',     value: 'dm',     description: 'Receive wishes in direct messages', emoji: '📬' },
+        { label: 'Server Only',  value: 'server', description: 'Get celebrated in the server',      emoji: '🎉' },
+        { label: 'Both',         value: 'both',   description: 'DM + Server celebration',           emoji: '🎊' }
+      );
+    } else {
+      preferenceSelect.addOptions(
+        { label: 'DM', value: 'dm', description: 'Receive wishes in direct messages', emoji: '📬' }
+      );
+    }
+
+    await interaction.update({
+      embeds:     [embed],
+      components: [new ActionRowBuilder().addComponents(preferenceSelect)]
+    });
+  } catch (error) {
+    logger.error('handleBirthdayNameSelect failed', error);
+    await sendError(interaction, 'Failed to update birthday name selection.', true);
+  }
+}
+
+/**
+ * Preference selected → persist the birthday entry.
+ * @param {import('discord.js').StringSelectMenuInteraction} interaction
+ */
+export async function handleBirthdayPrefSelect(interaction) {
+  try {
+    const parts      = interaction.customId.split('_');
+    const month      = parts[2];
+    const day        = parts[3];
+    const nameType   = parts[4];
+    const preference = interaction.values[0];
+    const userId     = interaction.user.id;
+    const guildId    = interaction.guild?.id;
+
+    if (!state.birthdays) state.birthdays = {};
+
+    const userBirthdays = Object.keys(state.birthdays).filter(k => k.startsWith(userId)).length;
+    if (userBirthdays >= MAX_BIRTHDAYS_PER_USER) {
+      const embed = new EmbedBuilder()
+        .setColor(0xFF5555)
+        .setTitle('❌ Birthday Limit Reached')
+        .setDescription(`You have reached the maximum limit of ${MAX_BIRTHDAYS_PER_USER} birthdays.`);
+      return interaction.update({ embeds: [embed], components: [] });
+    }
+
+    const birthdayKey = `${userId}_${month}_${day}`;
+    state.birthdays[birthdayKey] = {
+      month,
+      day,
+      preference,
+      guildId:       preference !== 'dm' ? guildId : null,
+      year:          null,
+      nameType,
+      ownerUsername: interaction.user.username
+    };
+
+    await db.saveBirthday(birthdayKey, state.birthdays[birthdayKey]);
+    await saveStateToFile();
+    memorySystem.invalidatePersonalDataCache(userId);
+
+    const prefText = { dm: 'DMs only', server: 'this server only', both: 'DMs and this server' }[preference];
+
+    const embed = new EmbedBuilder()
+      .setColor(0x00FF00)
+      .setTitle('✅ Birthday Saved!')
+      .setDescription(
+        `Birthday set for **${getMonthName(month)} ${parseInt(day)}**!\n\n` +
+        `You'll receive birthday notifications via: **${prefText}** 🎂`
+      )
+      .setFooter({ text: `${userBirthdays + 1}/${MAX_BIRTHDAYS_PER_USER} birthdays set • Change anytime with /birthday` });
+
+    await interaction.update({ embeds: [embed], components: [] });
+  } catch (error) {
+    logger.error('handleBirthdayPrefSelect failed', error);
+    await sendError(interaction, 'Failed to save birthday preference.', true);
+  }
+}
+
+/**
+ * Birthday chosen for deletion → remove it.
+ * @param {import('discord.js').StringSelectMenuInteraction} interaction
+ */
+export async function handleBirthdayDeleteSelect(interaction) {
+  try {
+    const birthdayKey = interaction.values[0];
+
+    if (!state.birthdays?.[birthdayKey]) {
+      const embed = new EmbedBuilder()
+        .setColor(0xFF5555)
+        .setTitle('❌ Birthday Not Found')
+        .setDescription('Could not find that birthday.');
+      return interaction.update({ embeds: [embed], components: [] });
+    }
+
+    const birthday = state.birthdays[birthdayKey];
+    delete state.birthdays[birthdayKey];
+    await db.deleteBirthday(birthdayKey);
+    await saveStateToFile();
+    memorySystem.invalidatePersonalDataCache(interaction.user.id);
+
+    const userId    = interaction.user.id;
+    const remaining = Object.keys(state.birthdays).filter(k => k.startsWith(userId)).length;
+
+    const embed = new EmbedBuilder()
+      .setColor(0x00FF00)
+      .setTitle('✅ Birthday Removed')
+      .setDescription(`Birthday on **${getMonthName(birthday.month)} ${parseInt(birthday.day)}** has been removed.`)
+      .setFooter({ text: `${remaining}/${MAX_BIRTHDAYS_PER_USER} birthdays remaining` });
+
+    await interaction.update({ embeds: [embed], components: [] });
+  } catch (error) {
+    logger.error('handleBirthdayDeleteSelect failed', error);
+    await sendError(interaction, 'Failed to delete birthday.', true);
+  }
+}
+
+// ============================================================================
+// PAGINATION BUTTON HANDLERS
+// ============================================================================
+
+/**
+ * @param {import('discord.js').ButtonInteraction} interaction
+ */
+export async function handleBirthdayListPrev(interaction) {
+  try {
+    const parts      = interaction.customId.split('_');
+    const currentPage = parseInt(parts[3]);
+    await interaction.deferUpdate();
+    await listBirthdays(interaction, Math.max(0, currentPage - 1));
+  } catch (error) {
+    logger.error('handleBirthdayListPrev failed', error);
+  }
+}
+
+/**
+ * @param {import('discord.js').ButtonInteraction} interaction
+ */
+export async function handleBirthdayListNext(interaction) {
+  try {
+    const parts      = interaction.customId.split('_');
+    const currentPage = parseInt(parts[3]);
+    await interaction.deferUpdate();
+    await listBirthdays(interaction, currentPage + 1);
+  } catch (error) {
+    logger.error('handleBirthdayListNext failed', error);
+  }
+}
+
+/**
+ * @param {import('discord.js').StringSelectMenuInteraction} interaction
+ */
+export async function handleBirthdayListJump(interaction) {
+  try {
+    await interaction.deferUpdate();
+    await listBirthdays(interaction, parseInt(interaction.values[0]));
+  } catch (error) {
+    logger.error('handleBirthdayListJump failed', error);
+  }
+}
+
+// ============================================================================
+// PRIVATE HELPERS
+// ============================================================================
+
+/** Show month picker to start setup flow. */
+async function showBirthdaySetup(interaction) {
+  try {
+    const userId = interaction.user.id;
+    if (!state.birthdays) state.birthdays = {};
+
+    const userBirthdays = Object.keys(state.birthdays).filter(k => k.startsWith(userId)).length;
+    if (userBirthdays >= MAX_BIRTHDAYS_PER_USER) {
+      const embed = new EmbedBuilder()
+        .setColor(0xFF5555)
+        .setTitle('❌ Birthday Limit Reached')
+        .setDescription(
+          `You have reached the maximum limit of ${MAX_BIRTHDAYS_PER_USER} birthdays.\n\n` +
+          'Please remove some birthdays before adding new ones using `/birthday action:remove`'
+        );
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor(0xFF69B4)
+      .setTitle('🎂 Birthday Setup')
+      .setDescription(
+        `Let's set up a birthday reminder!\n\n` +
+        `**Birthdays set:** ${userBirthdays}/${MAX_BIRTHDAYS_PER_USER}\n\n` +
+        `Please select the birth month first:`
+      )
+      .setFooter({ text: 'Your birthday will never be shared without permission' });
+
+    const monthSelect = new StringSelectMenuBuilder()
+      .setCustomId('birthday_month')
+      .setPlaceholder('Select birth month')
+      .addOptions(
+        { label: 'January',   value: '01', emoji: '❄️' },
+        { label: 'February',  value: '02', emoji: '💝' },
+        { label: 'March',     value: '03', emoji: '🌸' },
+        { label: 'April',     value: '04', emoji: '🌷' },
+        { label: 'May',       value: '05', emoji: '🌺' },
+        { label: 'June',      value: '06', emoji: '☀️' },
+        { label: 'July',      value: '07', emoji: '🎆' },
+        { label: 'August',    value: '08', emoji: '🏖️' },
+        { label: 'September', value: '09', emoji: '🍂' },
+        { label: 'October',   value: '10', emoji: '🎃' },
+        { label: 'November',  value: '11', emoji: '🍁' },
+        { label: 'December',  value: '12', emoji: '🎄' }
+      );
+
+    await interaction.reply({
+      embeds:     [embed],
+      components: [new ActionRowBuilder().addComponents(monthSelect)],
+      flags:      MessageFlags.Ephemeral
+    });
+
+    // Auto-clean the ephemeral reply after 5 minutes
+    setTimeout(() => interaction.deleteReply().catch(() => {}), MENU_EXPIRY_MS);
+
+  } catch (error) {
+    logger.error('showBirthdaySetup failed', error);
+    await sendError(interaction, 'Failed to start birthday setup.');
+  }
+}
+
+/** Show a delete-picker for the user's own birthdays. */
+async function removeBirthday(interaction) {
+  try {
+    const userId = interaction.user.id;
+    if (!state.birthdays) state.birthdays = {};
+
+    const userBirthdays = Object.keys(state.birthdays).filter(k => k.startsWith(userId));
+    if (userBirthdays.length === 0) {
+      const embed = new EmbedBuilder()
+        .setColor(0xFF5555)
+        .setTitle('❌ No Birthdays Found')
+        .setDescription("You don't have any birthdays set up yet!\n\nUse `/birthday action:set` to add one.");
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor(0xFF6B6B)
+      .setTitle('🗑️ Remove Birthday')
+      .setDescription('Select which birthday to remove:');
+
+    const deleteSelect = new StringSelectMenuBuilder()
+      .setCustomId('birthday_delete_select')
+      .setPlaceholder('Choose birthday to remove')
+      .addOptions(
+        userBirthdays.slice(0, 25).map(key => {
+          const b = state.birthdays[key];
+          return {
+            label:       `${getMonthName(b.month)} ${parseInt(b.day)}`,
+            description: b.nameType === 'self' ? 'Your birthday' : "Someone else's birthday",
+            value:       key
+          };
+        })
+      );
+
+    await interaction.reply({
+      embeds:     [embed],
+      components: [new ActionRowBuilder().addComponents(deleteSelect)],
+      flags:      MessageFlags.Ephemeral
+    });
+
+    setTimeout(() => interaction.deleteReply().catch(() => {}), MENU_EXPIRY_MS);
+
+  } catch (error) {
+    logger.error('removeBirthday failed', error);
+    await sendError(interaction, 'Failed to load birthdays for removal.');
+  }
+}
+
+/**
+ * Render a paginated birthday list.
+ * Works for both DMs (own birthdays only) and servers (shared birthdays).
+ * @param {import('discord.js').Interaction} interaction
+ * @param {number} page  Zero-based page index.
+ */
+async function listBirthdays(interaction, page = 0) {
+  try {
+    const userId  = interaction.user.id;
+    const guildId = interaction.guild?.id;
+    const isDM    = !guildId;
+
+    if (!state.birthdays || Object.keys(state.birthdays).length === 0) {
+      const embed = new EmbedBuilder()
+        .setColor(0xFF5555)
+        .setTitle('📅 No Birthdays')
+        .setDescription('No birthdays have been set yet!\n\nBe the first with `/birthday action:set`');
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    }
+
+    if (isDM) {
+      // ---------- DM view: only the caller's own birthdays ----------
+      const userBirthdays = Object.entries(state.birthdays)
+        .filter(([key]) => key.startsWith(userId))
+        .map(([, data]) => ({
+          month:     data.month,
+          day:       data.day,
+          monthNum:  parseInt(data.month),
+          nameType:  data.nameType,
+          preference: data.preference
+        }))
+        .sort((a, b) => a.monthNum - b.monthNum || parseInt(a.day) - parseInt(b.day));
+
+      if (userBirthdays.length === 0) {
+        const embed = new EmbedBuilder()
+          .setColor(0xFF5555)
+          .setTitle('📅 No Birthdays')
+          .setDescription("You haven't set any birthdays yet.\n\nUse `/birthday action:set` to add one!");
+        return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      }
+
+      const list = userBirthdays
+        .map(b => {
+          const forWhom  = b.nameType === 'self' ? 'You' : 'Someone else';
+          const location = b.preference === 'dm' ? 'DMs' : b.preference === 'both' ? 'DMs & Server' : 'Server';
+          return `🎂 **${getMonthName(b.month)} ${parseInt(b.day)}** — ${forWhom} (${location})`;
+        })
+        .join('\n');
+
+      const embed = new EmbedBuilder()
+        .setColor(0xFF69B4)
+        .setTitle('🎉 Your Birthdays')
+        .setDescription(list)
+        .setFooter({ text: `${userBirthdays.length}/${MAX_BIRTHDAYS_PER_USER} birthdays set` });
+
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    }
+
+    // ---------- Server view: paginated, shared birthdays ----------
+    const today = new Date();
+    const currentMonth = today.getMonth() + 1;
+    const currentDay   = today.getDate();
+
+    const all = Object.values(state.birthdays)
+      .filter(d => d.guildId === guildId && (d.preference === 'server' || d.preference === 'both'))
+      .map(d => ({ username: d.ownerUsername ?? 'User', month: d.month, day: d.day, monthNum: parseInt(d.month) }));
+
+    if (all.length === 0) {
+      const embed = new EmbedBuilder()
+        .setColor(0xFF5555)
+        .setTitle('📅 No Server Birthdays')
+        .setDescription('No birthdays are set to be celebrated in this server.');
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    }
+
+    // Sort: upcoming first, wrap around past
+    const upcoming = all.filter(b =>
+      b.monthNum > currentMonth || (b.monthNum === currentMonth && parseInt(b.day) >= currentDay)
+    ).sort((a, b) => a.monthNum - b.monthNum || parseInt(a.day) - parseInt(b.day));
+
+    const past = all.filter(b =>
+      b.monthNum < currentMonth || (b.monthNum === currentMonth && parseInt(b.day) < currentDay)
+    ).sort((a, b) => a.monthNum - b.monthNum || parseInt(a.day) - parseInt(b.day));
+
+    const sorted     = [...upcoming, ...past];
+    const totalPages = Math.ceil(sorted.length / ITEMS_PER_PAGE);
+    const safePage   = Math.max(0, Math.min(page, totalPages - 1));
+    const pageItems  = sorted.slice(safePage * ITEMS_PER_PAGE, (safePage + 1) * ITEMS_PER_PAGE);
+
+    const list = pageItems
+      .map(b => `🎂 **${b.username}** — ${getMonthName(b.month)} ${parseInt(b.day)}`)
+      .join('\n');
+
+    const embed = new EmbedBuilder()
+      .setColor(0xFF69B4)
+      .setTitle('🎉 Server Birthdays')
+      .setDescription(list)
+      .setFooter({
+        text: `Page ${safePage + 1}/${totalPages} • ${sorted.length} birthday${sorted.length !== 1 ? 's' : ''} registered`
+      });
+
+    const components = [];
+
+    if (totalPages > 1) {
+      const prevBtn = new ButtonBuilder()
+        .setCustomId(`birthday_list_prev_${safePage}_${guildId}`)
+        .setLabel('Previous').setStyle(ButtonStyle.Primary).setEmoji('⬅️')
+        .setDisabled(safePage === 0);
+
+      const nextBtn = new ButtonBuilder()
+        .setCustomId(`birthday_list_next_${safePage}_${guildId}`)
+        .setLabel('Next').setStyle(ButtonStyle.Primary).setEmoji('➡️')
+        .setDisabled(safePage === totalPages - 1);
+
+      components.push(new ActionRowBuilder().addComponents(prevBtn, nextBtn));
+
+      if (totalPages > 3) {
+        const pageSelect = new StringSelectMenuBuilder()
+          .setCustomId(`birthday_list_jump_${guildId}`)
+          .setPlaceholder(`Jump to page… (${safePage + 1}/${totalPages})`)
+          .addOptions(
+            Array.from({ length: Math.min(totalPages, 25) }, (_, i) => ({
+              label:       `Page ${i + 1}`,
+              value:       String(i),
+              description: `Show birthdays ${i * ITEMS_PER_PAGE + 1}–${Math.min((i + 1) * ITEMS_PER_PAGE, sorted.length)}`,
+              default:     i === safePage
+            }))
+          );
+        components.push(new ActionRowBuilder().addComponents(pageSelect));
+      }
+    }
+
+    const replyMethod = interaction.replied || interaction.deferred ? 'editReply' : 'reply';
+    await interaction[replyMethod]({ embeds: [embed], components });
+
+    // Auto-expire pagination buttons
+    if (components.length > 0) {
+      setTimeout(async () => {
+        try {
+          const msg = await interaction.fetchReply();
+          if (msg?.components.length > 0) await interaction.editReply({ components: [] }).catch(() => {});
+        } catch {}
+      }, MENU_EXPIRY_MS);
+    }
+
+  } catch (error) {
+    logger.error('listBirthdays failed', error);
+    await sendError(interaction, 'Failed to list birthdays.');
+  }
+}
+
+/**
+ * Send a standardised error response.
+ * @param {import('discord.js').Interaction} interaction
+ * @param {string}  message
+ * @param {boolean} [isUpdate=false]  Use interaction.update() instead of reply/editReply.
+ */
+async function sendError(interaction, message, isUpdate = false) {
+  const embed = new EmbedBuilder()
+    .setColor(0xFF0000)
+    .setTitle('❌ Error')
+    .setDescription(message);
+
+  try {
+    if (isUpdate) {
+      await interaction.update({ embeds: [embed], components: [] });
+    } else if (interaction.deferred || interaction.replied) {
+      await interaction.editReply({ embeds: [embed], components: [] });
+    } else {
+      await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    }
+  } catch (err) {
+    logger.error('sendError itself failed', err);
+  }
+}
+
+// ============================================================================
+// PURE UTILITIES
+// ============================================================================
+
+/** Max days in a given two-digit month string (e.g. '02' → 29). */
+function getDaysInMonth(month) {
+  const m = parseInt(month);
+  if (m === 2)                       return 29;
+  if ([4, 6, 9, 11].includes(m))    return 30;
+  return 31;
+}
+
+/** Convert a two-digit month string to its full name. */
+export function getMonthName(monthNum) {
+  if (!monthNum) return 'Unknown Month';
+  const months = [
+    'January','February','March','April','May','June',
+    'July','August','September','October','November','December'
+  ];
+  return months[parseInt(monthNum) - 1] ?? 'Unknown Month';
+}
