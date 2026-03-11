@@ -16,7 +16,7 @@ import { Logger }       from '../../core/Logger.js';
 
 // BUG FIX: was a dynamic import('./utils.js') inside processTextExtraction on
 // every call — now a static top-level import
-import { downloadAndReadFile } from '../utils.js';
+import { downloadAndReadFile } from '../../utils.js';
 
 import {
   MIME_TYPES, FILE_EXTENSIONS, CONVERSION_MESSAGES, ERROR_MESSAGES,
