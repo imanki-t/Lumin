@@ -9,8 +9,7 @@
 
 import { EmbedBuilder } from 'discord.js';
 
-import { state }               from '../../managers/BotManager.js';
-import { genAI }               from '../../managers/BotManager.js';
+import { state, genAI }  from '../../managers/BotManager.js';
 import { MODELS, DEFAULT_MODEL } from '../../modules/config.js';
 import { getUserTime }           from '../timezone.js';
 import { Logger }                from '../../core/Logger.js';
