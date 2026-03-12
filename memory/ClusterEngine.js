@@ -7,7 +7,7 @@
 
 import * as db from '../database/index.js';
 import { Logger } from '../core/Logger.js';
-import { embeddingService, truncateForSearch } from './EmbeddingService.js';
+import { embeddingService } from './EmbeddingService.js';
 
 const logger = Logger.get('ClusterEngine');
 
@@ -15,7 +15,8 @@ const logger = Logger.get('ClusterEngine');
 // CONSTANTS
 // ============================================================================
 
-const NUM_CLUSTERS               = 8;
+const MAX_CLUSTERS               = 20;  // hard ceiling for auto-scaling
+const NUM_CLUSTERS               = 8;   // baseline / minimum meaningful cluster count
 const MIN_MEMORIES_FOR_CLUSTERING = 240;
 const TOP_CLUSTERS_TO_SEARCH     = 3;
 const MIN_CLUSTER_SIMILARITY     = 0.45;
@@ -48,6 +49,8 @@ class ClusterEngine {
 
   /**
    * K-means++ centroid initialisation — better spread than random.
+   * Uses calculateSimilaritiesBatch for the distance computation so all
+   * centroid comparisons per memory happen in a single vectorised pass.
    *
    * @param {number[][]} embeddings
    * @param {number}     k
@@ -62,10 +65,10 @@ class ClusterEngine {
 
     // Subsequent centroids: probability proportional to squared distance
     for (let i = 1; i < k; i++) {
+      // Batch all centroid similarities for every embedding at once
       const distances = embeddings.map(emb => {
-        const minDist = Math.min(
-          ...centroids.map(c => 1 - embeddingService.cosineSimilarity(emb, c))
-        );
+        const sims   = embeddingService.calculateSimilaritiesBatch(emb, centroids);
+        const minDist = 1 - Math.max(...sims);   // cosine distance = 1 - max_similarity
         return minDist * minDist;
       });
 
@@ -86,6 +89,8 @@ class ClusterEngine {
 
   /**
    * Assign each memory to its nearest centroid by cosine similarity.
+   * Uses calculateSimilaritiesBatch per memory so all centroid comparisons
+   * happen in a single vectorised pass — eliminates the inner centroid loop.
    *
    * @param {object[]}   memories  - must have `.embedding` property
    * @param {number[][]} centroids
@@ -95,15 +100,13 @@ class ClusterEngine {
     const clusters = Array.from({ length: centroids.length }, () => []);
 
     for (let i = 0; i < memories.length; i++) {
-      const emb = memories[i].embedding;
-      let maxSim = -1;
+      // Single batch call replaces the inner per-centroid cosineSimilarity loop
+      const sims = embeddingService.calculateSimilaritiesBatch(memories[i].embedding, centroids);
       let best   = 0;
-
-      for (let j = 0; j < centroids.length; j++) {
-        const sim = embeddingService.cosineSimilarity(emb, centroids[j]);
-        if (sim > maxSim) { maxSim = sim; best = j; }
+      let maxSim = -1;
+      for (let j = 0; j < sims.length; j++) {
+        if (sims[j] > maxSim) { maxSim = sims[j]; best = j; }
       }
-
       clusters[best].push(i);
     }
 
@@ -197,7 +200,8 @@ class ClusterEngine {
    */
   async buildClusters(historyId) {
     try {
-      const memories = await db.getMemoryEntries(historyId, 1000);
+      // Lean fetch — embeddings + _id + timestamp only, no messages/text/metadata
+      const memories = await db.getMemoryEmbeddings(historyId, 1000);
 
       if (!memories || memories.length < MIN_MEMORIES_FOR_CLUSTERING) {
         logger.debug(
@@ -215,9 +219,12 @@ class ClusterEngine {
         return null;
       }
 
-      logger.debug(`Building clusters for ${historyId} (${validMemories.length} memories)`);
+      // Auto-scale: 1 cluster per 30 memories, between NUM_CLUSTERS and MAX_CLUSTERS
+      // 240 memories → 8 clusters, 600 → 20 (capped), 1000 → 20 (capped)
+      const k = Math.min(MAX_CLUSTERS, Math.max(NUM_CLUSTERS, Math.floor(validMemories.length / 30)));
 
-      const k             = Math.min(NUM_CLUSTERS, Math.floor(validMemories.length / 3));
+      logger.debug(`Building clusters for ${historyId} (${validMemories.length} memories, k=${k})`);
+
       const clusterResult = this.performKMeansClustering(validMemories, k);
 
       const clusterData = {
@@ -319,24 +326,25 @@ class ClusterEngine {
 
   /**
    * Score cluster centroids against a query and return the top-N most similar.
-   * Uses MRL-truncated (256-dim) vectors for the first-pass centroid scan —
-   * much cheaper than full 1536-dim comparison, especially as cluster count grows.
-   * Candidates are then re-ranked at full dimension inside searchWithinClustersParallel.
+   * Full-dimension comparison — truncation was negligible at ≤20 centroids and
+   * has been removed to avoid quality loss at 3072-dim embeddings.
+   * TOP_CLUSTERS_TO_SEARCH scales with total cluster count so larger histories
+   * still get proportional coverage.
    *
-   * @param {number[]}   queryEmbedding - Full 1536-dim query vector
-   * @param {number[][]} centroids       - Full 1536-dim centroid vectors
+   * @param {number[]}   queryEmbedding
+   * @param {number[][]} centroids
    * @returns {Array<{ clusterId: number, similarity: number }>}
    */
   findRelevantClusters(queryEmbedding, centroids) {
-    const shortQuery     = truncateForSearch(queryEmbedding);
-    const shortCentroids = centroids.map(truncateForSearch);
+    // Search more clusters as the total grows: 8→3, 12→4, 20→5
+    const topN = Math.min(Math.ceil(centroids.length * 0.25), TOP_CLUSTERS_TO_SEARCH + 2);
 
     return embeddingService
-      .calculateSimilaritiesBatch(shortQuery, shortCentroids)
+      .calculateSimilaritiesBatch(queryEmbedding, centroids)
       .map((similarity, idx) => ({ clusterId: idx, similarity }))
       .filter(c => c.similarity >= MIN_CLUSTER_SIMILARITY)
       .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, TOP_CLUSTERS_TO_SEARCH);
+      .slice(0, topN);
   }
 
   /**
@@ -477,11 +485,11 @@ class ClusterEngine {
           }));
       }
 
-      // Fallback: in-process vectorized search
-      const memoryEntries = await db.getMemoryEntries(historyId);
-      if (!memoryEntries?.length) return [];
+      // Fallback: in-process similarity search — lean fetch then hydrate winners only
+      const leanEntries = await db.getMemoryEmbeddings(historyId);
+      if (!leanEntries?.length) return [];
 
-      const validEntries = memoryEntries.filter(e =>
+      const validEntries = leanEntries.filter(e =>
         e.embedding && Array.isArray(e.embedding) && (e.timestamp || 0) < cutoffTimestamp
       );
       if (validEntries.length === 0) return [];
@@ -491,17 +499,31 @@ class ClusterEngine {
         validEntries.map(e => e.embedding)
       );
 
-      return validEntries
-        .map((entry, idx) => ({ ...entry, similarity: similarities[idx] }))
+      const winnerIds = validEntries
+        .map((entry, idx) => ({ _id: entry._id, similarity: similarities[idx] }))
         .filter(e => e.similarity >= MIN_SIMILARITY_THRESHOLD)
         .sort((a, b) => b.similarity - a.similarity)
-        .slice(0, MAX_RAG_RESULTS)
-        .map(e => ({
-          messages:  e.messages,
-          score:     e.similarity,
-          source:    'conversation-history',
-          timestamp: e.timestamp
-        }));
+        .slice(0, MAX_RAG_RESULTS);
+
+      if (winnerIds.length === 0) return [];
+
+      // Hydrate only the winners
+      const fullDocs = await db.getMemoryEntriesByIds(winnerIds.map(w => w._id));
+      const docById  = new Map(fullDocs.map(d => [String(d._id), d]));
+
+      return winnerIds
+        .map(w => {
+          const doc = docById.get(String(w._id));
+          if (!doc) return null;
+          return {
+            messages:  doc.messages,
+            score:     w.similarity,
+            source:    'conversation-history',
+            timestamp: doc.timestamp
+          };
+        })
+        .filter(Boolean);
+
     } catch (error) {
       logger.error('Standard vector search failed', error);
       return [];

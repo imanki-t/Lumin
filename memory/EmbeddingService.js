@@ -30,8 +30,8 @@ const MAX_CONCURRENT_EMBEDDINGS = 5;
 //                  scan over many centroids stays cheap; candidates are then
 //                  re-ranked with full EMBEDDING_DIM vectors.
 
-const EMBEDDING_DIM  = 1536;  // full stored vector
-const MRL_SHORT_DIM  = 256;   // fast centroid / first-pass dimension
+const EMBEDDING_DIM  = 3072;  // full stored vector (gemini-embedding-2-preview max)
+const MRL_SHORT_DIM  = 1536;  // available for future fast-pass use; not active in ClusterEngine
 
 // ── Per-modality feature flags ────────────────────────────────────────────────
 // Set to `true` to activate that modality in generateMultimodalEmbedding.
