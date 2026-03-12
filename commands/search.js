@@ -19,6 +19,7 @@ import { EmbedBuilder, MessageFlags } from 'discord.js';
 import {
   genAI,
   state,
+  requestQueues,          // FIX: direct import — avoids state.requestQueues stale-reference bug
   BOT_CONFIG,
   DEFAULT_USER_SETTINGS
 } from '../managers/BotManager.js';
@@ -332,7 +333,6 @@ export async function handleSearchCommand(interaction) {
     await interaction.deferReply();
 
     const userId       = interaction.user.id;
-    const requestQueues = state.requestQueues;   // direct reference, no getter
 
     if (!requestQueues.has(userId)) {
       requestQueues.set(userId, { queue: [], isProcessing: false });
