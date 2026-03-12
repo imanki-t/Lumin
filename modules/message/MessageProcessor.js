@@ -32,6 +32,9 @@ const logger = Logger.get('MessageProcessor');
 
 const COLORS = Object.freeze({ ERROR: 0xFF0000, INFO: 0x5865F2 });
 
+/** Maximum time (ms) a single queue item may run before it is forcibly cancelled. */
+const PROCESSING_TIMEOUT_MS = 6 * 60 * 1_000; // 6 minutes
+
 const CONTEXT_MARKERS = Object.freeze({
   QUEUED_MESSAGE: '[QUEUED MESSAGE',
   BATCH_SEPARATOR: '\n\n' + '='.repeat(50) + '\n\n'
@@ -126,8 +129,62 @@ function hasAnyContent(combinedText, attachments) {
   return attachments.some(isSupportedAttachment);
 }
 
+/**
+ * Race `promise` against a 6-minute hard deadline.
+ *
+ * If the deadline fires first:
+ *  - Stops typing for the channel
+ *  - Sends a timeout error embed to the user
+ *  - Throws so the queue loop's catch block can shift the item and continue
+ *
+ * Works for both regular messages (message.reply) and slash-command
+ * interactions (interaction.editReply) — caller passes the raw item so we
+ * can pick the right reply surface.
+ *
+ * @param {Promise<void>}                                  promise    The handler promise to race
+ * @param {import('discord.js').Message|import('discord.js').CommandInteraction} item  Original message/interaction
+ * @param {string}                                         channelId  For typingManager.stop
+ * @returns {Promise<void>}
+ */
+async function withProcessingTimeout(promise, item, channelId) {
+  let timer;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('PROCESSING_TIMEOUT')), PROCESSING_TIMEOUT_MS);
+  });
+
+  try {
+    await Promise.race([promise, timeoutPromise]);
+  } catch (error) {
+    if (error.message === 'PROCESSING_TIMEOUT') {
+      logger.warn(`Processing timeout hit for channel ${channelId} — cancelling item`);
+      typingManager.stop(channelId);
+
+      const timeoutEmbed = new EmbedBuilder()
+        .setColor(COLORS.ERROR)
+        .setTitle('⏱️ Request Timed Out')
+        .setDescription(
+          "Your request took too long to process and was cancelled.\n" +
+          "This can happen with large files, videos, or during high load.\n\n" +
+          "Please try again — if this keeps happening, try splitting your request!"
+        );
+
+      try {
+        // Slash-command interactions use editReply; messages use reply
+        if (typeof item.editReply === 'function') {
+          await item.editReply({ embeds: [timeoutEmbed] }).catch(() => {});
+        } else if (typeof item.reply === 'function') {
+          await item.reply({ embeds: [timeoutEmbed] }).catch(() => {});
+        }
+      } catch { /* swallow — best-effort */ }
+    }
+    throw error; // always re-throw so queue catch block shifts the item
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ============================================================================
-// SINGLE MESSAGE HANDLER
 // ============================================================================
 
 /**
@@ -338,41 +395,56 @@ export async function processUserQueue(userId) {
 
   userQueueData.isProcessing = true;
 
-  while (userQueueData.queue.length > 0) {
-    const currentItem = userQueueData.queue[0];
+  try {
+    while (userQueueData.queue.length > 0) {
+      const currentItem = userQueueData.queue[0];
+      const channelId   = currentItem.channelId ?? currentItem.channel?.id;
 
-    try {
-      if (currentItem.isChatInputCommand?.()) {
-        // Slash command queued via the old search path
-        const { executeSearchInteraction } = await import('../../commands/search.js');
-        await executeSearchInteraction(currentItem);
-        userQueueData.queue.shift();
-      } else {
-        // Collect all plain messages currently in the queue
-        const queuedMessages = userQueueData.queue.filter(
-          item => !item.isChatInputCommand?.()
-        );
-
-        if (queuedMessages.length > 1) {
-          logger.debug(`Batching ${queuedMessages.length} queued messages for ${userId}`);
-          await handleBatchedMessages(queuedMessages);
-          // Remove all processed plain messages, keep any slash commands
-          userQueueData.queue = userQueueData.queue.filter(
-            item => item.isChatInputCommand?.()
+      try {
+        if (currentItem.isChatInputCommand?.()) {
+          // Slash command (e.g. /search) — wrap with watchdog
+          const { executeSearchInteraction } = await import('../../commands/search.js');
+          await withProcessingTimeout(
+            executeSearchInteraction(currentItem),
+            currentItem,
+            channelId
           );
-        } else {
-          await handleTextMessage(currentItem);
           userQueueData.queue.shift();
-        }
-      }
-    } catch (error) {
-      logger.error(`Error processing queued item for ${userId}`, error);
-      if (currentItem.channel) typingManager.stop(currentItem.channel.id);
-      userQueueData.queue.shift();
-    }
-  }
+        } else {
+          // Collect all plain messages currently in the queue
+          const queuedMessages = userQueueData.queue.filter(
+            item => !item.isChatInputCommand?.()
+          );
 
-  userQueueData.isProcessing = false;
-  // BUG FIX: original used state.requestQueues.delete — now uses direct import
-  requestQueues.delete(userId);
+          if (queuedMessages.length > 1) {
+            logger.debug(`Batching ${queuedMessages.length} queued messages for ${userId}`);
+            await withProcessingTimeout(
+              handleBatchedMessages(queuedMessages),
+              queuedMessages[0],
+              channelId
+            );
+            // Remove all processed plain messages, keep any slash commands
+            userQueueData.queue = userQueueData.queue.filter(
+              item => item.isChatInputCommand?.()
+            );
+          } else {
+            await withProcessingTimeout(
+              handleTextMessage(currentItem),
+              currentItem,
+              channelId
+            );
+            userQueueData.queue.shift();
+          }
+        }
+      } catch (error) {
+        logger.error(`Error processing queued item for ${userId}`, error);
+        if (channelId) typingManager.stop(channelId);
+        userQueueData.queue.shift();
+      }
+    }
+  } finally {
+    // Guaranteed cleanup — runs even if an unhandled error escapes all catch blocks
+    userQueueData.isProcessing = false;
+    requestQueues.delete(userId);
+  }
 }
