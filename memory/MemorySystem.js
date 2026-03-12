@@ -17,6 +17,7 @@ import { embeddingService } from './EmbeddingService.js';
 import { memoryCache }      from './MemoryCache.js';
 import { clusterEngine }    from './ClusterEngine.js';
 import { memoryStore }      from './MemoryStore.js';
+import { redisCache }       from './RedisCache.js';
 
 const logger = Logger.get('MemorySystem');
 
@@ -80,6 +81,15 @@ class MemorySystem {
   // ==========================================================================
   // PUBLIC DELEGATION — surfaces MemoryStore / ClusterEngine APIs externally
   // ==========================================================================
+
+  /**
+   * Initialise Redis connection at startup.
+   * Safe to call multiple times — no-ops if already connected.
+   * @returns {Promise<void>}
+   */
+  async init() {
+    await redisCache.connect();
+  }
 
   /**
    * Add a fact to a user's personal memory.
@@ -157,10 +167,10 @@ class MemorySystem {
     try {
       const historyId = guildId || userId;
 
-      // Check query cache first
-      const cached = memoryCache.getCachedQueryResults(historyId, query, userId, guildId);
-      if (cached) {
-        return cached.map(entry =>
+      // L1: exact in-memory hit
+      const exact = memoryCache.getCachedQueryResults(historyId, query, userId, guildId);
+      if (exact) {
+        return exact.map(entry =>
           `[Memory] ${extractTextFromMessage({ content: entry.messages[0]?.content })}`
         );
       }
@@ -168,10 +178,18 @@ class MemorySystem {
       const queryEmbedding = await embeddingService.generateEmbedding(query, 'RETRIEVAL_QUERY');
       if (!queryEmbedding) return [];
 
+      // L2: semantic in-memory hit
+      const semantic = memoryCache.getSemanticallyCachedResults(historyId, queryEmbedding, userId, guildId);
+      if (semantic) {
+        return semantic.map(entry =>
+          `[Memory] ${extractTextFromMessage({ content: entry.messages[0]?.content })}`
+        );
+      }
+
       const results = await clusterEngine.clusterSearch(historyId, queryEmbedding, Date.now());
       if (!results?.length) return [];
 
-      memoryCache.cacheQueryResults(historyId, query, results, userId, guildId);
+      memoryCache.cacheQueryResults(historyId, query, results, userId, guildId, queryEmbedding);
 
       return results.map(entry =>
         `[Memory] ${extractTextFromMessage({ content: entry.messages[0]?.content })}`
@@ -204,20 +222,38 @@ class MemorySystem {
     try {
       if (!currentQuery?.trim()) return { messages: [], personalData: null };
 
-      // Return cached results if available (personal data still fetched fresh)
-      const cached = memoryCache.getCachedQueryResults(historyId, currentQuery, userId, guildId);
-      if (cached) {
+      // ── L1: Exact in-memory hit (free, <0.1ms) ──────────────────────────────
+      const exactCached = memoryCache.getCachedQueryResults(historyId, currentQuery, userId, guildId);
+      if (exactCached) {
         const personalData = userId ? await memoryStore.getUserPersonalData(userId) : null;
-        return { messages: cached, personalData };
+        return { messages: exactCached, personalData };
       }
 
-      // Fetch embedding + personal data in parallel
+      // Fetch embedding + personal data in parallel — needed for semantic check + search
       const [queryEmbedding, personalData] = await Promise.all([
         embeddingService.generateEmbedding(currentQuery, 'RETRIEVAL_QUERY'),
         userId ? memoryStore.getUserPersonalData(userId) : Promise.resolve(null)
       ]);
 
       if (!queryEmbedding) return { messages: [], personalData };
+
+      // ── L2: Semantic in-memory hit (free, <1ms) ──────────────────────────────
+      // Catches rephrased duplicates ("what did I say about X" vs "tell me about X")
+      // without any DB or API round trip.
+      const semanticCached = memoryCache.getSemanticallyCachedResults(historyId, queryEmbedding, userId, guildId);
+      if (semanticCached) {
+        return { messages: semanticCached, personalData };
+      }
+
+      // ── L3: Redis hit (~1-2ms, survives restarts) ────────────────────────────
+      // Only reached on cache miss — saves full RAG pipeline after bot restarts.
+      const queryHash   = memoryCache.generateQueryHash(historyId, currentQuery, userId, guildId);
+      const redisCached = await redisCache.get(historyId, queryHash);
+      if (redisCached) {
+        // Warm L1 so the next identical query is free
+        memoryCache.cacheQueryResults(historyId, currentQuery, redisCached, userId, guildId, queryEmbedding);
+        return { messages: redisCached, personalData };
+      }
 
       const cutoffTimestamp = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
 
@@ -265,7 +301,9 @@ class MemorySystem {
       allResults.sort((a, b) => b.score - a.score);
       const topResults = allResults.slice(0, MAX_RAG_RESULTS);
 
-      memoryCache.cacheQueryResults(historyId, currentQuery, topResults, userId, guildId);
+      // Store in both caches — Redis write is fire-and-forget, never blocks response
+      memoryCache.cacheQueryResults(historyId, currentQuery, topResults, userId, guildId, queryEmbedding);
+      redisCache.set(historyId, queryHash, topResults);
 
       return { messages: topResults, personalData };
     } catch (error) {
@@ -519,11 +557,12 @@ class MemorySystem {
         parallelIndexBatchSize:  3
       },
       cacheConfig: {
-        queryCacheTTL:       '2m',
-        clusterCacheTTL:     '10m',
+        queryCacheTTL:        '2m',
+        clusterCacheTTL:      '10m',
         personalDataCacheTTL: '5m',
-        timeGapThreshold:    '30s',
-        backgroundClustering: 'enabled'
+        timeGapThreshold:     '30s',
+        backgroundClustering: 'enabled',
+        redisCache:           redisCache.isAvailable ? 'connected' : 'disabled'
       },
       entries: Array.from(memoryStore.lastIndexedCount.entries()).map(([id, count]) => ({
         historyId:               id,
