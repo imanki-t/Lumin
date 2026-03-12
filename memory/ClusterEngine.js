@@ -8,7 +8,7 @@
 import { LRUCache } from 'lru-cache';
 import * as db from '../database/index.js';
 import { Logger } from '../core/Logger.js';
-import { embeddingService } from './EmbeddingService.js';
+import { embeddingService, truncateForCentroid } from './EmbeddingService.js';
 
 const logger = Logger.get('ClusterEngine');
 
@@ -424,12 +424,17 @@ class ClusterEngine {
    */
   findRelevantClusters(queryEmbedding, centroids) {
     // Search ~20% of clusters — scales from 3 (at 8 clusters) to 10 (at 50 clusters).
-    // No recency pre-filter: similarity math on cached float arrays is <2ms even at
-    // 250 members. Pre-filtering by recency would silently drop old but relevant memories.
     const topN = Math.max(TOP_CLUSTERS_TO_SEARCH, Math.ceil(centroids.length * 0.20));
 
+    // MRL first-pass: truncate both query and centroids to 256-dim for coarse ranking.
+    // 12× faster than full 3072-dim comparison. Precision loss is acceptable here —
+    // this pass only identifies candidate clusters; searchWithinClustersParallel
+    // re-ranks with full vectors for accurate final scoring.
+    const shortQuery    = truncateForCentroid(queryEmbedding);
+    const shortCentroids = centroids.map(c => truncateForCentroid(c));
+
     return embeddingService
-      .calculateSimilaritiesBatch(queryEmbedding, centroids)
+      .calculateSimilaritiesBatch(shortQuery, shortCentroids)
       .map((similarity, idx) => ({ clusterId: idx, similarity }))
       .filter(c => c.similarity >= MIN_CLUSTER_SIMILARITY)
       .sort((a, b) => b.similarity - a.similarity)

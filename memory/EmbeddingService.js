@@ -30,8 +30,17 @@ const MAX_CONCURRENT_EMBEDDINGS = 5;
 //                  scan over many centroids stays cheap; candidates are then
 //                  re-ranked with full EMBEDDING_DIM vectors.
 
-const EMBEDDING_DIM  = 3072;  // full stored vector (gemini-embedding-2-preview max)
-const MRL_SHORT_DIM  = 1536;  // available for future fast-pass use; not active in ClusterEngine
+const EMBEDDING_DIM    = 3072;  // full stored vector (gemini-embedding-2-preview max)
+const MRL_SHORT_DIM    = 1536;  // available for future fast-pass use; not active in ClusterEngine
+
+/**
+ * Dimension used for the K-means centroid first-pass scan in ClusterEngine.
+ * 256-dim is sufficient for approximate centroid ranking — the goal is just to
+ * identify which clusters are worth searching, not precise similarity scoring.
+ * Full 3072-dim vectors are used in searchWithinClustersParallel for final reranking.
+ * This cuts centroid comparison math by 12× (3072 ÷ 256).
+ */
+const MRL_CENTROID_DIM = 256;
 
 // ── Per-modality feature flags ────────────────────────────────────────────────
 // Set to `true` to activate that modality in generateMultimodalEmbedding.
@@ -73,6 +82,22 @@ const LIMIT_AUDIO_MIME_TYPES             = new Set(['audio/mpeg', 'audio/wav', '
 export function truncateForSearch(embedding) {
   if (!embedding || embedding.length <= MRL_SHORT_DIM) return embedding;
   return embedding.slice(0, MRL_SHORT_DIM);
+}
+
+/**
+ * Truncate a full embedding to MRL_CENTROID_DIM (256) for K-means centroid
+ * first-pass scoring in ClusterEngine.findRelevantClusters.
+ *
+ * 256-dim is coarse enough to be 12× faster than full 3072-dim comparison
+ * while preserving enough semantic signal to correctly rank centroids.
+ * Candidates identified here are then re-ranked with full vectors.
+ *
+ * @param {number[]} embedding - Full EMBEDDING_DIM vector
+ * @returns {number[]}         - First MRL_CENTROID_DIM values
+ */
+export function truncateForCentroid(embedding) {
+  if (!embedding || embedding.length <= MRL_CENTROID_DIM) return embedding;
+  return embedding.slice(0, MRL_CENTROID_DIM);
 }
 
 // ============================================================================
@@ -482,6 +507,7 @@ export const embeddingService = new EmbeddingService();
 export {
   EMBEDDING_DIM,
   MRL_SHORT_DIM,
+  MRL_CENTROID_DIM,
   ENABLE_PDF,
   ENABLE_VIDEO,
   ENABLE_AUDIO,
