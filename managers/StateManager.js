@@ -83,7 +83,7 @@ export const POLL_CONFIG = Object.freeze({
  * on next startup.  The process auto-disables itself on completion.
  */
 const MIGRATION_CONFIG = {
-  ENABLE_MIGRATION: true,
+  ENABLE_MIGRATION: false,
   BATCH_SIZE:       50,
   BATCH_DELAY_MS:   100
 };
