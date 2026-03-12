@@ -27,6 +27,7 @@ import { fileURLToPath } from 'url';
 
 import * as db from '../database.js';
 import { Logger } from '../core/Logger.js';
+import { memorySystem } from '../memory/MemorySystem.js';
 
 import {
   withRetryPerModel,
@@ -236,6 +237,10 @@ export async function initialize() {
   await loadStateFromDB(TEMP_DIR);
   logger.info('State loaded');
 
+  // 3. Redis cache (optional — no-ops if REDIS_URL not set)
+  await memorySystem.init();
+  logger.info('Memory system initialized');
+
   // 3. Migrations (background — never block startup)
   if (MIGRATION_CONFIG.ENABLE_MIGRATION) {
     runMigrations().catch(err =>
@@ -304,6 +309,11 @@ async function gracefulShutdown(signal) {
     logger.info('Closing database connection…');
     await db.closeDB();
     logger.info('Database connection closed');
+
+    logger.info('Closing Redis connection…');
+    const { redisCache } = await import('../memory/RedisCache.js');
+    await redisCache.disconnect();
+    logger.info('Redis disconnected');
 
     const shutdownStats = getApiKeyStats();
     logger.info(
