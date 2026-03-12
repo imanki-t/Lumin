@@ -15,19 +15,22 @@ const logger = Logger.get('ClusterEngine');
 // CONSTANTS
 // ============================================================================
 
-const MAX_CLUSTERS               = 20;  // hard ceiling for auto-scaling
-const NUM_CLUSTERS               = 8;   // baseline / minimum meaningful cluster count
+const MAX_CLUSTERS                = 50;  // 1 cluster per 50 memories, up to 50 max
+const NUM_CLUSTERS                = 8;   // baseline — minimum until enough memories exist
 const MIN_MEMORIES_FOR_CLUSTERING = 240;
-const TOP_CLUSTERS_TO_SEARCH     = 3;
-const MIN_CLUSTER_SIMILARITY     = 0.45;
-const RECLUSTERING_INTERVAL      = 20;   // new memories before background rebuild
-const MAX_KMEANS_ITERATIONS      = 15;
+const TOP_CLUSTERS_TO_SEARCH      = 3;
+const MIN_CLUSTER_SIMILARITY      = 0.45;
+const RECLUSTERING_INTERVAL       = 100; // new memories before background rebuild (was 20 — too aggressive)
+const MAX_KMEANS_ITERATIONS       = 15;
 const KMEANS_CONVERGENCE_THRESHOLD = 0.001;
-/** Primary TTL — serve stale beyond this, trigger background rebuild */
 const CLUSTER_CACHE_TTL_MS       = 10 * 60 * 1000;
 const MAX_MEMORIES_PER_CLUSTER   = 10;
 const MAX_RAG_RESULTS            = 3;
 const MIN_SIMILARITY_THRESHOLD   = 0.65;
+
+/** How long lean embeddings stay cached before a background DB refresh.
+ *  Kept short so new memories appear within ~2 min without waiting for invalidation. */
+const EMBEDDINGS_CACHE_TTL_MS    = 2 * 60 * 1000;  // 2 minutes
 
 // ============================================================================
 // CLUSTER ENGINE
@@ -41,6 +44,8 @@ class ClusterEngine {
     this.lastClusterUpdate    = new Map();
     /** @type {Map<string, boolean>} historyId → background rebuild in progress */
     this.clusteringInProgress = new Map();
+    /** @type {Map<string, { entries: Array, fetchedAt: number }>} historyId → lean embedding docs */
+    this.embeddingsCache      = new Map();
   }
 
   // ==========================================================================
@@ -200,8 +205,9 @@ class ClusterEngine {
    */
   async buildClusters(historyId) {
     try {
-      // Lean fetch — embeddings + _id + timestamp only, no messages/text/metadata
-      const memories = await db.getMemoryEmbeddings(historyId, 1000);
+      // Served from cache when warm — avoids a redundant DB hit when
+      // buildClusters is called shortly after clusterSearch already populated it
+      const memories = await this.getMemoryEmbeddingsCached(historyId);
 
       if (!memories || memories.length < MIN_MEMORIES_FOR_CLUSTERING) {
         logger.debug(
@@ -219,9 +225,11 @@ class ClusterEngine {
         return null;
       }
 
-      // Auto-scale: 1 cluster per 30 memories, between NUM_CLUSTERS and MAX_CLUSTERS
-      // 240 memories → 8 clusters, 600 → 20 (capped), 1000 → 20 (capped)
-      const k = Math.min(MAX_CLUSTERS, Math.max(NUM_CLUSTERS, Math.floor(validMemories.length / 30)));
+      // Auto-scale: 1 cluster per 50 memories, between NUM_CLUSTERS and MAX_CLUSTERS.
+      // Smaller clusters mean fewer members scanned per query while keeping all
+      // memories reachable regardless of age — similarity finds old memories fine.
+      // Examples: 240→8, 1000→20, 2500→50 (capped), 10000→50 (capped)
+      const k = Math.min(MAX_CLUSTERS, Math.max(NUM_CLUSTERS, Math.floor(validMemories.length / 50)));
 
       logger.debug(`Building clusters for ${historyId} (${validMemories.length} memories, k=${k})`);
 
@@ -321,6 +329,45 @@ class ClusterEngine {
   }
 
   // ==========================================================================
+  // EMBEDDINGS CACHE
+  // ==========================================================================
+
+  /**
+   * Return lean embedding docs for a history, served from in-memory cache when fresh.
+   * Falls back to DB when cache is cold or TTL has expired, then refreshes the cache.
+   *
+   * Cache is invalidated immediately by invalidateEmbeddingsCache() whenever
+   * MemoryStore saves a new memory entry — so queries always see fresh data
+   * after a write without waiting for TTL expiry.
+   *
+   * @param {string} historyId
+   * @returns {Promise<Array<{ _id, embedding: number[], timestamp: number }>>}
+   */
+  async getMemoryEmbeddingsCached(historyId) {
+    const cached = this.embeddingsCache.get(historyId);
+    if (cached && (Date.now() - cached.fetchedAt) < EMBEDDINGS_CACHE_TTL_MS) {
+      return cached.entries;
+    }
+
+    // No limit — all memories are loaded so nothing is silently excluded from RAG.
+    // Only _id + embedding + timestamp are fetched (lean projection) so RAM usage
+    // scales with memory count, not document size.
+    const entries = await db.getMemoryEmbeddings(historyId);
+    this.embeddingsCache.set(historyId, { entries, fetchedAt: Date.now() });
+    return entries;
+  }
+
+  /**
+   * Bust the embeddings cache for a history.
+   * Called by MemoryStore immediately after saving a new memory entry.
+   *
+   * @param {string} historyId
+   */
+  invalidateEmbeddingsCache(historyId) {
+    this.embeddingsCache.delete(historyId);
+  }
+
+  // ==========================================================================
   // SEARCH
   // ==========================================================================
 
@@ -336,8 +383,10 @@ class ClusterEngine {
    * @returns {Array<{ clusterId: number, similarity: number }>}
    */
   findRelevantClusters(queryEmbedding, centroids) {
-    // Search more clusters as the total grows: 8→3, 12→4, 20→5
-    const topN = Math.min(Math.ceil(centroids.length * 0.25), TOP_CLUSTERS_TO_SEARCH + 2);
+    // Search ~20% of clusters — scales from 3 (at 8 clusters) to 10 (at 50 clusters).
+    // No recency pre-filter: similarity math on cached float arrays is <2ms even at
+    // 250 members. Pre-filtering by recency would silently drop old but relevant memories.
+    const topN = Math.max(TOP_CLUSTERS_TO_SEARCH, Math.ceil(centroids.length * 0.20));
 
     return embeddingService
       .calculateSimilaritiesBatch(queryEmbedding, centroids)
@@ -404,7 +453,7 @@ class ClusterEngine {
     try {
       const [clusterData, allEmbeddings] = await Promise.all([
         this.getClusters(historyId),
-        db.getMemoryEmbeddings(historyId, 1000)   // Phase 1: lean — _id + embedding + timestamp only
+        this.getMemoryEmbeddingsCached(historyId)   // served from cache after first load
       ]);
 
       if (!clusterData) {
@@ -485,8 +534,8 @@ class ClusterEngine {
           }));
       }
 
-      // Fallback: in-process similarity search — lean fetch then hydrate winners only
-      const leanEntries = await db.getMemoryEmbeddings(historyId);
+      // Fallback: in-process similarity search — use cache to avoid repeat DB hit
+      const leanEntries = await this.getMemoryEmbeddingsCached(historyId);
       if (!leanEntries?.length) return [];
 
       const validEntries = leanEntries.filter(e =>
@@ -579,11 +628,12 @@ class ClusterEngine {
     }));
   }
 
-  /** Clear all cluster caches. */
+  /** Clear all cluster and embeddings caches. */
   clearCache() {
     this.clusterCache.clear();
     this.lastClusterUpdate.clear();
     this.clusteringInProgress.clear();
+    this.embeddingsCache.clear();
   }
 }
 

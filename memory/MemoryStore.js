@@ -7,6 +7,8 @@
 import * as db from '../database/index.js';
 import { Logger } from '../core/Logger.js';
 import { embeddingService } from './EmbeddingService.js';
+import { clusterEngine } from './ClusterEngine.js';
+import { clusterEngine } from './ClusterEngine.js';
 
 const logger = Logger.get('MemoryStore');
 
@@ -92,6 +94,13 @@ class MemoryStore {
         },
         timestamp: Date.now()
       });
+
+      // Bust the in-memory embeddings cache so the next query sees the new entry
+      // without waiting for TTL expiry
+      clusterEngine.invalidateEmbeddingsCache(historyId);
+
+      // Bust the ClusterEngine embeddings cache so the next query sees this entry
+      clusterEngine.invalidateEmbeddingsCache(historyId);
     } catch (error) {
       logger.error('Memory storage failed', error);
     }
