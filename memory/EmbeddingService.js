@@ -496,5 +496,4 @@ export {
   LIMIT_AUDIO_MAX_COUNT,
   LIMIT_AUDIO_MAX_SECONDS,
   LIMIT_AUDIO_MIME_TYPES,
-  truncateForSearch,
 };
