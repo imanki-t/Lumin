@@ -61,3 +61,48 @@ export async function deleteOldMemoryEntries(cutoffTimestamp) {
     return 0;
   }
 }
+
+/**
+ * Fetch ONLY _id, embedding, and timestamp for a history — no messages/text/metadata.
+ * Used by ClusterEngine as a lean first-pass load for clustering and similarity ranking.
+ * Cuts network payload by ~10-20× vs getMemoryEntries for large histories.
+ *
+ * @param {string} historyId
+ * @param {number} [limit=1000]
+ * @returns {Promise<Array<{ _id: import('mongodb').ObjectId, embedding: number[], timestamp: number }>>}
+ */
+export async function getMemoryEmbeddings(historyId, limit = 1000) {
+  try {
+    return await getCollection(COLLECTIONS.MEMORY_ENTRIES)
+      .find(
+        { 'metadata.historyId': historyId },
+        { projection: { _id: 1, embedding: 1, timestamp: 1 } }
+      )
+      .sort({ timestamp: -1 })
+      .limit(limit)
+      .toArray();
+  } catch (error) {
+    logger.error('Error getting memory embeddings', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch full memory documents for a specific set of IDs.
+ * Used by ClusterEngine after cluster filtering to hydrate only the winning
+ * entries (typically MAX_RAG_RESULTS = 3) rather than the entire 1000-doc set.
+ *
+ * @param {import('mongodb').ObjectId[]} ids
+ * @returns {Promise<Array>}
+ */
+export async function getMemoryEntriesByIds(ids) {
+  if (!ids?.length) return [];
+  try {
+    return await getCollection(COLLECTIONS.MEMORY_ENTRIES)
+      .find({ _id: { $in: ids } })
+      .toArray();
+  } catch (error) {
+    logger.error('Error getting memory entries by ids', error);
+    return [];
+  }
+}
