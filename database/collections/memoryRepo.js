@@ -66,12 +66,12 @@ export async function deleteOldMemoryEntries(cutoffTimestamp) {
  * Fetch ONLY _id, embedding, and timestamp for a history — no messages/text/metadata.
  * Used by ClusterEngine as a lean first-pass load for clustering and similarity ranking.
  * Cuts network payload by ~10-20× vs getMemoryEntries for large histories.
+ * No limit — returns all entries so no memories are silently excluded from RAG.
  *
  * @param {string} historyId
- * @param {number} [limit=1000]
  * @returns {Promise<Array<{ _id: import('mongodb').ObjectId, embedding: number[], timestamp: number }>>}
  */
-export async function getMemoryEmbeddings(historyId, limit = 1000) {
+export async function getMemoryEmbeddings(historyId) {
   try {
     return await getCollection(COLLECTIONS.MEMORY_ENTRIES)
       .find(
@@ -79,7 +79,6 @@ export async function getMemoryEmbeddings(historyId, limit = 1000) {
         { projection: { _id: 1, embedding: 1, timestamp: 1 } }
       )
       .sort({ timestamp: -1 })
-      .limit(limit)
       .toArray();
   } catch (error) {
     logger.error('Error getting memory embeddings', error);
