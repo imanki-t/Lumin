@@ -602,6 +602,7 @@ export function updateChatHistory(id, newHistory, messagesId, username = null, d
   if (stored.length > STATE_CONFIG.MAX_MESSAGES) {
     state.chatHistories[id][messagesId] = stored.slice(-STATE_CONFIG.MAX_MESSAGES);
   }
+}
 
 // ============================================================================
 // UTILITY LOOKUPS
