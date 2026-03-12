@@ -62,13 +62,13 @@ const EMBEDDING_LIMITS = Object.freeze({
 class ClusterEngine {
   constructor() {
     /** @type {LRUCache<string, object>} historyId → { centroids, clusters, lastUpdate, memoryCount, iterations } */
-    this.clusterCache         = new LRUCache({ max: 100 });
+    this.clusterCache         = new LRUCache({ max: 200 });
     /** @type {Map<string, number>} historyId → memoryCount at last clustering */
     this.lastClusterUpdate    = new Map();
     /** @type {Map<string, boolean>} historyId → background rebuild in progress */
     this.clusteringInProgress = new Map();
     /** @type {LRUCache<string, { entries: Array, fetchedAt: number }>} historyId → lean embedding docs */
-    this.embeddingsCache      = new LRUCache({ max: 100 });
+    this.embeddingsCache      = new LRUCache({ max: 200 });
   }
 
   // ==========================================================================
