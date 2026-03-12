@@ -131,6 +131,15 @@ class MemorySystem {
     return memoryStore.forceIndexNow(historyId, userId, guildId);
   }
 
+  /**
+   * Store a conversation chunk with its embedding for RAG retrieval.
+   * Called by HistoryManager after every saved turn.
+   * @see MemoryStore.storeMemoryWithEmbedding
+   */
+  storeMemoryWithEmbedding(historyId, messages, userId = null, guildId = null) {
+    return memoryStore.storeMemoryWithEmbedding(historyId, messages, userId, guildId);
+  }
+
   // ==========================================================================
   // MEMORY SEARCH
   // ==========================================================================
