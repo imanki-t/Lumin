@@ -258,7 +258,7 @@ export async function extractFileText(message, messageContent) {
       } catch { /* non-fatal warning */ }
     }
 
-    const { fetchMessagesForSummary } = await import('../utils.js');
+    const { fetchMessagesForSummary } = await import('../../utils.js');
     const result = await fetchMessagesForSummary(message, messageLinks[0], actual);
 
     if (result.error) {
