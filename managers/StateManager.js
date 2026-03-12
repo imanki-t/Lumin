@@ -594,7 +594,14 @@ export function updateChatHistory(id, newHistory, messagesId, username = null, d
     ...state.chatHistories[id][messagesId],
     ...enriched
   ];
-}
+
+  // Trim the stored array so raw history never grows beyond MAX_MESSAGES.
+  // getHistory() already trims on read, but without this the underlying array
+  // would grow indefinitely and bloat RAM between reads.
+  const stored = state.chatHistories[id][messagesId];
+  if (stored.length > STATE_CONFIG.MAX_MESSAGES) {
+    state.chatHistories[id][messagesId] = stored.slice(-STATE_CONFIG.MAX_MESSAGES);
+  }
 
 // ============================================================================
 // UTILITY LOOKUPS
