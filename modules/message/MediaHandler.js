@@ -247,7 +247,7 @@ export async function processPromptAndMediaAttachments(prompt, message, attachme
   const processed = await Promise.all(
     all.map(async (attachment) => {
       try {
-        const { processAttachment } = await import('../attachmentProcessor.js');
+        const { processAttachment } = await import('../attachments/FileUploader.js');
         return await processAttachment(attachment, message.author.id, message.id);
       } catch (error) {
         logger.error(`Error processing attachment ${attachment.name}`, error);
