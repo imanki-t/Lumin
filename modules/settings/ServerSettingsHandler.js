@@ -605,7 +605,7 @@ export async function downloadServerConversation(interaction) {
   }
 
   if (!fileSent) {
-    const { uploadText } = await import('../utils.js');
+    const { uploadText } = await import('../../utils.js');
     const urlText = await uploadText(conversationText);
     const url     = urlText.match(/🔗 URL: (.+)/)?.[1] || 'URL generation failed.';
     const embed   = (fallback || new EmbedBuilder().setColor(0xFFAA00).setTitle('🔗 History Upload'))
