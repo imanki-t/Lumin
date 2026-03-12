@@ -59,6 +59,8 @@ export {
 export {
   saveMemoryEntry,
   getMemoryEntries,
+  getMemoryEmbeddings,
+  getMemoryEntriesByIds,
   deleteOldMemoryEntries
 } from './collections/memoryRepo.js';
 
