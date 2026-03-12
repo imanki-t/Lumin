@@ -290,3 +290,25 @@ export function resetSummaryUsage() {
   }
   logger.info('Summary usage counters reset');
 }
+
+// ============================================================================
+// ORPHAN QUEUE SWEEP
+// ============================================================================
+
+/**
+ * Periodically remove any requestQueue entries that are idle with an empty
+ * queue. These are zombie entries left behind by crashes or edge-case code
+ * paths that bypass the normal delete in processUserQueue's finally block.
+ *
+ * Runs every 10 minutes — cheap (Map iteration) and purely defensive.
+ */
+setInterval(() => {
+  let swept = 0;
+  for (const [userId, data] of requestQueues.entries()) {
+    if (!data.isProcessing && data.queue.length === 0) {
+      requestQueues.delete(userId);
+      swept++;
+    }
+  }
+  if (swept > 0) logger.info(`Orphan sweep removed ${swept} idle queue entry(s)`);
+}, 10 * 60 * 1_000);
