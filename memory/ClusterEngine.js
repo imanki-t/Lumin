@@ -5,6 +5,7 @@
  * @module memory/ClusterEngine
  */
 
+import { LRUCache } from 'lru-cache';
 import * as db from '../database/index.js';
 import { Logger } from '../core/Logger.js';
 import { embeddingService } from './EmbeddingService.js';
@@ -32,20 +33,42 @@ const MIN_SIMILARITY_THRESHOLD   = 0.65;
  *  Kept short so new memories appear within ~2 min without waiting for invalidation. */
 const EMBEDDINGS_CACHE_TTL_MS    = 2 * 60 * 1000;  // 2 minutes
 
+/**
+ * Embedding load strategy constants.
+ *
+ * Two completely separate code paths — different DB queries, different cache keys:
+ *
+ *   'cluster' mode  — uses getMemoryEmbeddingsSampled():
+ *     Stratified time-bucket sampling. Divides the full history into
+ *     CLUSTER_TIME_BUCKETS equal eras and draws CLUSTER_SAMPLE / CLUSTER_TIME_BUCKETS
+ *     entries from each. Old memories are guaranteed representation — centroid
+ *     quality does not degrade as history grows. (HCAT/Grootendorst 2022 pattern)
+ *
+ *   'fallback' mode — uses getMemoryEmbeddings() (recent-first):
+ *     Only runs when $vectorSearch is unavailable (MongoDB vector index down).
+ *     Recent-only is acceptable here — it is an emergency path, not the main
+ *     retrieval path. 50 entries is more than enough to surface top-3 results.
+ */
+const EMBEDDING_LIMITS = Object.freeze({
+  CLUSTER_SAMPLE:       2_000,
+  CLUSTER_TIME_BUCKETS: 20,    // 20 strata × 100 entries each = 2 000 total
+  FALLBACK_SEARCH:      50,
+});
+
 // ============================================================================
 // CLUSTER ENGINE
 // ============================================================================
 
 class ClusterEngine {
   constructor() {
-    /** @type {Map<string, object>} historyId → { centroids, clusters, lastUpdate, memoryCount, iterations } */
-    this.clusterCache         = new Map();
+    /** @type {LRUCache<string, object>} historyId → { centroids, clusters, lastUpdate, memoryCount, iterations } */
+    this.clusterCache         = new LRUCache({ max: 100 });
     /** @type {Map<string, number>} historyId → memoryCount at last clustering */
     this.lastClusterUpdate    = new Map();
     /** @type {Map<string, boolean>} historyId → background rebuild in progress */
     this.clusteringInProgress = new Map();
-    /** @type {Map<string, { entries: Array, fetchedAt: number }>} historyId → lean embedding docs */
-    this.embeddingsCache      = new Map();
+    /** @type {LRUCache<string, { entries: Array, fetchedAt: number }>} historyId → lean embedding docs */
+    this.embeddingsCache      = new LRUCache({ max: 100 });
   }
 
   // ==========================================================================
@@ -205,9 +228,8 @@ class ClusterEngine {
    */
   async buildClusters(historyId) {
     try {
-      // Served from cache when warm — avoids a redundant DB hit when
-      // buildClusters is called shortly after clusterSearch already populated it
-      const memories = await this.getMemoryEmbeddingsCached(historyId);
+      // Stratified time-bucket sample — every era of the conversation is represented.
+      const memories = await this.getMemoryEmbeddingsCached(historyId, 'cluster');
 
       if (!memories || memories.length < MIN_MEMORIES_FOR_CLUSTERING) {
         logger.debug(
@@ -333,38 +355,56 @@ class ClusterEngine {
   // ==========================================================================
 
   /**
-   * Return lean embedding docs for a history, served from in-memory cache when fresh.
-   * Falls back to DB when cache is cold or TTL has expired, then refreshes the cache.
+   * Return lean embedding docs for a history, served from in-memory LRU cache when fresh.
    *
-   * Cache is invalidated immediately by invalidateEmbeddingsCache() whenever
-   * MemoryStore saves a new memory entry — so queries always see fresh data
-   * after a write without waiting for TTL expiry.
+   * Two modes — completely separate DB queries and cache entries:
+   *
+   *   'cluster'  → db.getMemoryEmbeddingsSampled()
+   *     Stratified time-bucket sample. Every era of conversation contributes equally
+   *     to clustering. Old memories are never silently excluded from centroids.
+   *     Cache key: `${historyId}:cluster`
+   *
+   *   'fallback' → db.getMemoryEmbeddings() (recent-first, small window)
+   *     Used only when $vectorSearch is unavailable. Recent-only is acceptable
+   *     for this emergency path.
+   *     Cache key: `${historyId}:fallback`
+   *
+   * Cache is invalidated by invalidateEmbeddingsCache() immediately after any
+   * new memory write — both mode variants are evicted together.
    *
    * @param {string} historyId
+   * @param {'cluster'|'fallback'} [mode='cluster']
    * @returns {Promise<Array<{ _id, embedding: number[], timestamp: number }>>}
    */
-  async getMemoryEmbeddingsCached(historyId) {
-    const cached = this.embeddingsCache.get(historyId);
+  async getMemoryEmbeddingsCached(historyId, mode = 'cluster') {
+    const cacheKey = `${historyId}:${mode}`;
+    const cached   = this.embeddingsCache.get(cacheKey);
+
     if (cached && (Date.now() - cached.fetchedAt) < EMBEDDINGS_CACHE_TTL_MS) {
       return cached.entries;
     }
 
-    // No limit — all memories are loaded so nothing is silently excluded from RAG.
-    // Only _id + embedding + timestamp are fetched (lean projection) so RAM usage
-    // scales with memory count, not document size.
-    const entries = await db.getMemoryEmbeddings(historyId);
-    this.embeddingsCache.set(historyId, { entries, fetchedAt: Date.now() });
+    const entries = mode === 'cluster'
+      ? await db.getMemoryEmbeddingsSampled(
+          historyId,
+          EMBEDDING_LIMITS.CLUSTER_SAMPLE,
+          EMBEDDING_LIMITS.CLUSTER_TIME_BUCKETS
+        )
+      : await db.getMemoryEmbeddings(historyId, EMBEDDING_LIMITS.FALLBACK_SEARCH);
+
+    this.embeddingsCache.set(cacheKey, { entries, fetchedAt: Date.now() });
     return entries;
   }
 
   /**
-   * Bust the embeddings cache for a history.
+   * Bust ALL cached embedding variants for a history (both 'cluster' and 'fallback').
    * Called by MemoryStore immediately after saving a new memory entry.
    *
    * @param {string} historyId
    */
   invalidateEmbeddingsCache(historyId) {
-    this.embeddingsCache.delete(historyId);
+    this.embeddingsCache.delete(`${historyId}:cluster`);
+    this.embeddingsCache.delete(`${historyId}:fallback`);
   }
 
   // ==========================================================================
@@ -453,7 +493,7 @@ class ClusterEngine {
     try {
       const [clusterData, allEmbeddings] = await Promise.all([
         this.getClusters(historyId),
-        this.getMemoryEmbeddingsCached(historyId)   // served from cache after first load
+        this.getMemoryEmbeddingsCached(historyId, 'cluster')
       ]);
 
       if (!clusterData) {
@@ -534,8 +574,9 @@ class ClusterEngine {
           }));
       }
 
-      // Fallback: in-process similarity search — use cache to avoid repeat DB hit
-      const leanEntries = await this.getMemoryEmbeddingsCached(historyId);
+      // Fallback: in-process similarity search.
+      // Uses a small recent window — $vectorSearch handles real queries server-side.
+      const leanEntries = await this.getMemoryEmbeddingsCached(historyId, 'fallback');
       if (!leanEntries?.length) return [];
 
       const validEntries = leanEntries.filter(e =>
