@@ -7,7 +7,7 @@
 
 import * as db from '../database/index.js';
 import { Logger } from '../core/Logger.js';
-import { embeddingService } from './EmbeddingService.js';
+import { embeddingService, truncateForSearch } from './EmbeddingService.js';
 
 const logger = Logger.get('ClusterEngine');
 
@@ -319,14 +319,20 @@ class ClusterEngine {
 
   /**
    * Score cluster centroids against a query and return the top-N most similar.
+   * Uses MRL-truncated (256-dim) vectors for the first-pass centroid scan —
+   * much cheaper than full 1536-dim comparison, especially as cluster count grows.
+   * Candidates are then re-ranked at full dimension inside searchWithinClustersParallel.
    *
-   * @param {number[]}   queryEmbedding
-   * @param {number[][]} centroids
+   * @param {number[]}   queryEmbedding - Full 1536-dim query vector
+   * @param {number[][]} centroids       - Full 1536-dim centroid vectors
    * @returns {Array<{ clusterId: number, similarity: number }>}
    */
   findRelevantClusters(queryEmbedding, centroids) {
+    const shortQuery     = truncateForSearch(queryEmbedding);
+    const shortCentroids = centroids.map(truncateForSearch);
+
     return embeddingService
-      .calculateSimilaritiesBatch(queryEmbedding, centroids)
+      .calculateSimilaritiesBatch(shortQuery, shortCentroids)
       .map((similarity, idx) => ({ clusterId: idx, similarity }))
       .filter(c => c.similarity >= MIN_CLUSTER_SIMILARITY)
       .sort((a, b) => b.similarity - a.similarity)
@@ -334,27 +340,31 @@ class ClusterEngine {
   }
 
   /**
-   * Search all relevant clusters in parallel and return the top scored memories.
+   * Search all relevant clusters in parallel and return ranked stubs.
+   * Uses full 1536-dim vectors for accurate final re-ranking (MRL second pass).
+   * Returns lightweight stubs { _id, similarity, clusterId } — full document
+   * hydration is deferred to clusterSearch via getMemoryEntriesByIds.
    *
-   * @param {number[]}   queryEmbedding
+   * @param {number[]}   queryEmbedding - Full 1536-dim query vector
    * @param {Array<{ clusterId: number, similarity: number, memoryIndices: number[] }>} relevantClusters
-   * @param {object[]}   allMemories
-   * @returns {Promise<object[]>}
+   * @param {Array<{ _id, embedding: number[], timestamp: number }>} allEmbeddings - Lean docs
+   * @returns {Promise<Array<{ _id, similarity: number, clusterId: number }>>}
    */
-  async searchWithinClustersParallel(queryEmbedding, relevantClusters, allMemories) {
+  async searchWithinClustersParallel(queryEmbedding, relevantClusters, allEmbeddings) {
     const clusterResults = await Promise.all(
       relevantClusters.map(async cluster => {
-        const clusterMemories = allMemories.filter((_, idx) =>
-          cluster.memoryIndices.includes(idx)
-        );
-        if (clusterMemories.length === 0) return [];
+        // O(1) Set lookup instead of O(m) Array.includes per entry
+        const indexSet       = new Set(cluster.memoryIndices);
+        const clusterEntries = allEmbeddings.filter((_, idx) => indexSet.has(idx));
+        if (clusterEntries.length === 0) return [];
 
-        const embeddings   = clusterMemories.map(m => m.embedding);
+        // Full 1536-dim vectors for accurate final scoring
+        const embeddings   = clusterEntries.map(m => m.embedding);
         const similarities = embeddingService.calculateSimilaritiesBatch(queryEmbedding, embeddings);
 
-        return clusterMemories
-          .map((memory, idx) => ({
-            ...memory,
+        return clusterEntries
+          .map((entry, idx) => ({
+            _id:       entry._id,
             similarity: similarities[idx],
             clusterId:  cluster.clusterId
           }))
@@ -367,18 +377,15 @@ class ClusterEngine {
     return clusterResults
       .flat()
       .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, MAX_RAG_RESULTS)
-      .map(r => ({
-        messages:  r.messages,
-        score:     r.similarity,
-        source:    'conversation-history',
-        timestamp: r.timestamp,
-        clusterId: r.clusterId
-      }));
+      .slice(0, MAX_RAG_RESULTS);
   }
 
   /**
    * Hierarchical clustered search with automatic fallback to standard search.
+   *
+   * Two-phase DB strategy (avoids loading 1000 full documents per query):
+   *   Phase 1 — getMemoryEmbeddings: fetch only _id + embedding + timestamp (~10-20× smaller payload)
+   *   Phase 2 — getMemoryEntriesByIds: hydrate only the final MAX_RAG_RESULTS winners with full docs
    *
    * @param {string}  historyId
    * @param {number[]} queryEmbedding
@@ -387,9 +394,9 @@ class ClusterEngine {
    */
   async clusterSearch(historyId, queryEmbedding, cutoffTimestamp) {
     try {
-      const [clusterData, allMemories] = await Promise.all([
+      const [clusterData, allEmbeddings] = await Promise.all([
         this.getClusters(historyId),
-        db.getMemoryEntries(historyId, 1000)
+        db.getMemoryEmbeddings(historyId, 1000)   // Phase 1: lean — _id + embedding + timestamp only
       ]);
 
       if (!clusterData) {
@@ -399,7 +406,8 @@ class ClusterEngine {
       const relevantClusters = this.findRelevantClusters(queryEmbedding, clusterData.centroids);
       if (relevantClusters.length === 0) return [];
 
-      const validMemories = allMemories.filter(m =>
+      // Filter to valid, non-recent entries using the lean embedding docs
+      const validEmbeddings = allEmbeddings.filter(m =>
         m.embedding &&
         Array.isArray(m.embedding) &&
         (m.timestamp || 0) < cutoffTimestamp
@@ -411,7 +419,32 @@ class ClusterEngine {
         memoryIndices: clusterData.clusters[c.clusterId] || []
       }));
 
-      return await this.searchWithinClustersParallel(queryEmbedding, clustersWithIndices, validMemories);
+      // searchWithinClustersParallel now returns { _id, similarity, clusterId } stubs
+      const rankedStubs = await this.searchWithinClustersParallel(
+        queryEmbedding, clustersWithIndices, validEmbeddings
+      );
+
+      if (rankedStubs.length === 0) return [];
+
+      // Phase 2: hydrate only the winners — fetch full docs for MAX_RAG_RESULTS entries
+      const winnerIds  = rankedStubs.map(r => r._id).filter(Boolean);
+      const fullDocs   = await db.getMemoryEntriesByIds(winnerIds);
+      const docById    = new Map(fullDocs.map(d => [String(d._id), d]));
+
+      return rankedStubs
+        .map(stub => {
+          const doc = docById.get(String(stub._id));
+          if (!doc) return null;
+          return {
+            messages:  doc.messages,
+            score:     stub.similarity,
+            source:    'conversation-history',
+            timestamp: doc.timestamp,
+            clusterId: stub.clusterId
+          };
+        })
+        .filter(Boolean);
+
     } catch (error) {
       logger.error('Cluster search failed', error);
       return await this.standardVectorSearch(historyId, queryEmbedding, cutoffTimestamp);
