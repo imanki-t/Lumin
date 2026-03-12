@@ -87,6 +87,77 @@ export async function getMemoryEmbeddings(historyId) {
 }
 
 /**
+ * Stratified time-based sample of lean embedding docs for K-means clustering.
+ *
+ * Industrial RAG principle: K-means only needs a *representative* sample, not
+ * every data point. A recency-biased load would produce centroids skewed toward
+ * recent conversations — old memories would never appear in any cluster and
+ * clusterSearch() would silently miss them.
+ *
+ * This pipeline divides the full history into `numBuckets` equal time windows
+ * using MongoDB's $bucketAuto and takes up to `perBucket` entries from each.
+ * Every era of the conversation is guaranteed representation regardless of how
+ * many total memories exist. All heavy math stays in MongoDB — only the sample
+ * arrives in Node.js RAM.
+ *
+ * Pipeline:
+ *   $match       → filter to this historyId, require embedding exists
+ *   $project     → lean projection (_id, embedding, timestamp only)
+ *   $bucketAuto  → auto-partition by timestamp into numBuckets equal strata
+ *   $project     → $slice each bucket's doc array to perBucket entries
+ *   $unwind      → flatten bucket arrays back to individual docs
+ *   $replaceRoot → promote each doc to top-level
+ *
+ * Falls back to getMemoryEmbeddings() (recent-only) if the aggregation fails
+ * (e.g. not enough data to fill buckets).
+ *
+ * @param {string} historyId
+ * @param {number} [totalSample=2000] - Total embeddings to return across all strata
+ * @param {number} [numBuckets=20]    - Number of time strata to divide history into
+ * @returns {Promise<Array<{ _id: import('mongodb').ObjectId, embedding: number[], timestamp: number }>>}
+ */
+export async function getMemoryEmbeddingsSampled(historyId, totalSample = 2000, numBuckets = 20) {
+  try {
+    const perBucket = Math.ceil(totalSample / numBuckets);
+
+    return await getCollection(COLLECTIONS.MEMORY_ENTRIES).aggregate([
+      // Stage 1: filter to this history, require a real embedding vector
+      {
+        $match: {
+          'metadata.historyId': historyId,
+          embedding: { $exists: true, $ne: null, $not: { $size: 0 } }
+        }
+      },
+      // Stage 2: lean projection — drop messages/text/metadata before grouping
+      {
+        $project: { _id: 1, embedding: 1, timestamp: 1 }
+      },
+      // Stage 3: auto-partition into numBuckets equal time strata
+      // $bucketAuto chooses boundaries automatically so no knowledge of the
+      // timestamp range is needed. Each stratum covers an equal slice of time.
+      {
+        $bucketAuto: {
+          groupBy: '$timestamp',
+          buckets: numBuckets,
+          output: { docs: { $push: '$$ROOT' } }
+        }
+      },
+      // Stage 4: take at most perBucket entries from each stratum
+      // This is the stratification step — every era contributes equally.
+      {
+        $project: { docs: { $slice: ['$docs', perBucket] } }
+      },
+      // Stage 5 + 6: flatten back to individual documents
+      { $unwind: '$docs' },
+      { $replaceRoot: { newRoot: '$docs' } }
+    ]).toArray();
+  } catch (error) {
+    logger.error('Stratified embedding sample failed, falling back to recent-only', error);
+    return getMemoryEmbeddings(historyId, totalSample);
+  }
+}
+
+/**
  * Fetch full memory documents for a specific set of IDs.
  * Used by ClusterEngine after cluster filtering to hydrate only the winning
  * entries (typically MAX_RAG_RESULTS = 3) rather than the entire 1000-doc set.
