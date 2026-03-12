@@ -13,7 +13,7 @@ const logger = Logger.get('EmbeddingService');
 // CONSTANTS
 // ============================================================================
 
-const EMBEDDING_MODEL          = 'gemini-embedding-001';
+const EMBEDDING_MODEL          = 'gemini-embedding-2-preview';
 const MAX_EMBEDDING_CACHE_SIZE = 1000;
 const MAX_CONCURRENT_EMBEDDINGS = 5;
 
