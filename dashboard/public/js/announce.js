@@ -1,65 +1,50 @@
-/**
- * announce.js — Global announcement form handling and live preview.
- */
-
 import { api } from './api.js';
 import { toastOk, toastErr } from './toast.js';
 
-function el(id) { return document.getElementById(id); }
-
 export function initAnnounce() {
-  // Live preview binding
-  const titleInput   = el('ann-title');
-  const msgInput     = el('ann-message');
-  const colorInput   = el('ann-color');
-
-  if (!titleInput) return;
-
   const update = () => updatePreview();
-  titleInput.addEventListener('input', update);
-  msgInput.addEventListener('input', update);
-  colorInput.addEventListener('input', update);
-
+  ['ann-title','ann-message','ann-color'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', update);
+  });
   updatePreview();
 }
 
 function updatePreview() {
-  const title  = el('ann-title')?.value   || 'Announcement';
-  const msg    = el('ann-message')?.value || 'Your message will appear here…';
-  const color  = el('ann-color')?.value   || '#CF6A37';
-
-  const preview = el('ann-preview');
-  if (!preview) return;
-
-  preview.style.borderLeftColor = color;
-  el('ann-preview-title').textContent = title;
-  el('ann-preview-body').textContent  = msg;
+  const title = document.getElementById('ann-title')?.value || 'Announcement';
+  const msg   = document.getElementById('ann-message')?.value || 'Your message will appear here...';
+  const color = document.getElementById('ann-color')?.value || '#6D5AE6';
+  const bar   = document.getElementById('ann-preview-bar');
+  const t     = document.getElementById('ann-preview-title');
+  const b     = document.getElementById('ann-preview-body');
+  if (bar) bar.style.background = color;
+  if (t)   t.textContent = title;
+  if (b)   b.textContent = msg;
 }
 
 export async function sendAnnouncement() {
-  const message = el('ann-message')?.value?.trim();
+  const message = document.getElementById('ann-message')?.value?.trim();
   if (!message) { toastErr('Message is required'); return; }
 
-  const btn = el('ann-send-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
-
-  const resultEl = el('ann-result');
-  if (resultEl) { resultEl.className = 'result-banner'; resultEl.textContent = ''; }
+  const btn = document.getElementById('ann-btn');
+  const result = document.getElementById('ann-result');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
+  if (result) result.classList.add('hidden');
 
   const r = await api.announce({
     message,
-    title:    el('ann-title')?.value    || '📢 Announcement',
-    embedColor: el('ann-color')?.value  || '#CF6A37',
-    useEmbed: (el('ann-format')?.value ?? 'true') === 'true',
-  }).catch(err => ({ success: false, error: err.message }));
+    title:     document.getElementById('ann-title')?.value  || 'Announcement',
+    embedColor:document.getElementById('ann-color')?.value  || '#6D5AE6',
+    useEmbed: (document.getElementById('ann-format')?.value ?? 'true') === 'true',
+  }).catch(e => ({ error: e.message }));
 
   if (btn) { btn.disabled = false; btn.textContent = 'Send to All Servers'; }
 
-  if (resultEl) {
-    resultEl.className = `result-banner visible ${r.success ? 'ok' : 'err'}`;
-    resultEl.textContent = r.message || r.error || (r.success ? 'Sent!' : 'Error');
+  if (result) {
+    result.className = `cmd-result ${r?.success ? 'ok' : 'err'}`;
+    result.textContent = r?.message || r?.error || (r?.success ? 'Sent!' : 'Error');
+    result.classList.remove('hidden');
   }
 
-  if (r.success) toastOk(r.message ?? 'Announcement sent');
-  else            toastErr(r.error ?? 'Failed to send');
+  if (r?.success) toastOk(r.message || 'Announcement sent');
+  else            toastErr(r?.error || 'Failed to send');
 }

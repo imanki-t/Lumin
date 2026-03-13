@@ -1,415 +1,244 @@
-/**
- * app.js — Main entry point.
- * Handles OAuth login, real-time stats WebSocket, navigation, clock.
- */
-
 import { getToken, setToken, clearToken, hasToken, BASE_URL } from './config.js';
-import { buildSidebarNav, navigate, onNavigate, setLockdownIndicator } from './router.js';
-import { loadServers }      from './servers.js';
-import { renderCommands }   from './commands.js';
+import { buildSidebarNav, buildBottomNav, navigate, onNavigate, setLockdownIndicator } from './router.js';
+import { loadServers, filterServers, leaveServer, resetServer } from './servers.js';
+import { renderCommands, renderApiKeysPanel } from './commands.js';
 import { initAnnounce, sendAnnouncement } from './announce.js';
 import { loadLockdownState, toggleLockdown } from './lockdown.js';
 import { initNodeTerminal, initMongoTerminal } from './terminals.js';
+import { toastOk, toastErr, toastWarn } from './toast.js';
+import { api } from './api.js';
 
-// ── Real-time stats WebSocket ─────────────────────────────────────────────────
+// Formatters
+const fmtBytes=(b,d=1)=>!b||b<0?'—':b<1024?`${b}B`:b<1048576?`${(b/1024).toFixed(d)}KB`:b<1073741824?`${(b/1048576).toFixed(d)}MB`:`${(b/1073741824).toFixed(d)}GB`;
+const fmtUptime=s=>{s=Math.floor(s||0);const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60),sec=s%60;return d>0?`${d}d ${h}h ${m}m`:h>0?`${h}h ${m}m`:`${m}m ${sec}s`;};
+const fmtNum=n=>(n==null)?'—':Number(n).toLocaleString();
+const setText=(id,v)=>{const el=document.getElementById(id);if(el&&el.textContent!==String(v))el.textContent=String(v);};
 
-let statsWs       = null;
-let statsReconnect = null;
-
-function wsUrl(path) {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${location.host}/dashboard${path}?token=${encodeURIComponent(getToken())}`;
+// Clock
+function startClock() {
+  const tick=()=>{const now=new Date();const t=now.toLocaleTimeString('en-US',{hour12:false});const d=now.toLocaleDateString('en-US',{month:'short',day:'numeric'});setText('tb-clock',`${d} · ${t}`);};
+  tick(); setInterval(tick,1000);
 }
 
+// Stats WebSocket
+let statsWs=null;
 function startStatsStream() {
-  if (statsWs && statsWs.readyState < 2) return;
-
-  try {
-    statsWs = new WebSocket(wsUrl('/ws/stats'));
-
-    statsWs.onopen = () => {
-      clearTimeout(statsReconnect);
-      document.getElementById('sidebar-status')?.textContent === 'Connecting' &&
-        (document.getElementById('sidebar-status').textContent = 'Live');
-    };
-
-    statsWs.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'stats') updateLiveStats(msg.data);
-      } catch {}
-    };
-
-    statsWs.onclose = () => {
-      statsReconnect = setTimeout(startStatsStream, 3000);
-    };
-
-    statsWs.onerror = () => {
-      statsWs?.close();
-    };
-  } catch {
-    statsReconnect = setTimeout(startStatsStream, 5000);
-  }
+  if(statsWs&&statsWs.readyState<2)return;
+  const proto=location.protocol==='https:'?'wss':'ws';
+  statsWs=new WebSocket(`${proto}://${location.host}/dashboard/ws/stats?token=${encodeURIComponent(getToken())}`);
+  statsWs.onmessage=e=>{try{updateStats(JSON.parse(e.data));}catch{}};
+  statsWs.onclose=()=>{setTimeout(startStatsStream,3000);};
+  statsWs.onerror=()=>{statsWs?.close();};
 }
 
-// ── Format helpers ────────────────────────────────────────────────────────────
-
-function fmtBytes(b, dec = 1) {
-  if (!b || b < 0) return '—';
-  if (b < 1048576)    return `${(b / 1024).toFixed(dec)} KB`;
-  if (b < 1073741824) return `${(b / 1048576).toFixed(dec)} MB`;
-  return `${(b / 1073741824).toFixed(dec)} GB`;
+function updateStats(d) {
+  setText('hc-servers',fmtNum(d.serverCount));
+  setText('hc-members',fmtNum(d.totalUsers));
+  setText('hc-ping',d.ping>=0?`${d.ping}ms`:'—');
+  setText('hc-uptime',fmtUptime(d.uptime));
+  setText('tb-ping',d.ping>=0?`${d.ping}ms`:'—');
+  const sub=document.getElementById('hc-ping-sub');
+  if(sub)sub.textContent=d.ping<0?'Offline':d.ping<150?'Excellent':d.ping<300?'Good':'High';
+  const dot=document.getElementById('sb-dot');
+  if(dot)dot.style.background=d.ping<0?'var(--err)':d.ping<300?'var(--ok)':'var(--warn)';
+  setText('sb-ping',d.ping>=0?`${d.ping}ms`:'—');
+  setText('sb-status',d.ping<0?'Offline':'Online');
+  buildStatGrid(d);
+  if(d.globalLockdown!==undefined)setLockdownIndicator(!!d.globalLockdown);
 }
 
-function fmtUptime(s) {
-  s = Math.floor(s);
-  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m ${s % 60}s`;
-}
-
-function fmtNum(n) {
-  return n == null ? '—' : Number(n).toLocaleString();
-}
-
-function setText(id, val) {
-  const el = document.getElementById(id);
-  if (el && el.textContent !== String(val)) el.textContent = val;
-}
-
-// ── Live stats rendering ──────────────────────────────────────────────────────
-
-function updateLiveStats(d) {
-  // Hero metrics
-  setText('mh-servers-val', fmtNum(d.serverCount));
-  setText('mh-users-val',   fmtNum(d.totalUsers));
-  setText('mh-uptime-val',  fmtUptime(d.uptime));
-
-  // Ping with color
-  const pingVal = d.ping >= 0 ? `${d.ping}ms` : '—';
-  setText('mh-ping-val', pingVal);
-  const pingCard = document.getElementById('mh-ping');
-  if (pingCard) {
-    pingCard.style.borderTopColor =
-      d.ping > 300 ? 'var(--danger)' :
-      d.ping > 150 ? 'var(--warn)' :
-      'var(--success)';
-  }
-
-  // Topbar
-  setText('topbar-uptime',  fmtUptime(d.uptime));
-  setText('topbar-servers', `${fmtNum(d.serverCount)} servers`);
-
-  // Sidebar
-  setText('sidebar-ping',   d.ping >= 0 ? `${d.ping}ms` : '—');
-  setText('sidebar-status', d.wsStatus === 'READY' ? 'Live' : 'Degraded');
-
-  // RAM stats grid
-  const heapPct = d.heapTotal ? Math.round((d.heapUsed / d.heapTotal) * 100) : 0;
-  const ramPct  = d.sysTotal  ? Math.round(((d.sysTotal - d.sysFree) / d.sysTotal) * 100) : 0;
-
-  populateStatsGrid(d, heapPct, ramPct);
-
-  // Lockdown indicator
-  if (d.globalLockdown !== undefined) {
-    setLockdownIndicator(d.globalLockdown);
-  }
-
-  // Mongo dot
-  const mongoDot = document.getElementById('mongo-dot');
-  if (mongoDot) {
-    mongoDot.className = 'status-dot ' + (d.wsStatus === 'READY' ? 'connected' : 'disconnected');
-  }
-}
-
-let statsGridBuilt = false;
-
-function populateStatsGrid(d, heapPct, ramPct) {
-  const grid = document.getElementById('stats-grid');
-  if (!grid) return;
-
-  const cards = [
-    { label: 'Heap Used',    value: fmtBytes(d.heapUsed),              sub: `${heapPct}% of ${fmtBytes(d.heapTotal)}` },
-    { label: 'RSS Memory',   value: fmtBytes(d.rss),                   sub: 'Resident set' },
-    { label: 'System RAM',   value: `${ramPct}%`,                      sub: `${fmtBytes(d.sysTotal - d.sysFree)} used` },
-    { label: 'Disk',         value: d.disk?.used ?? '—',               sub: `${d.disk?.percent ?? ''} · ${d.disk?.available ?? '—'} free` },
-    { label: 'WS Status',    value: d.wsStatus ?? '—',                 sub: 'Discord gateway' },
-    { label: 'Chat Histories', value: fmtNum(d.totalHistories),        sub: 'Stored conversations' },
-    { label: 'User Settings',  value: fmtNum(d.totalUsers_s),          sub: 'Configured users' },
-    { label: 'Server Settings', value: fmtNum(d.totalServers_s),       sub: 'Configured guilds' },
-    { label: 'Debug Mode',   value: d.debugMode ? 'ON' : 'OFF',        sub: 'Verbose logging' },
+function buildStatGrid(d) {
+  const grid=document.getElementById('stat-grid');
+  if(!grid)return;
+  const heapPct=d.ram?.heapTotal?Math.round((d.ram.heapUsed/d.ram.heapTotal)*100):0;
+  const ramPct=d.ram?.sysTotal?Math.round(((d.ram.sysTotal-d.ram.sysFree)/d.ram.sysTotal)*100):0;
+  const stats=[
+    {label:'Heap Used',value:fmtBytes(d.ram?.heapUsed),sub:`${heapPct}% of ${fmtBytes(d.ram?.heapTotal)}`},
+    {label:'RSS Memory',value:fmtBytes(d.ram?.rss),sub:'Resident set size'},
+    {label:'System RAM',value:fmtBytes(d.ram?.sysTotal-d.ram?.sysFree),sub:`${ramPct}% used`},
+    {label:'Disk Used',value:d.disk?.used||'—',sub:`${d.disk?.percent||''} · ${d.disk?.available||'—'} free`},
+    {label:'Node.js',value:d.nodeVersion||'—',sub:d.platform||'—'},
+    {label:'CPU Cores',value:String(d.cpuCores||'—'),sub:'Available cores'},
+    {label:'WS Status',value:d.wsStatus||'—',sub:'Discord socket',badge:d.wsStatus==='OPEN'?'ok':d.wsStatus==='CONNECTING'?'warn':'err',badgeLbl:d.wsStatus||'—'},
+    {label:'Lockdown',value:d.globalLockdown?'ACTIVE':'Off',sub:'Global state',badge:d.globalLockdown?'err':null,badgeLbl:'LOCKDOWN'},
+    {label:'Debug Mode',value:d.debugMode?'ON':'Off',sub:'Verbose logging'},
+    {label:'Histories',value:fmtNum(d.historyCount),sub:'Active sessions'},
+    {label:'Blacklisted',value:fmtNum(d.blacklistCount),sub:'Users blocked'},
+    {label:'Uptime',value:fmtUptime(d.uptime),sub:'Since last restart'},
   ];
-
-  if (!statsGridBuilt) {
-    statsGridBuilt = true;
-    grid.innerHTML = cards.map((c, i) => `
-      <div class="stat-card" id="sgc-${i}">
-        <div class="stat-label">${c.label}</div>
-        <div class="stat-value mono" id="sgv-${i}">${c.value}</div>
-        <div class="stat-sub" id="sgs-${i}">${c.sub}</div>
-      </div>
-    `).join('');
-  } else {
-    cards.forEach((c, i) => {
-      setText(`sgv-${i}`, c.value);
-      setText(`sgs-${i}`, c.sub);
-    });
-  }
+  grid.innerHTML=stats.map(s=>`
+    <div class="stat-card">
+      <div class="stat-label">${s.label}</div>
+      <div class="stat-value">${s.value}</div>
+      <div class="stat-sub">${s.sub}</div>
+      ${s.badge&&s.badgeLbl?`<span class="stat-badge ${s.badge}">${s.badgeLbl}</span>`:''}
+    </div>`).join('');
 }
-
-// ── Full stats load (initial) ─────────────────────────────────────────────────
 
 async function loadFullStats() {
-  try {
-    const res  = await fetch(`${BASE_URL}/api/stats`, { headers: { 'x-token': getToken() } });
-    if (res.status === 401) { logout(); return; }
-    const json = await res.json();
-
-    // Bot identity
-    const avatar = document.getElementById('overview-avatar');
-    if (avatar && json.avatarURL) {
-      avatar.src = json.avatarURL;
-      const sidebarAvatar = document.getElementById('sidebar-avatar');
-      if (sidebarAvatar) sidebarAvatar.src = json.avatarURL;
-    }
-    setText('overview-username', json.username || '—');
-    setText('overview-tag',  json.tag || '—');
-    setText('overview-id',   json.id  || '—');
-    setText('mongo-status-text', json.mongoStatus || '—');
-
-    const mongoDot = document.getElementById('mongo-dot');
-    if (mongoDot) mongoDot.className = `status-dot ${json.mongoStatus === 'Connected' ? 'connected' : 'disconnected'}`;
-
-    // API keys
-    renderApiKeys(json.apiKeyStats);
-  } catch (err) {
-    console.error('Full stats load failed', err);
-  }
+  const r=await api.getStats().catch(()=>null);
+  if(!r)return;
+  if(r.username)setText('bot-name',r.username);
+  if(r.id)setText('bot-id',`ID: ${r.id}`);
+  if(r.tag)setText('bot-tag',r.tag);
+  const av=document.getElementById('bot-av');
+  if(av&&r.avatarURL){av.src=r.avatarURL;av.style.display='block';}
+  const dbDot=document.getElementById('db-dot');
+  const dbText=document.getElementById('db-status-text');
+  const dbOk=r.dbStatus==='connected'||r.dbStatus==='ok';
+  if(dbDot)dbDot.className=`status-dot ${dbOk?'ok':'err'}`;
+  if(dbText)dbText.textContent=dbOk?'Connected':(r.dbStatus||'Unknown');
+  const keyRes=await api.getApiKeyStats().catch(()=>null);
+  if(keyRes?.success)renderApiKeysPanel(keyRes.data);
 }
 
-function renderApiKeys(apiStats) {
-  const container = document.getElementById('api-keys-content');
-  if (!container || !apiStats?.keys) return;
-  container.innerHTML = apiStats.keys.map(k => `
-    <div class="api-key-row ${k.isCurrent ? 'current' : ''}">
-      <span class="api-key-name">Key ${k.keyNumber}</span>
-      <span class="api-key-meta">${k.totalRequests} req · ${k.errors} err</span>
-    </div>
-  `).join('') || '<div style="color:var(--text-muted);font-size:12px">No keys configured</div>';
+// Users
+async function lookupUser(){
+  const id=(document.getElementById('user-lookup-id')?.value||'').trim();
+  if(!id){toastErr('Enter a User ID');return;}
+  const r=await api.getUserSettings(id).catch(e=>({error:e.message}));
+  const el=document.getElementById('user-lookup-result');
+  if(!el)return;
+  el.classList.remove('hidden');
+  el.textContent=r?.success?(r.found?JSON.stringify(r.data,null,2):`No settings for user ${id}`):(r?.error||'Error');
+}
+async function sendDm(){
+  const userId=(document.getElementById('dm-user-id')?.value||'').trim();
+  const message=(document.getElementById('dm-message')?.value||'').trim();
+  const result=document.getElementById('dm-result');
+  if(!userId||!message){toastErr('User ID and message required');return;}
+  const r=await api.sendDm(userId,message).catch(e=>({error:e.message}));
+  if(result){result.className=`cmd-result ${r?.success?'ok':'err'}`;result.textContent=r?.message||r?.error||'';result.classList.remove('hidden');}
+  r?.success?toastOk(r.message||'DM sent'):toastErr(r?.error||'Failed');
+}
+async function blacklistUser(){
+  const userId=(document.getElementById('bl-user-id')?.value||'').trim();
+  const guildId=(document.getElementById('bl-guild-id')?.value||'').trim();
+  const result=document.getElementById('bl-result');
+  if(!userId||!guildId){toastErr('User ID and Guild ID required');return;}
+  const r=await api.blacklistUser(userId,guildId).catch(e=>({error:e.message}));
+  if(result){result.className=`cmd-result ${r?.success?'ok':'err'}`;result.textContent=r?.message||r?.error||'';result.classList.remove('hidden');}
+  r?.success?toastOk(r.message||'Blacklisted'):toastErr(r?.error||'Failed');
+}
+async function unblacklistUser(){
+  const userId=(document.getElementById('bl-user-id')?.value||'').trim();
+  const guildId=(document.getElementById('bl-guild-id')?.value||'').trim();
+  const result=document.getElementById('bl-result');
+  if(!userId||!guildId){toastErr('User ID and Guild ID required');return;}
+  const r=await api.unblacklistUser(userId,guildId).catch(e=>({error:e.message}));
+  if(result){result.className=`cmd-result ${r?.success?'ok':'err'}`;result.textContent=r?.message||r?.error||'';result.classList.remove('hidden');}
+  r?.success?toastOk(r.message||'Unblacklisted'):toastErr(r?.error||'Failed');
+}
+async function loadBlacklist(){
+  const el=document.getElementById('blacklist-content');
+  if(el)el.textContent='Loading...';
+  const r=await api.getBlacklisted().catch(()=>null);
+  if(!el)return;
+  if(!r?.success||!r.data){el.textContent='Failed to load blacklist';return;}
+  const guilds=Object.entries(r.data);
+  if(!guilds.length){el.textContent='No blacklisted users.';return;}
+  el.innerHTML=guilds.map(([gid,users])=>`<div class="bl-guild">Guild: ${gid}</div>${users.map(u=>`<div class="bl-entry">${u}</div>`).join('')}`).join('')+`<div style="margin-top:8px;font-size:11px;color:var(--tm)">Total: ${r.total||0}</div>`;
 }
 
-// ── Admin command helper ──────────────────────────────────────────────────────
-
-async function runCmd(cmdName, body = {}) {
-  try {
-    const res = await fetch(`${BASE_URL}/api/cmd/${cmdName}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-token': getToken() },
-      body: JSON.stringify(body),
-    });
-    const json = await res.json();
-    showToast(json.message || (json.error ? `Error: ${json.error}` : 'Done'), json.error ? 'err' : 'ok');
-  } catch (err) {
-    showToast(`Request failed: ${err.message}`, 'err');
-  }
+// Presence
+function applyPreset(status,activity,type){
+  const s=document.getElementById('presence-status');const a=document.getElementById('presence-activity');const t=document.getElementById('presence-type');
+  if(s)s.value=status;if(a)a.value=activity;if(t)t.value=type;
+}
+async function setPresence(){
+  const status=document.getElementById('presence-status')?.value||'online';
+  const activity=(document.getElementById('presence-activity')?.value||'').trim();
+  const type=parseInt(document.getElementById('presence-type')?.value||'0');
+  const result=document.getElementById('presence-result');
+  const r=await api.setPresence({status,activity,activityType:type}).catch(e=>({error:e.message}));
+  if(result){result.className=`cmd-result ${r?.success?'ok':'err'}`;result.textContent=r?.message||r?.error||'';result.classList.remove('hidden');}
+  r?.success?toastOk(r.message||'Presence updated'):toastErr(r?.error||'Failed');
 }
 
-// ── Toast ─────────────────────────────────────────────────────────────────────
-
-function showToast(msg, type = 'info') {
-  const region = document.getElementById('toast-region');
-  if (!region) return;
-  const el = document.createElement('div');
-  el.className = `toast ${type}`;
-  el.textContent = msg;
-  region.appendChild(el);
-  setTimeout(() => el.remove(), 4000);
+// Auth
+async function checkSession(){
+  const r=await api.authMe().catch(()=>null);
+  if(r?._authError||!r?.email)return false;
+  setText('sb-user-name',r.name||r.email.split('@')[0]);
+  setText('sb-user-email',r.email);
+  const av=document.getElementById('sb-avatar');
+  if(av&&r.picture){av.src=r.picture;av.onerror=()=>{av.style.display='none';};}
+  return true;
 }
-
-// ── Clock ─────────────────────────────────────────────────────────────────────
-
-function startClock() {
-  const tick = () => {
-    const now = new Date();
-    const t   = now.toLocaleTimeString('en-US', { hour12: false });
-    const d   = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    setText('topbar-clock', `${d}  ${t}`);
-  };
-  tick();
-  setInterval(tick, 1000);
-}
-
-// ── Auth ──────────────────────────────────────────────────────────────────────
-
-function initiateGoogleLogin() {
-  const btn = document.getElementById('google-sign-in-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Redirecting...'; }
-  location.href = `${BASE_URL}/auth/google`;
-}
-window.initiateGoogleLogin = initiateGoogleLogin;
-
-async function handleOAuthReturn() {
-  const params = new URLSearchParams(location.search);
-  const token  = params.get('token');
-  const auth   = params.get('auth');
-
-  if (token) {
-    setToken(token);
-    history.replaceState({}, '', location.pathname);
-    await showDashboard();
-    return true;
-  }
-
-  if (auth === 'denied') {
-    document.getElementById('auth-denied')?.classList.remove('hidden');
-    return false;
-  }
-
-  if (auth === 'error' || auth === 'invalid_state') {
-    const statusEl = document.getElementById('login-status');
-    if (statusEl) {
-      statusEl.textContent = 'Authentication error. Please try again.';
-      statusEl.classList.remove('hidden');
-    }
-    return false;
-  }
-
+function handleOAuthCallback(){
+  const params=new URLSearchParams(location.search);
+  const token=params.get('token'),error=params.get('error');
+  if(token){setToken(token);history.replaceState({},'',location.pathname);return true;}
+  if(error){const el=document.getElementById('login-alert');if(el){el.textContent=decodeURIComponent(error);el.classList.remove('hidden');}history.replaceState({},'',location.pathname);}
   return false;
 }
 
-async function verifyExistingSession() {
-  if (!hasToken()) return false;
-  try {
-    const res = await fetch(`${BASE_URL}/auth/me`, { headers: { 'x-token': getToken() } });
-    if (res.status === 401) { clearToken(); return false; }
-    const json = await res.json();
-    if (json.user) {
-      updateUserDisplay(json.user);
-      return true;
-    }
-    return false;
-  } catch { return false; }
-}
+// Overview quick-buttons
+window.CMD=window.CMD||{};
+Object.assign(window.CMD,{
+  saveState:   async()=>{const r=await api.saveState().catch(e=>({error:e.message}));r?.success?toastOk(r.message||'State saved'):toastErr(r?.error||'Failed');},
+  toggleDebug: async()=>{const r=await api.toggleDebug().catch(e=>({error:e.message}));r?.success?toastOk(r.message||'Debug toggled'):toastErr(r?.error||'Failed');},
+  restart:     async()=>{if(!confirm('Restart the bot process?'))return;const r=await api.restart().catch(e=>({error:e.message}));r?.success?toastWarn(r.message||'Restarting...'):toastErr(r?.error||'Failed');},
+  switchApiKey:async()=>{const r=await api.switchApiKey().catch(e=>({error:e.message}));if(r?.success){toastOk(r.message||'Key rotated');if(r.stats)renderApiKeysPanel(r.stats);}else toastErr(r?.error||'Failed');},
+});
 
-function updateUserDisplay(user) {
-  setText('sidebar-user-name', user.name || '—');
-  setText('sidebar-user-email', user.email || '—');
-  const avatar = document.getElementById('sidebar-avatar');
-  if (avatar && user.picture) avatar.src = user.picture;
-}
+// Global refs
+window._navigate=navigate;
+window._initiateLogin=()=>{window.location.href=`${BASE_URL}/auth/google`;};
+window._logout=()=>{api.authLogout().catch(()=>{});clearToken();location.reload();};
+window._toggleSidebar=()=>{const sb=document.getElementById('sidebar');const ov=document.getElementById('sb-overlay');if(!sb)return;const open=sb.classList.toggle('open');ov?.classList.toggle('hidden',!open);};
+window._closeSidebar=()=>{document.getElementById('sidebar')?.classList.remove('open');document.getElementById('sb-overlay')?.classList.add('hidden');};
+window._loadServers=loadServers;
+window._filterServers=filterServers;
+window._leaveServer=leaveServer;
+window._resetServer=resetServer;
+window._sendAnnounce=sendAnnouncement;
+window._toggleLockdown=toggleLockdown;
+window._lookupUser=lookupUser;
+window._sendDm=sendDm;
+window._blacklistUser=blacklistUser;
+window._unblacklistUser=unblacklistUser;
+window._loadBlacklist=loadBlacklist;
+window._setPresence=setPresence;
+window._applyPreset=applyPreset;
 
-async function logout() {
-  try {
-    await fetch(`${BASE_URL}/auth/logout`, {
-      method: 'POST',
-      headers: { 'x-token': getToken() },
-    });
-  } catch {}
-  clearToken();
-  statsWs?.close();
-  document.getElementById('app')?.classList.add('hidden');
-  document.getElementById('login-page')?.classList.remove('hidden');
-}
-
-async function showDashboard() {
-  document.getElementById('login-page')?.classList.add('hidden');
-  document.getElementById('app')?.classList.remove('hidden');
-
-  // Verify + load user
-  await verifyExistingSession();
-
-  // Start real-time stats
-  startStatsStream();
-
-  // Full initial load
-  await loadFullStats();
-
-  // Init page modules
-  renderCommands();
-  initAnnounce();
-
-  navigate('overview');
-}
-
-// ── reCAPTCHA v3 (background) ─────────────────────────────────────────────────
-
-async function initRecaptcha(siteKey) {
-  if (!siteKey) return;
-
-  await new Promise(resolve => {
-    const s = document.createElement('script');
-    s.src = `https://www.google.com/recaptcha/api.js?render=${siteKey}`;
-    s.onload = resolve;
-    document.head.appendChild(s);
-  });
-
-  // Execute silently on login page load — score is logged server-side
-  try {
-    const token = await window.grecaptcha.execute(siteKey, { action: 'login' });
-    await fetch(`${BASE_URL}/auth/verify-recaptcha`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
-    });
-  } catch {}
-}
-
-// ── Navigation handler ────────────────────────────────────────────────────────
-
-onNavigate((pageId) => {
-  switch (pageId) {
-    case 'servers':       loadServers();       break;
-    case 'lockdown':      loadLockdownState(); break;
-    case 'node-console':  initNodeTerminal();  break;
-    case 'mongo-console': initMongoTerminal(); break;
+// Page navigation
+onNavigate(id=>{
+  switch(id){
+    case 'servers':       loadServers();      break;
+    case 'commands':      renderCommands();   break;
+    case 'announce':      initAnnounce();     break;
+    case 'lockdown':      loadLockdownState();break;
+    case 'node-console':  initNodeTerminal(); break;
+    case 'mongo-console': initMongoTerminal();break;
+    case 'users':         loadBlacklist();    break;
   }
 });
 
-// ── Global bindings ───────────────────────────────────────────────────────────
-
-window._navigate       = navigate;
-window._loadServers    = loadServers;
-window._toggleLockdown = toggleLockdown;
-window._sendAnnounce   = sendAnnouncement;
-window._logout         = logout;
-window._runCmd         = runCmd;
-window._showToast      = showToast;
-
-// ── Boot ──────────────────────────────────────────────────────────────────────
-
-async function boot() {
-  // Build sidebar nav
-  buildSidebarNav(document.getElementById('sidebar-nav'));
-
-  // Logout button
-  document.getElementById('logout-btn')?.addEventListener('click', logout);
-
-  // Start clock
+// Boot
+async function boot(){
+  const hadToken=handleOAuthCallback();
+  buildSidebarNav(document.getElementById('sb-nav'));
+  buildBottomNav(document.getElementById('bnav-inner'));
   startClock();
-
-  // Load auth config (recaptcha key, oauth available)
-  try {
-    const cfg = await fetch(`${BASE_URL}/auth/config`).then(r => r.json());
-    if (cfg.recaptchaSiteKey) initRecaptcha(cfg.recaptchaSiteKey);
-  } catch {}
-
-  // Check URL params first (returning from OAuth)
-  const handledOAuth = await handleOAuthReturn();
-  if (handledOAuth) return;
-
-  // Check existing session
-  if (hasToken()) {
-    const valid = await verifyExistingSession();
-    if (valid) {
-      await showDashboard();
-      return;
-    }
-    clearToken();
+  if(!hasToken()&&!hadToken){
+    document.getElementById('login-page')?.classList.remove('hidden');
+    document.getElementById('app')?.classList.add('hidden');
+    return;
   }
-
-  // Show login
-  document.getElementById('login-page')?.classList.remove('hidden');
+  const valid=await checkSession();
+  if(!valid){
+    clearToken();
+    document.getElementById('login-page')?.classList.remove('hidden');
+    document.getElementById('app')?.classList.add('hidden');
+    return;
+  }
+  document.getElementById('login-page')?.classList.add('hidden');
+  document.getElementById('app')?.classList.remove('hidden');
+  navigate('overview');
+  startStatsStream();
+  loadFullStats();
+  loadLockdownState();
 }
 
-document.addEventListener('DOMContentLoaded', boot);
+boot();

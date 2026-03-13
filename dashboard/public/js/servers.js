@@ -1,97 +1,81 @@
-/**
- * servers.js — Render the servers list table.
- */
-
 import { api } from './api.js';
 import { toastOk, toastErr } from './toast.js';
 
-export async function loadServers() {
-  const tbody = document.getElementById('servers-tbody');
-  const countEl = document.getElementById('servers-count');
+let _servers = [];
 
-  if (tbody) {
-    tbody.innerHTML = `
-      <tr><td colspan="5">
-        <div class="loading-row"><div class="spinner"></div> Loading servers…</div>
-      </td></tr>`;
-  }
+export async function loadServers() {
+  const grid = document.getElementById('servers-grid');
+  if (grid) grid.innerHTML = '<div class="loading-msg">Loading servers...</div>';
 
   const res = await api.getServers().catch(() => null);
   if (!res?.data) {
-    if (tbody) {
-      tbody.innerHTML = `<tr><td colspan="5">
-        <div class="empty-state">
-          <div class="empty-state-icon">⚠️</div>
-          <div class="empty-state-text">Failed to load servers</div>
-        </div>
-      </td></tr>`;
-    }
+    if (grid) grid.innerHTML = '<div class="loading-msg">Failed to load servers. Check API.</div>';
     return;
   }
 
-  const servers = res.data;
-  if (countEl) countEl.textContent = servers.length;
+  _servers = res.data;
+  renderServers(_servers);
+}
+
+export function filterServers(q) {
+  const filtered = q
+    ? _servers.filter(s => s.name.toLowerCase().includes(q.toLowerCase()) || s.id.includes(q))
+    : _servers;
+  renderServers(filtered);
+}
+
+function renderServers(servers) {
+  const grid = document.getElementById('servers-grid');
+  if (!grid) return;
 
   if (!servers.length) {
-    tbody.innerHTML = `<tr><td colspan="5">
-      <div class="empty-state">
-        <div class="empty-state-icon">🌐</div>
-        <div class="empty-state-text">No servers found</div>
-      </div>
-    </td></tr>`;
+    grid.innerHTML = '<div class="loading-msg">No servers found.</div>';
     return;
   }
 
-  tbody.innerHTML = servers.map(s => {
-    const memberCount = (s.memberCount ?? 0).toLocaleString();
+  grid.innerHTML = servers.map(s => {
     const icon = s.iconURL
-      ? `<img class="guild-avatar" src="${s.iconURL}" onerror="this.outerHTML='<div class=\\'guild-avatar\\'>🌐</div>'" alt=""/>`
-      : `<div class="guild-avatar">🌐</div>`;
-    const blCount = s.blacklisted ?? 0;
-
+      ? `<div class="server-icon"><img src="${s.iconURL}" onerror="this.parentElement.innerHTML='<div class=\\'server-icon-fb\\'>${esc(s.name[0].toUpperCase())}</div>'"/></div>`
+      : `<div class="server-icon"><div class="server-icon-fb">${esc(s.name[0]?.toUpperCase() || '?')}</div></div>`;
+    const bl = s.blacklisted ?? 0;
+    const joined = s.joinedAt ? new Date(s.joinedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
     return `
-      <tr>
-        <td>
-          <div class="guild-row-name">
-            ${icon}
-            <div>
-              <div class="guild-name">${escHtml(s.name)}</div>
-              <div class="guild-id">${s.id}</div>
-            </div>
+      <div class="server-card">
+        <div class="server-card-top">
+          ${icon}
+          <div>
+            <div class="server-name">${esc(s.name)}</div>
+            <div class="server-id">${s.id}</div>
           </div>
-        </td>
-        <td>${memberCount}</td>
-        <td style="font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)">${s.ownerId}</td>
-        <td>
-          <span class="badge ${blCount > 0 ? 'badge-danger' : 'badge-neutral'}">
-            ${blCount} user${blCount !== 1 ? 's' : ''}
-          </span>
-        </td>
-        <td>
-          <button class="btn btn-danger btn-sm"
-            onclick="window._leaveServer('${s.id}', '${escHtml(s.name).replace(/'/g, "\\'")}')"
-          >Leave</button>
-        </td>
-      </tr>
-    `;
+        </div>
+        <div class="server-stats">
+          <div class="sv-stat"><div class="sv-stat-lbl">Members</div><div class="sv-stat-val">${(s.memberCount||0).toLocaleString()}</div></div>
+          <div class="sv-stat"><div class="sv-stat-lbl">Blacklisted</div><div class="sv-stat-val">${bl}</div></div>
+          <div class="sv-stat"><div class="sv-stat-lbl">Joined</div><div class="sv-stat-val" style="font-size:10px">${joined}</div></div>
+          <div class="sv-stat"><div class="sv-stat-lbl">Owner</div><div class="sv-stat-val" style="font-size:10px">${s.ownerId?.slice(-6) || '—'}</div></div>
+        </div>
+        <div class="server-actions">
+          <button class="sv-btn" onclick="window._resetServer('${s.id}','${esc(s.name).replace(/'/g,"\\'")}')">Reset Settings</button>
+          <button class="sv-btn danger" onclick="window._leaveServer('${s.id}','${esc(s.name).replace(/'/g,"\\'")}')">Leave</button>
+        </div>
+      </div>`;
   }).join('');
 }
 
 export async function leaveServer(guildId, name) {
-  if (!confirm(`Leave server "${name}"?\n\nThis cannot be undone.`)) return;
-  const r = await api.leaveServer(guildId);
-  if (r.success) {
-    toastOk(r.message);
-    await loadServers();
-  } else {
-    toastErr(r.error || 'Failed to leave server');
-  }
+  if (!confirm(`Leave server "${name}"?\n\nThe bot will have to be re-invited to rejoin.`)) return;
+  const r = await api.leaveServer(guildId).catch(e => ({ error: e.message }));
+  if (r?.success) { toastOk(r.message || 'Left server'); await loadServers(); }
+  else toastErr(r?.error || 'Failed to leave server');
 }
 
-function escHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+export async function resetServer(guildId, name) {
+  if (!confirm(`Reset all settings for "${name}"?`)) return;
+  const r = await api.resetServer(guildId).catch(e => ({ error: e.message }));
+  if (r?.success) toastOk(r.message || 'Settings reset');
+  else toastErr(r?.error || 'Failed to reset');
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }

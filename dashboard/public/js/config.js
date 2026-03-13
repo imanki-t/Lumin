@@ -1,44 +1,21 @@
-/**
- * config.js — Dashboard configuration and session management.
- * Session token is stored in sessionStorage (cleared on tab close).
- */
-
 export const SESSION_KEY = 'lumin_dash_token';
 export const BASE_URL    = window.location.origin + '/dashboard';
 
-export function getToken()         { return sessionStorage.getItem(SESSION_KEY) || ''; }
-export function setToken(token)    { sessionStorage.setItem(SESSION_KEY, token); }
-export function clearToken()       { sessionStorage.removeItem(SESSION_KEY); }
-export function hasToken()         { return !!getToken(); }
+export const getToken  = () => sessionStorage.getItem(SESSION_KEY) || '';
+export const setToken  = t  => sessionStorage.setItem(SESSION_KEY, t);
+export const clearToken= () => sessionStorage.removeItem(SESSION_KEY);
+export const hasToken  = () => !!getToken();
 
-/** Nav page definitions with inline SVG icons */
+const I = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">${d}</svg>`;
+
 export const PAGES = [
-  {
-    id: 'overview', label: 'Overview', group: 'Monitor', title: 'Overview', breadcrumb: 'Monitor',
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="13" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/><rect x="3" y="3" width="7" height="6" rx="1"/></svg>`,
-  },
-  {
-    id: 'servers', label: 'Servers', group: 'Monitor', title: 'Servers', breadcrumb: 'Monitor',
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><ellipse cx="12" cy="12" rx="4" ry="10"/><path d="M2 12h20"/></svg>`,
-  },
-  {
-    id: 'commands', label: 'Commands', group: 'Control', title: 'Admin Commands', breadcrumb: 'Control',
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
-  },
-  {
-    id: 'announce', label: 'Announce', group: 'Control', title: 'Global Announcement', breadcrumb: 'Control',
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>`,
-  },
-  {
-    id: 'lockdown', label: 'Lockdown', group: 'Control', title: 'Global Lockdown', breadcrumb: 'Control',
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>`,
-  },
-  {
-    id: 'node-console', label: 'Node.js', group: 'Consoles', title: 'Node.js REPL', breadcrumb: 'Consoles',
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>`,
-  },
-  {
-    id: 'mongo-console', label: 'MongoDB', group: 'Consoles', title: 'MongoDB Shell', breadcrumb: 'Consoles',
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>`,
-  },
+  { id:'overview',      label:'Overview',  group:'Monitor',  title:'Overview',            icon: I('<rect x="3" y="13" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/><rect x="3" y="3" width="7" height="6" rx="1"/>') },
+  { id:'servers',       label:'Servers',   group:'Monitor',  title:'Servers',             icon: I('<circle cx="12" cy="12" r="10"/><ellipse cx="12" cy="12" rx="4" ry="10"/><path d="M2 12h20"/>') },
+  { id:'users',         label:'Users',     group:'Monitor',  title:'User Management',     icon: I('<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>') },
+  { id:'commands',      label:'Commands',  group:'Control',  title:'Admin Commands',      icon: I('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>') },
+  { id:'presence',      label:'Presence',  group:'Control',  title:'Bot Presence',        icon: I('<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>') },
+  { id:'announce',      label:'Announce',  group:'Control',  title:'Global Announcement', icon: I('<path d="M3 11l19-9-9 19-2-8-8-2z"/>') },
+  { id:'lockdown',      label:'Lockdown',  group:'Control',  title:'Global Lockdown',     icon: I('<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>'), lockdown: true },
+  { id:'node-console',  label:'Node.js',   group:'Consoles', title:'Node.js REPL',        icon: I('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>') },
+  { id:'mongo-console', label:'MongoDB',   group:'Consoles', title:'MongoDB Shell',       icon: I('<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/>') },
 ];
