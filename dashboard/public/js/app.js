@@ -158,11 +158,13 @@ async function setPresence(){
 // Auth
 async function checkSession(){
   const r=await api.authMe().catch(()=>null);
-  if(r?._authError||!r?.email)return false;
-  setText('sb-user-name',r.name||r.email.split('@')[0]);
-  setText('sb-user-email',r.email);
+  // Server returns { success, user: { email, name, picture }, token }
+  const user = r?.user || r;
+  if(!user?.email) return false;
+  setText('sb-user-name', user.name || user.email.split('@')[0]);
+  setText('sb-user-email', user.email);
   const av=document.getElementById('sb-avatar');
-  if(av&&r.picture){av.src=r.picture;av.onerror=()=>{av.style.display='none';};}
+  if(av&&user.picture){av.src=user.picture;av.onerror=()=>{av.style.display='none';};}
   return true;
 }
 function handleOAuthCallback(){
