@@ -1,34 +1,38 @@
 /**
  * terminals.js — xterm.js powered Node.js REPL and MongoDB shell.
+ *
+ * Fixes:
+ *  - Auto-connects on navigate (no manual button click needed)
+ *  - Connect button hidden when connected; Disconnect button shown instead
+ *  - Only one connect() call per session (guards against double init)
  */
 
 import { getToken } from './config.js';
-import { toastInfo, toastErr } from './toast.js';
 
-// ── Theme ─────────────────────────────────────────────────────────────────────
+// ── xterm theme ───────────────────────────────────────────────────────────────
 
 const XTERM_THEME = {
-  background:        '#080A0D',
-  foreground:        '#F4F1EC',
-  cursor:            '#CF6A37',
-  cursorAccent:      '#0C0C0E',
-  selectionBackground: 'rgba(207,106,55,0.25)',
-  black:             '#0C0C0E',
-  red:               '#D95F5F',
-  green:             '#3E9E6E',
-  yellow:            '#C9924A',
-  blue:              '#5B8FD4',
-  magenta:           '#9B7FD4',
-  cyan:              '#4EB8B8',
-  white:             '#F4F1EC',
-  brightBlack:       '#625F5A',
-  brightRed:         '#E07070',
-  brightGreen:       '#4EAE7E',
-  brightYellow:      '#D4A460',
-  brightBlue:        '#6B9FE4',
-  brightMagenta:     '#AB8FE4',
-  brightCyan:        '#5EC8C8',
-  brightWhite:       '#FFFFFF',
+  background:          '#060608',
+  foreground:          '#E0E0EE',
+  cursor:              '#6D5AE6',
+  cursorAccent:        '#060608',
+  selectionBackground: 'rgba(109,90,230,0.25)',
+  black:               '#0C0C10',
+  red:                 '#EF4444',
+  green:               '#22C55E',
+  yellow:              '#F59E0B',
+  blue:                '#6D5AE6',
+  magenta:             '#A855F7',
+  cyan:                '#22D3EE',
+  white:               '#E0E0EE',
+  brightBlack:         '#52525B',
+  brightRed:           '#F87171',
+  brightGreen:         '#4ADE80',
+  brightYellow:        '#FCD34D',
+  brightBlue:          '#818CF8',
+  brightMagenta:       '#C084FC',
+  brightCyan:          '#67E8F9',
+  brightWhite:         '#FFFFFF',
 };
 
 const XTERM_OPTIONS = {
@@ -36,31 +40,45 @@ const XTERM_OPTIONS = {
   cursorBlink:       true,
   cursorStyle:       'bar',
   fontSize:          13,
-  fontFamily:        "'Geist Mono', 'Cascadia Code', 'Fira Code', monospace",
-  lineHeight:        1.4,
-  letterSpacing:     0.3,
-  scrollback:        2000,
+  fontFamily:        "'IBM Plex Mono', 'Cascadia Code', 'Fira Code', monospace",
+  lineHeight:        1.45,
+  letterSpacing:     0.2,
+  scrollback:        3000,
   allowTransparency: true,
 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-const state = {
-  node:  { term: null, ws: null, addon: null, initialized: false },
-  mongo: { term: null, ws: null, addon: null, initialized: false },
+const terminals = {
+  node:  { term: null, ws: null, addon: null, initialized: false, inputDispose: null },
+  mongo: { term: null, ws: null, addon: null, initialized: false, inputDispose: null },
 };
 
-// ── WS URL ────────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function wsUrl(path) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   return `${proto}://${location.host}/dashboard${path}?token=${encodeURIComponent(getToken())}`;
 }
 
-// ── Generic init ──────────────────────────────────────────────────────────────
+function setConnected(key, connected) {
+  // Badge
+  const badge = document.getElementById(`${key}-conn-badge`);
+  if (badge) {
+    badge.className = `conn-badge ${connected ? 'connected' : ''}`;
+    const label = badge.querySelector('.conn-label');
+    if (label) label.textContent = connected ? 'Connected' : 'Disconnected';
+  }
+
+  // Disconnect button: show when connected
+  const disconnectBtn = document.getElementById(`${key}-btn-disconnect`);
+  if (disconnectBtn) disconnectBtn.style.display = connected ? 'flex' : 'none';
+}
+
+// ── Terminal init ─────────────────────────────────────────────────────────────
 
 function initTerm(key, containerId) {
-  const s = state[key];
+  const s = terminals[key];
   if (s.initialized) return;
 
   const container = document.getElementById(containerId);
@@ -71,122 +89,93 @@ function initTerm(key, containerId) {
   s.term.loadAddon(s.addon);
   s.term.open(container);
 
-  requestAnimationFrame(() => {
-    s.addon.fit();
-  });
-
+  requestAnimationFrame(() => s.addon?.fit());
   s.initialized = true;
-
-  const hint = key === 'node'
-    ? '\x1b[90mNode.js REPL ready. Press Connect to start a session.\x1b[0m\r\n'
-    : '\x1b[90mMongoDB shell ready. Press Connect to start a session.\x1b[0m\r\n';
-  s.term.writeln(hint);
 }
 
 // ── Connect ───────────────────────────────────────────────────────────────────
 
-function connect(key, wsPath, statusId) {
-  const s = state[key];
+function connect(key, wsPath) {
+  const s = terminals[key];
 
-  if (s.ws && s.ws.readyState < 2) {
-    toastInfo('Already connected');
-    return;
-  }
+  // Guard: don't connect if already open
+  if (s.ws && s.ws.readyState < 2) return;
 
-  const statusEl = document.getElementById(statusId);
-  const setStatus = (connected) => {
-    if (!statusEl) return;
-    statusEl.className  = `terminal-conn-badge ${connected ? 'connected' : 'disconnected'}`;
-    statusEl.textContent = connected ? 'Connected' : 'Disconnected';
-  };
-
-  setStatus(false);
+  setConnected(key, false);
 
   const ws = new WebSocket(wsUrl(wsPath));
   ws.binaryType = 'arraybuffer';
   s.ws = ws;
 
   ws.onopen = () => {
-    setStatus(true);
-    s.term.writeln('\x1b[32m[Session started]\x1b[0m\r\n');
+    setConnected(key, true);
+    s.term?.writeln('\x1b[32m[Session started]\x1b[0m\r\n');
+    s.addon?.fit();
 
-    // Wire terminal input to WS
-    s.term.onData(data => {
+    // Wire keyboard → WS (dispose previous listener first)
+    if (s.inputDispose) { s.inputDispose.dispose(); s.inputDispose = null; }
+    s.inputDispose = s.term?.onData(data => {
       if (ws.readyState === WebSocket.OPEN) ws.send(data);
     });
-
-    s.addon?.fit();
   };
 
   ws.onmessage = (e) => {
-    const text = typeof e.data === 'string'
-      ? e.data
-      : new TextDecoder().decode(e.data);
-    s.term.write(text);
+    const text = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data);
+    s.term?.write(text);
   };
 
   ws.onclose = () => {
-    setStatus(false);
-    s.term.writeln('\r\n\x1b[33m[Session closed]\x1b[0m\r\n');
+    setConnected(key, false);
+    s.term?.writeln('\r\n\x1b[33m[Session closed]\x1b[0m\r\n');
+    s.ws = null;
   };
 
   ws.onerror = () => {
-    setStatus(false);
-    s.term.writeln('\r\n\x1b[31m[WebSocket error — check secret and server]\x1b[0m\r\n');
-    toastErr('Terminal connection failed');
+    setConnected(key, false);
+    s.term?.writeln('\r\n\x1b[31m[Connection error — check server logs]\x1b[0m\r\n');
+    s.ws = null;
   };
 }
 
-function disconnect(key, statusId) {
-  const s = state[key];
-  if (s.ws) {
-    s.ws.close();
-    s.ws = null;
-  }
-  const statusEl = document.getElementById(statusId);
-  if (statusEl) {
-    statusEl.className  = 'terminal-conn-badge disconnected';
-    statusEl.textContent = 'Disconnected';
-  }
+function disconnect(key) {
+  const s = terminals[key];
+  if (s.ws) { s.ws.close(); s.ws = null; }
+  setConnected(key, false);
 }
 
-function clearTerm(key) {
-  state[key].term?.clear();
-}
+// ── Resize handling ───────────────────────────────────────────────────────────
 
-// ── Resize observer ───────────────────────────────────────────────────────────
-
-function setupResizeObserver() {
-  const ro = new ResizeObserver(() => {
-    if (state.node.initialized)  state.node.addon?.fit();
-    if (state.mongo.initialized) state.mongo.addon?.fit();
-  });
-
-  ['node-terminal-body', 'mongo-terminal-body'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) ro.observe(el);
-  });
-}
+const ro = new ResizeObserver(() => {
+  if (terminals.node.initialized)  terminals.node.addon?.fit();
+  if (terminals.mongo.initialized) terminals.mongo.addon?.fit();
+});
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function initNodeTerminal() {
   initTerm('node', 'node-terminal-body');
-  setupResizeObserver();
+  ro.observe(document.getElementById('node-terminal-body') || document.body);
+
+  // Auto-connect when navigating to the section
+  if (!terminals.node.ws || terminals.node.ws.readyState > 1) {
+    connect('node', '/ws/node');
+  }
 }
 
 export function initMongoTerminal() {
   initTerm('mongo', 'mongo-terminal-body');
-  setupResizeObserver();
+  ro.observe(document.getElementById('mongo-terminal-body') || document.body);
+
+  // Auto-connect when navigating to the section
+  if (!terminals.mongo.ws || terminals.mongo.ws.readyState > 1) {
+    connect('mongo', '/ws/mongo');
+  }
 }
 
-// Exposed globally for onclick handlers in HTML
+// Global TERM bindings for HTML onclick attributes
 window.TERM = {
-  connectNode:       () => connect('node',  '/ws/node',  'node-conn-badge'),
-  disconnectNode:    () => disconnect('node', 'node-conn-badge'),
-  clearNode:         () => clearTerm('node'),
-
-  connectMongo:      () => connect('mongo', '/ws/mongo', 'mongo-conn-badge'),
-  disconnectMongo:   () => disconnect('mongo', 'mongo-conn-badge'),
-  clearMongo:        () => clearTerm('mongo'),
+  disconnectNode:  () => disconnect('node'),
+  clearNode:       () => terminals.node.term?.clear(),
+  disconnectMongo: () => disconnect('mongo'),
+  clearMongo:      () => terminals.mongo.term?.clear(),
 };
