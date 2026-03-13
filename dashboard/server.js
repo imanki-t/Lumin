@@ -1,27 +1,26 @@
 /**
- * @fileoverview Admin Dashboard Server
- * Provides REST API, WebSocket Node.js REPL, WebSocket MongoDB REPL,
- * global lockdown, and global announcements.
+ * @fileoverview Admin Dashboard — mounts onto the existing Express app.
  *
- * Add to your index.js:
- *   import { startDashboard } from './dashboard/server.js';
- *   startDashboard();
+ * Usage in index.js:
+ *   import { mountDashboard, isGlobalLockdown } from './dashboard/server.js';
+ *   // after creating httpServer and before server.listen():
+ *   mountDashboard(app, httpServer);
+ *
+ * Dashboard is then available at:
+ *   https://<your-render-url>/dashboard
  *
  * Env vars:
- *   DASHBOARD_PORT   — port to listen on (default: 3001)
  *   DASHBOARD_SECRET — auth token (default: 'changeme123')
  */
 
-import express        from 'express';
+import express              from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
-import { createServer }               from 'http';
-import { spawn }                      from 'child_process';
-import { execSync }                   from 'child_process';
-import os                             from 'os';
-import path                           from 'path';
-import { fileURLToPath }              from 'url';
+import { spawn }            from 'child_process';
+import { execSync }         from 'child_process';
+import os                   from 'os';
+import path                 from 'path';
+import { fileURLToPath }    from 'url';
 
-// ── Bot internals ────────────────────────────────────────────────────────────
 import {
   client,
   state,
@@ -38,39 +37,11 @@ const __dirname  = path.dirname(__filename);
 // CONFIG
 // ============================================================================
 
-const PORT   = process.env.DASHBOARD_PORT   || 3001;
 const SECRET = process.env.DASHBOARD_SECRET || 'changeme123';
 
-// ============================================================================
-// GLOBAL STATE EXTENSIONS
-// ============================================================================
-
-// Inject lockdown + debug flags into bot state so they survive across routes
+// Inject dashboard-only flags into shared bot state
 if (state.globalLockdown === undefined) state.globalLockdown = false;
 if (state.debugMode      === undefined) state.debugMode      = false;
-
-// ============================================================================
-// EXPRESS + HTTP SERVER
-// ============================================================================
-
-const app    = express();
-const server = createServer(app);
-const wss    = new WebSocketServer({ noServer: true });
-
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// ============================================================================
-// AUTH MIDDLEWARE
-// ============================================================================
-
-function authenticate(req, res, next) {
-  const token = req.headers['x-token'] || req.query.token;
-  if (!token || token !== SECRET) {
-    return res.status(401).json({ error: 'Unauthorized — wrong or missing DASHBOARD_SECRET' });
-  }
-  next();
-}
 
 // ============================================================================
 // HELPERS
@@ -92,149 +63,96 @@ function safeCount(obj) {
 }
 
 // ============================================================================
-// ─────────────────────────────────────────────────────────────────────────────
-// SECTION 1 — BOT OVERVIEW API  (20 data points)
-// ─────────────────────────────────────────────────────────────────────────────
+// AUTH MIDDLEWARE
 // ============================================================================
 
-app.get('/api/stats', authenticate, async (req, res) => {
+function authenticate(req, res, next) {
+  const tok = req.headers['x-token'] || req.query.token;
+  if (!tok || tok !== SECRET) {
+    return res.status(401).json({ error: 'Unauthorized — wrong or missing DASHBOARD_SECRET' });
+  }
+  next();
+}
+
+// ============================================================================
+// ROUTER  (all paths are relative — will be mounted at /dashboard)
+// ============================================================================
+
+const router = express.Router();
+
+// ── Static files — serves dashboard/public at /dashboard ────────────────────
+router.use(express.static(path.join(__dirname, 'public')));
+
+// ── JSON body parsing for this router ───────────────────────────────────────
+router.use(express.json());
+
+// ── 1. Bot stats overview ────────────────────────────────────────────────────
+router.get('/api/stats', authenticate, async (req, res) => {
   try {
-    const mem     = process.memoryUsage();
-    const guilds  = client?.guilds?.cache ?? new Map();
+    const mem      = process.memoryUsage();
+    const guilds   = client?.guilds?.cache ?? new Map();
     const apiStats = getApiKeyStats();
-    const disk    = getDiskUsage();
+    const disk     = getDiskUsage();
 
     let totalUsers = 0;
     guilds.forEach(g => { totalUsers += (g.memberCount || 0); });
 
-    // 1  Username
-    // 2  Tag / Discriminator
-    // 3  Avatar URL
-    // 4  Bot ID
-    // 5  Server Count
-    // 6  Approximate Total Users
-    // 7  Ping / Latency (ms)
-    // 8  Uptime (seconds)
-    // 9  RAM Heap Used
-    // 10 RAM RSS (Resident Set Size)
-    // 11 System Total Memory
-    // 12 System Free Memory
-    // 13 Disk Usage
-    // 14 Node.js Version
-    // 15 Platform / Arch
-    // 16 CPU Cores
-    // 17 MongoDB Status
-    // 18 API Key Info
-    // 19 Total Chat Histories stored
-    // 20 Global Lockdown Status
-
-    // MongoDB ping
     let mongoStatus = 'Unknown';
-    try {
-      await db.connectDB();
-      mongoStatus = 'Connected';
-    } catch {
-      mongoStatus = 'Disconnected';
-    }
+    try { await db.connectDB(); mongoStatus = 'Connected'; }
+    catch { mongoStatus = 'Disconnected'; }
 
-    const discordStatus = ['READY', 'CONNECTING', 'RECONNECTING', 'IDLE',
-                            'NEARLY', 'DISCONNECTED', 'WAITING_FOR_GUILDS',
-                            'IDENTIFYING', 'RESUMING'];
+    const WS_LABELS = ['READY','CONNECTING','RECONNECTING','IDLE','NEARLY',
+                       'DISCONNECTED','WAITING_FOR_GUILDS','IDENTIFYING','RESUMING'];
 
     res.json({
-      // Identity
-      username:      client?.user?.username        || 'N/A',
-      tag:           client?.user?.tag             || 'N/A',
-      id:            client?.user?.id              || 'N/A',
+      username:      client?.user?.username || 'N/A',
+      tag:           client?.user?.tag      || 'N/A',
+      id:            client?.user?.id       || 'N/A',
       avatarURL:     client?.user?.displayAvatarURL?.({ size: 256, extension: 'png' }) || null,
-      discriminator: client?.user?.discriminator   || '0',
-      wsStatus:      discordStatus[client?.ws?.status] || 'Unknown',
-
-      // Scale
-      serverCount: guilds.size,
+      discriminator: client?.user?.discriminator || '0',
+      wsStatus:      WS_LABELS[client?.ws?.status] || 'Unknown',
+      serverCount:   guilds.size,
       totalUsers,
-      ping: client?.ws?.ping ?? -1,
-
-      // Runtime
-      uptime:      process.uptime(),
-      nodeVersion: process.version,
-      platform:    `${os.platform()} ${os.arch()}`,
-      cpuCores:    os.cpus().length,
-      cpuModel:    os.cpus()[0]?.model || 'Unknown',
-
-      // Memory
+      ping:          client?.ws?.ping ?? -1,
+      uptime:        process.uptime(),
+      nodeVersion:   process.version,
+      platform:      `${os.platform()} ${os.arch()}`,
+      cpuCores:      os.cpus().length,
+      cpuModel:      os.cpus()[0]?.model || 'Unknown',
       ram: {
-        heapUsed:     mem.heapUsed,
-        heapTotal:    mem.heapTotal,
-        rss:          mem.rss,
-        external:     mem.external,
-        arrayBuffers: mem.arrayBuffers,
-        sysFree:      os.freemem(),
-        sysTotal:     os.totalmem(),
+        heapUsed:  mem.heapUsed,  heapTotal:  mem.heapTotal,
+        rss:       mem.rss,       external:   mem.external,
+        sysFree:   os.freemem(),  sysTotal:   os.totalmem(),
       },
-
-      // Disk
       disk,
-
-      // Services
       mongoStatus,
-      apiKeyStats: apiStats,
-
-      // State counters
-      totalChatHistories:  safeCount(state.chatHistories),
-      totalServerSettings: safeCount(state.serverSettings),
-      totalUserSettings:   safeCount(state.userSettings),
-      totalReminders:      safeCount(state.reminders),
-      totalBlacklisted:    Object.values(state.blacklistedUsers || {}).flat().length,
-      totalMemoryEntries:  safeCount(state.memoryEntries),
-
-      // Feature flags
-      globalLockdown: state.globalLockdown || false,
-      debugMode:      state.debugMode      || false,
+      apiKeyStats:          apiStats,
+      totalChatHistories:   safeCount(state.chatHistories),
+      totalServerSettings:  safeCount(state.serverSettings),
+      totalUserSettings:    safeCount(state.userSettings),
+      totalReminders:       safeCount(state.reminders),
+      totalBlacklisted:     Object.values(state.blacklistedUsers || {}).flat().length,
+      globalLockdown:       state.globalLockdown || false,
+      debugMode:            state.debugMode      || false,
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// List all servers (for dropdowns)
-app.get('/api/servers', authenticate, (req, res) => {
-  try {
-    const list = [];
-    for (const [, g] of (client?.guilds?.cache ?? new Map())) {
-      list.push({ id: g.id, name: g.name, memberCount: g.memberCount, icon: g.iconURL() });
-    }
-    res.json({ success: true, data: list });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============================================================================
-// ─────────────────────────────────────────────────────────────────────────────
-// SECTION 2 — ADMIN COMMANDS  (25 commands)
-// ─────────────────────────────────────────────────────────────────────────────
-// ============================================================================
-
-// ── 1. Force Save State ──────────────────────────────────────────────────────
-app.post('/api/cmd/save-state', authenticate, async (req, res) => {
+// ── 2. Force save state ──────────────────────────────────────────────────────
+router.post('/api/cmd/save-state', authenticate, async (req, res) => {
   try {
     await saveStateToFile();
     res.json({ success: true, message: '✅ State saved to database successfully.' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 2. Reload State from DB ──────────────────────────────────────────────────
-app.post('/api/cmd/reload-state', authenticate, async (req, res) => {
-  try {
-    // Re-import loadStateFromDB — it's not exported from BotManager so we call
-    // saveStateToFile with noop (state is live); instead inform user.
-    res.json({ success: true, message: '⚠️ Full reload requires restart. Use /api/cmd/restart to reload from DB.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+// ── 3. Reload state (info only) ──────────────────────────────────────────────
+router.post('/api/cmd/reload-state', authenticate, async (_req, res) => {
+  res.json({ success: true, message: '⚠️ Full reload requires restart. Use the Restart command.' });
 });
 
-// ── 3. Clear ALL Chat Histories ──────────────────────────────────────────────
-app.post('/api/cmd/clear-all-histories', authenticate, async (req, res) => {
+// ── 4. Clear all chat histories ──────────────────────────────────────────────
+router.post('/api/cmd/clear-all-histories', authenticate, async (req, res) => {
   try {
     const count = safeCount(state.chatHistories);
     state.chatHistories = {};
@@ -243,8 +161,8 @@ app.post('/api/cmd/clear-all-histories', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 4. Clear Specific User History ───────────────────────────────────────────
-app.post('/api/cmd/clear-user-history', authenticate, async (req, res) => {
+// ── 5. Clear specific user history ───────────────────────────────────────────
+router.post('/api/cmd/clear-user-history', authenticate, async (req, res) => {
   try {
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ error: 'userId is required' });
@@ -257,27 +175,26 @@ app.post('/api/cmd/clear-user-history', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 5. Blacklist User ─────────────────────────────────────────────────────────
-app.post('/api/cmd/blacklist-user', authenticate, async (req, res) => {
+// ── 6. Blacklist user ─────────────────────────────────────────────────────────
+router.post('/api/cmd/blacklist-user', authenticate, async (req, res) => {
   try {
     const { userId, guildId } = req.body;
     if (!userId || !guildId) return res.status(400).json({ error: 'userId and guildId are required' });
     if (!state.blacklistedUsers[guildId]) state.blacklistedUsers[guildId] = [];
-    if (state.blacklistedUsers[guildId].includes(userId)) {
+    if (state.blacklistedUsers[guildId].includes(userId))
       return res.json({ success: false, message: 'User is already blacklisted.' });
-    }
     state.blacklistedUsers[guildId].push(userId);
     if (db.saveBlacklistedUsers) await db.saveBlacklistedUsers(guildId, state.blacklistedUsers[guildId]);
     res.json({ success: true, message: `✅ User ${userId} blacklisted in guild ${guildId}.` });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 6. Unblacklist User ───────────────────────────────────────────────────────
-app.post('/api/cmd/unblacklist-user', authenticate, async (req, res) => {
+// ── 7. Unblacklist user ───────────────────────────────────────────────────────
+router.post('/api/cmd/unblacklist-user', authenticate, async (req, res) => {
   try {
     const { userId, guildId } = req.body;
     if (!userId || !guildId) return res.status(400).json({ error: 'userId and guildId are required' });
-    const list = state.blacklistedUsers[guildId] || [];
+    const list   = state.blacklistedUsers[guildId] || [];
     const before = list.length;
     state.blacklistedUsers[guildId] = list.filter(id => id !== userId);
     if (db.saveBlacklistedUsers) await db.saveBlacklistedUsers(guildId, state.blacklistedUsers[guildId]);
@@ -288,17 +205,17 @@ app.post('/api/cmd/unblacklist-user', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 7. Get All Blacklisted Users ──────────────────────────────────────────────
-app.get('/api/cmd/blacklisted-users', authenticate, (req, res) => {
+// ── 8. Get all blacklisted users ──────────────────────────────────────────────
+router.get('/api/cmd/blacklisted-users', authenticate, (req, res) => {
   try {
-    const data = state.blacklistedUsers || {};
+    const data  = state.blacklistedUsers || {};
     const total = Object.values(data).flat().length;
     res.json({ success: true, data, total });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 8. Switch API Key ─────────────────────────────────────────────────────────
-app.post('/api/cmd/switch-api-key', authenticate, (req, res) => {
+// ── 9. Switch API key ─────────────────────────────────────────────────────────
+router.post('/api/cmd/switch-api-key', authenticate, (req, res) => {
   try {
     switchToNextKey();
     const stats = getApiKeyStats();
@@ -306,33 +223,30 @@ app.post('/api/cmd/switch-api-key', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 9. Get API Key Stats ──────────────────────────────────────────────────────
-app.get('/api/cmd/api-key-stats', authenticate, (req, res) => {
+// ── 10. Get API key stats ─────────────────────────────────────────────────────
+router.get('/api/cmd/api-key-stats', authenticate, (req, res) => {
   try {
     res.json({ success: true, data: getApiKeyStats() });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 10. Global Lockdown ───────────────────────────────────────────────────────
-app.post('/api/cmd/lockdown', authenticate, (req, res) => {
+// ── 11. Global lockdown toggle ────────────────────────────────────────────────
+router.post('/api/cmd/lockdown', authenticate, (req, res) => {
   try {
     const { enabled } = req.body;
     state.globalLockdown = Boolean(enabled);
-    res.json({ success: true,
+    res.json({
+      success: true,
       message: `🔒 Global lockdown ${enabled ? 'ENABLED — bot will not respond.' : 'DISABLED — bot is active.'}`,
-      enabled: state.globalLockdown });
+      enabled: state.globalLockdown,
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 11. Global Announcement ───────────────────────────────────────────────────
-app.post('/api/cmd/announce', authenticate, async (req, res) => {
+// ── 12. Global announcement ───────────────────────────────────────────────────
+router.post('/api/cmd/announce', authenticate, async (req, res) => {
   try {
-    const {
-      message,
-      title      = '📢 Announcement',
-      embedColor = '#5B7C99',
-      useEmbed   = true,
-    } = req.body;
+    const { message, title = '📢 Announcement', embedColor = '#5B7C99', useEmbed = true } = req.body;
     if (!message) return res.status(400).json({ error: 'message is required' });
 
     const { EmbedBuilder, ChannelType } = await import('discord.js');
@@ -346,22 +260,19 @@ app.post('/api/cmd/announce', authenticate, async (req, res) => {
           ch.permissionsFor(guild.members.me)?.has('ViewChannel')
         );
         if (!channel) { skipCount++; continue; }
-
         if (useEmbed) {
-          const embed = new EmbedBuilder()
-            .setColor(embedColor)
-            .setTitle(title)
-            .setDescription(message)
-            .setTimestamp()
-            .setFooter({ text: 'Admin Announcement' });
-          await channel.send({ embeds: [embed] });
+          await channel.send({ embeds: [
+            new EmbedBuilder()
+              .setColor(embedColor).setTitle(title)
+              .setDescription(message).setTimestamp()
+              .setFooter({ text: 'Admin Announcement' })
+          ]});
         } else {
           await channel.send(`**${title}**\n\n${message}`);
         }
         sentCount++;
       } catch { failCount++; }
     }
-
     res.json({
       success: true,
       message: `📢 Sent to ${sentCount} servers. Skipped: ${skipCount}. Failed: ${failCount}.`,
@@ -370,21 +281,21 @@ app.post('/api/cmd/announce', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 12. Leave Server ──────────────────────────────────────────────────────────
-app.post('/api/cmd/leave-server', authenticate, async (req, res) => {
+// ── 13. Leave server ──────────────────────────────────────────────────────────
+router.post('/api/cmd/leave-server', authenticate, async (req, res) => {
   try {
     const { guildId } = req.body;
     if (!guildId) return res.status(400).json({ error: 'guildId is required' });
     const guild = client?.guilds?.cache.get(guildId);
-    if (!guild) return res.status(404).json({ error: 'Guild not found in cache' });
+    if (!guild)  return res.status(404).json({ error: 'Guild not found in cache' });
     const name = guild.name;
     await guild.leave();
     res.json({ success: true, message: `✅ Left server "${name}" (${guildId}).` });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 13. Get All Servers List ──────────────────────────────────────────────────
-app.get('/api/cmd/servers-detail', authenticate, (req, res) => {
+// ── 14. Get all servers detail ────────────────────────────────────────────────
+router.get('/api/cmd/servers-detail', authenticate, (req, res) => {
   try {
     const servers = [];
     for (const [, g] of (client?.guilds?.cache ?? new Map())) {
@@ -392,7 +303,7 @@ app.get('/api/cmd/servers-detail', authenticate, (req, res) => {
         id: g.id, name: g.name, memberCount: g.memberCount,
         iconURL: g.iconURL(), ownerId: g.ownerId,
         createdAt: g.createdAt, joinedAt: g.joinedAt,
-        settings: state.serverSettings[g.id] || {},
+        settings:    state.serverSettings[g.id]   || {},
         blacklisted: (state.blacklistedUsers[g.id] || []).length,
       });
     }
@@ -401,8 +312,8 @@ app.get('/api/cmd/servers-detail', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 14. Reset Server Settings ─────────────────────────────────────────────────
-app.post('/api/cmd/reset-server', authenticate, async (req, res) => {
+// ── 15. Reset server settings ─────────────────────────────────────────────────
+router.post('/api/cmd/reset-server', authenticate, async (req, res) => {
   try {
     const { guildId } = req.body;
     if (!guildId) return res.status(400).json({ error: 'guildId is required' });
@@ -412,16 +323,16 @@ app.post('/api/cmd/reset-server', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 15. Get User Settings ─────────────────────────────────────────────────────
-app.get('/api/cmd/user-settings/:userId', authenticate, (req, res) => {
+// ── 16. Get user settings ─────────────────────────────────────────────────────
+router.get('/api/cmd/user-settings/:userId', authenticate, (req, res) => {
   try {
     const settings = state.userSettings[req.params.userId] || {};
     res.json({ success: true, data: settings, found: Object.keys(settings).length > 0 });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 16. Clear Image Usage Counters ────────────────────────────────────────────
-app.post('/api/cmd/clear-image-usage', authenticate, async (req, res) => {
+// ── 17. Clear image usage ─────────────────────────────────────────────────────
+router.post('/api/cmd/clear-image-usage', authenticate, async (req, res) => {
   try {
     const count = safeCount(state.imageUsage);
     state.imageUsage = {};
@@ -430,8 +341,8 @@ app.post('/api/cmd/clear-image-usage', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 17. Clear Summary Usage Counters ─────────────────────────────────────────
-app.post('/api/cmd/clear-summary-usage', authenticate, async (req, res) => {
+// ── 18. Clear summary usage ───────────────────────────────────────────────────
+router.post('/api/cmd/clear-summary-usage', authenticate, async (req, res) => {
   try {
     const count = safeCount(state.summaryUsage);
     state.summaryUsage = {};
@@ -440,8 +351,8 @@ app.post('/api/cmd/clear-summary-usage', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 18. Toggle Debug Mode ─────────────────────────────────────────────────────
-app.post('/api/cmd/toggle-debug', authenticate, (req, res) => {
+// ── 19. Toggle debug mode ─────────────────────────────────────────────────────
+router.post('/api/cmd/toggle-debug', authenticate, (req, res) => {
   try {
     state.debugMode = !state.debugMode;
     res.json({ success: true,
@@ -450,23 +361,20 @@ app.post('/api/cmd/toggle-debug', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 19. Force Daily Reset ─────────────────────────────────────────────────────
-app.post('/api/cmd/force-daily-reset', authenticate, async (req, res) => {
+// ── 20. Force daily reset ─────────────────────────────────────────────────────
+router.post('/api/cmd/force-daily-reset', authenticate, async (req, res) => {
   try {
-    state.imageUsage   = {};
-    state.summaryUsage = {};
-    state.quoteUsage   = {};
+    state.imageUsage = {}; state.summaryUsage = {}; state.quoteUsage = {};
     await saveStateToFile();
     res.json({ success: true, message: '✅ Daily reset forced — usage counters cleared.' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 20. View All Reminders ────────────────────────────────────────────────────
-app.get('/api/cmd/reminders', authenticate, (req, res) => {
+// ── 21. View all reminders ────────────────────────────────────────────────────
+router.get('/api/cmd/reminders', authenticate, (req, res) => {
   try {
-    const data = state.reminders || {};
     const allReminders = [];
-    for (const [userId, userReminders] of Object.entries(data)) {
+    for (const [userId, userReminders] of Object.entries(state.reminders || {})) {
       if (Array.isArray(userReminders)) {
         userReminders.forEach(r => allReminders.push({ userId, ...r }));
       }
@@ -476,8 +384,8 @@ app.get('/api/cmd/reminders', authenticate, (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 21. Purge Old Memory Entries ──────────────────────────────────────────────
-app.post('/api/cmd/purge-memory', authenticate, async (req, res) => {
+// ── 22. Purge old memory entries ──────────────────────────────────────────────
+router.post('/api/cmd/purge-memory', authenticate, async (req, res) => {
   try {
     const { daysOld = 30 } = req.body;
     const cutoff = new Date(Date.now() - daysOld * 86_400_000);
@@ -493,8 +401,8 @@ app.post('/api/cmd/purge-memory', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 22. Set Bot Presence ──────────────────────────────────────────────────────
-app.post('/api/cmd/set-presence', authenticate, async (req, res) => {
+// ── 23. Set bot presence ──────────────────────────────────────────────────────
+router.post('/api/cmd/set-presence', authenticate, async (req, res) => {
   try {
     const { status = 'online', activity = '', activityType = 0 } = req.body;
     const { ActivityType } = await import('discord.js');
@@ -506,8 +414,8 @@ app.post('/api/cmd/set-presence', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 23. Send DM to User ───────────────────────────────────────────────────────
-app.post('/api/cmd/send-dm', authenticate, async (req, res) => {
+// ── 24. Send DM to user ───────────────────────────────────────────────────────
+router.post('/api/cmd/send-dm', authenticate, async (req, res) => {
   try {
     const { userId, message } = req.body;
     if (!userId || !message) return res.status(400).json({ error: 'userId and message are required' });
@@ -518,8 +426,8 @@ app.post('/api/cmd/send-dm', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 24. Clear All Quote Usage ─────────────────────────────────────────────────
-app.post('/api/cmd/clear-quote-usage', authenticate, async (req, res) => {
+// ── 25. Clear quote usage ─────────────────────────────────────────────────────
+router.post('/api/cmd/clear-quote-usage', authenticate, async (req, res) => {
   try {
     const count = safeCount(state.quoteUsage);
     state.quoteUsage = {};
@@ -528,8 +436,8 @@ app.post('/api/cmd/clear-quote-usage', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── 25. Restart Bot Process ───────────────────────────────────────────────────
-app.post('/api/cmd/restart', authenticate, async (req, res) => {
+// ── Restart ───────────────────────────────────────────────────────────────────
+router.post('/api/cmd/restart', authenticate, async (req, res) => {
   try {
     await saveStateToFile();
     res.json({ success: true, message: '🔄 Restarting… Render will auto-restart the service.' });
@@ -538,143 +446,123 @@ app.post('/api/cmd/restart', authenticate, async (req, res) => {
 });
 
 // ============================================================================
-// ─────────────────────────────────────────────────────────────────────────────
-// SECTION 3 — WEBSOCKET TERMINALS
-// ─────────────────────────────────────────────────────────────────────────────
+// WEBSOCKET TERMINALS
 // ============================================================================
 
-server.on('upgrade', (req, socket, head) => {
-  const url   = new URL(req.url, 'http://localhost');
-  const token = url.searchParams.get('token');
-
-  if (token !== SECRET) {
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req);
-  });
-});
+const wss = new WebSocketServer({ noServer: true });
 
 wss.on('connection', (ws, req) => {
-  const url  = new URL(req.url, 'http://localhost');
-  const type = url.pathname;
-
-  if (type === '/ws/node')  handleNodeRepl(ws);
-  else if (type === '/ws/mongo') handleMongoRepl(ws);
+  const url = new URL(req.url, 'http://localhost');
+  if      (url.pathname.endsWith('/ws/node'))  handleNodeRepl(ws);
+  else if (url.pathname.endsWith('/ws/mongo')) handleMongoRepl(ws);
   else ws.close(1008, 'Unknown terminal type');
 });
 
-// ── Node.js REPL ─────────────────────────────────────────────────────────────
-
 function handleNodeRepl(ws) {
-  const send = (data) => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(data);
-  };
+  const send = d => { if (ws.readyState === WebSocket.OPEN) ws.send(d); };
 
   const proc = spawn('node', ['--experimental-repl-await'], {
-    stdio : ['pipe', 'pipe', 'pipe'],
-    env   : { ...process.env },
-    shell : false,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env:   { ...process.env },
+    shell: false,
   });
 
   proc.stdout.on('data', d => send(d.toString()));
   proc.stderr.on('data', d => send(d.toString()));
-  proc.on('error',  e => send(`\r\n[Spawn error: ${e.message}]\r\n`));
+  proc.on('error', e => send(`\r\n[Spawn error: ${e.message}]\r\n`));
   proc.on('exit',  () => { send('\r\n[Node.js process exited]\r\n'); ws.close(); });
 
-  ws.on('message', (msg) => { try { proc.stdin.write(msg); } catch {} });
-  ws.on('close',   ()    => { try { proc.kill('SIGTERM'); }  catch {} });
-  ws.on('error',   ()    => { try { proc.kill('SIGTERM'); }  catch {} });
+  ws.on('message', msg => { try { proc.stdin.write(msg); } catch {} });
+  ws.on('close',   ()  => { try { proc.kill('SIGTERM'); }  catch {} });
+  ws.on('error',   ()  => { try { proc.kill('SIGTERM'); }  catch {} });
 }
 
-// ── MongoDB REPL (node + mongodb driver — no mongosh dependency) ──────────────
-
 function handleMongoRepl(ws) {
-  const send = (data) => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(data);
-  };
+  const send = d => { if (ws.readyState === WebSocket.OPEN) ws.send(d); };
+  const uri  = process.env.MONGODB_URI || 'mongodb://localhost:27017';
 
-  const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-
-  // Inline script so we don't need a temp file on Render's read-only FS
   const script = `
 (async () => {
   const { MongoClient, ObjectId } = require('mongodb');
-  const repl    = require('repl');
-  const util    = require('util');
-
+  const repl = require('repl');
   process.stdout.write('Connecting to MongoDB...\\r\\n');
-  const client  = new MongoClient(${JSON.stringify(uri)}, { serverSelectionTimeoutMS: 8000 });
-
+  const client = new MongoClient(${JSON.stringify(uri)}, { serverSelectionTimeoutMS: 8000 });
   try {
     await client.connect();
     const db = client.db();
-    process.stdout.write('Connected to database: ' + db.databaseName + '\\r\\n');
-    process.stdout.write('Available: db, client, ObjectId, listCollections()\\r\\n');
-    process.stdout.write('Example: await db.collection(\\'users\\').find({}).limit(5).toArray()\\r\\n\\r\\n');
-
+    process.stdout.write('Connected: ' + db.databaseName + '\\r\\n');
+    process.stdout.write('Use: db, client, ObjectId, await listCollections()\\r\\n\\r\\n');
     async function listCollections() {
       return (await db.listCollections().toArray()).map(c => c.name);
     }
-
-    const r = repl.start({
-      prompt        : 'mongosh> ',
-      useColors     : true,
-      useGlobal     : false,
-      ignoreUndefined: true,
-    });
-
-    // Inject helpers into REPL context
+    const r = repl.start({ prompt: 'mongo> ', useColors: true, ignoreUndefined: true });
     Object.assign(r.context, { db, client, ObjectId, listCollections });
-
-    r.on('exit', async () => {
-      await client.close();
-      process.exit(0);
-    });
+    r.on('exit', async () => { await client.close(); process.exit(0); });
   } catch (err) {
     process.stderr.write('MongoDB Error: ' + err.message + '\\r\\n');
     process.exit(1);
   }
-})();
-`.trim();
+})();`.trim();
 
-  const proc = spawn('node', ['--experimental-repl-await', '--input-type=module', '-e', script], {
-    stdio : ['pipe', 'pipe', 'pipe'],
-    env   : { ...process.env },
-    shell : false,
+  const proc = spawn('node', ['-e', script], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env:   { ...process.env },
+    shell: false,
   });
 
-  // Fallback: try CJS mode if ESM fails
-  let started = false;
-  const cjsScript = script.replace('--input-type=module', '');
-
-  proc.stdout.on('data', d => { started = true; send(d.toString()); });
+  proc.stdout.on('data', d => send(d.toString()));
   proc.stderr.on('data', d => send(d.toString()));
-  proc.on('error',  e => send(`\r\n[Spawn error: ${e.message}]\r\n`));
+  proc.on('error', e => send(`\r\n[Spawn error: ${e.message}]\r\n`));
   proc.on('exit',  () => { send('\r\n[MongoDB session ended]\r\n'); ws.close(); });
 
-  ws.on('message', (msg) => { try { proc.stdin.write(msg); } catch {} });
-  ws.on('close',   ()    => { try { proc.kill('SIGTERM'); }  catch {} });
-  ws.on('error',   ()    => { try { proc.kill('SIGTERM'); }  catch {} });
+  ws.on('message', msg => { try { proc.stdin.write(msg); } catch {} });
+  ws.on('close',   ()  => { try { proc.kill('SIGTERM'); }  catch {} });
+  ws.on('error',   ()  => { try { proc.kill('SIGTERM'); }  catch {} });
 }
 
 // ============================================================================
-// START
+// MOUNT FUNCTION  — call this from index.js
 // ============================================================================
 
-export function startDashboard() {
-  server.listen(PORT, () => {
-    const maskedSecret = SECRET.length > 4
-      ? SECRET.slice(0, 3) + '***' + SECRET.slice(-2)
-      : '***';
-    console.log(`🖥️  Admin Dashboard  →  http://localhost:${PORT}`);
-    console.log(`🔐 Auth secret: ${maskedSecret}`);
-    console.log(`   Set DASHBOARD_PORT and DASHBOARD_SECRET env vars to customise.`);
+/**
+ * Mount the dashboard onto an existing Express app and HTTP server.
+ *
+ * @param {import('express').Application} app        — your existing Express app
+ * @param {import('http').Server}         httpServer  — your existing http.createServer(app)
+ */
+export function mountDashboard(app, httpServer) {
+  // Mount router at /dashboard
+  app.use('/dashboard', router);
+
+  // Redirect bare /dashboard to /dashboard/ so relative assets resolve correctly
+  app.get('/dashboard', (_req, res) => res.redirect('/dashboard/'));
+
+  // Attach WebSocket upgrade handler to the shared HTTP server
+  httpServer.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url, 'http://localhost');
+
+    // Only handle /dashboard/ws/* paths
+    if (!url.pathname.startsWith('/dashboard/ws/')) return;
+
+    const tok = url.searchParams.get('token');
+    if (tok !== SECRET) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
   });
+
+  const masked = SECRET.length > 4
+    ? SECRET.slice(0, 3) + '***' + SECRET.slice(-2)
+    : '***';
+  console.log(`🖥️  Admin Dashboard → /dashboard`);
+  console.log(`🔐 Secret: ${masked}`);
 }
 
-// Export lockdown flag accessor for use in message handler (index.js)
+// ============================================================================
+// LOCKDOWN ACCESSOR  — imported by index.js messageCreate handler
+// ============================================================================
+
 export const isGlobalLockdown = () => state.globalLockdown === true;
