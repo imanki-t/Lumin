@@ -54,7 +54,7 @@ const state = {
 
 function wsUrl(path) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${location.host}${path}?token=${encodeURIComponent(getToken())}`;
+  return `${proto}://${location.host}/dashboard${path}?token=${encodeURIComponent(getToken())}`;
 }
 
 // ── Generic init ──────────────────────────────────────────────────────────────

@@ -4,7 +4,8 @@
  */
 
 export const SESSION_KEY = 'lumin_dash_token';
-export const BASE_URL    = window.location.origin;
+// All dashboard API routes are served under /dashboard on the same origin
+export const BASE_URL = window.location.origin + '/dashboard';
 
 export function getToken() {
   return sessionStorage.getItem(SESSION_KEY) || '';
