@@ -17,9 +17,11 @@ const logger = Logger.get('SettingsRepo');
 /** @param {string} userId @param {Object} settings */
 export async function saveUserSettings(userId, settings) {
   try {
-    await getCollection(COLLECTIONS.USER_SETTINGS).updateOne(
+    // Use replaceOne (not $set) so fields deleted from in-memory state are
+    // also removed from the DB document — $set only adds/updates, never removes.
+    await getCollection(COLLECTIONS.USER_SETTINGS).replaceOne(
       { userId },
-      { $set: { userId, ...settings, updatedAt: new Date() } },
+      { userId, ...settings, updatedAt: new Date() },
       { upsert: true }
     );
   } catch (error) {
@@ -58,9 +60,11 @@ export async function getAllUserSettings() {
 /** @param {string} guildId @param {Object} settings */
 export async function saveServerSettings(guildId, settings) {
   try {
-    await getCollection(COLLECTIONS.SERVER_SETTINGS).updateOne(
+    // Use replaceOne (not $set) so fields deleted from in-memory state are
+    // also removed from the DB document — $set only adds/updates, never removes.
+    await getCollection(COLLECTIONS.SERVER_SETTINGS).replaceOne(
       { guildId },
-      { $set: { guildId, ...settings, updatedAt: new Date() } },
+      { guildId, ...settings, updatedAt: new Date() },
       { upsert: true }
     );
   } catch (error) {
@@ -99,11 +103,16 @@ export async function getAllServerSettings() {
 /** @param {string} id @param {string|null} instructions */
 export async function saveCustomInstructions(id, instructions) {
   try {
-    await getCollection(COLLECTIONS.CUSTOM_INSTRUCTIONS).updateOne(
-      { id },
-      { $set: { id, instructions, updatedAt: new Date() } },
-      { upsert: true }
-    );
+    if (instructions === null || instructions === undefined) {
+      // Fully remove the document so it doesn't ghost back on restart.
+      await getCollection(COLLECTIONS.CUSTOM_INSTRUCTIONS).deleteOne({ id });
+    } else {
+      await getCollection(COLLECTIONS.CUSTOM_INSTRUCTIONS).replaceOne(
+        { id },
+        { id, instructions, updatedAt: new Date() },
+        { upsert: true }
+      );
+    }
   } catch (error) {
     logger.error('Error saving custom instructions', error);
     throw error;
@@ -126,7 +135,10 @@ export async function getAllCustomInstructions() {
   try {
     const docs = await getCollection(COLLECTIONS.CUSTOM_INSTRUCTIONS).find({}).toArray();
     const result = {};
-    docs.forEach(doc => { result[doc.id] = doc.instructions; });
+    docs.forEach(doc => {
+      // Skip documents where instructions were nulled out but not yet cleaned up.
+      if (doc.instructions != null) result[doc.id] = doc.instructions;
+    });
     return result;
   } catch (error) {
     logger.error('Error getting all custom instructions', error);
