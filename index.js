@@ -15,6 +15,7 @@ import {
 import express from 'express';
 
 import config from './config.js';
+import { startDashboard, isGlobalLockdown } from './dashboard/server.js';
 import {
   client,
   token,
@@ -200,6 +201,7 @@ client.on('guildCreate', async (guild) => {
 client.on('messageCreate', async (message) => {
   try {
     if (message.author.bot)                          return;
+    if (isGlobalLockdown())                          return;  // Dashboard: global lockdown
     if (message.content.startsWith('!'))             return;
     if (IGNORED_MESSAGE_TYPES.has(message.type))     return;
 
@@ -417,10 +419,13 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ============================================================================
-// LOGIN
+// LOGIN + DASHBOARD
 // ============================================================================
 
 client.login(token).catch(error => {
   logger.critical('Failed to login to Discord', error);
   process.exit(1);
 });
+
+// Start admin dashboard (port from DASHBOARD_PORT env var, default 3001)
+startDashboard();
