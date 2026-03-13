@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <meta name="theme-color" content="#0C0C0E"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <title>LuminDash — Admin</title>
+
+  <link rel="stylesheet" href="css/base.css"/>
+  <link rel="stylesheet" href="css/layout.css"/>
+  <link rel="stylesheet" href="css/components.css"/>
+  <link rel="stylesheet" href="css/mobile.css"/>
+
+  <link  rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+</head>
+<body>
+
+<!-- ═══════════════════ AUTH OVERLAY ══════════════════════════════════════ -->
+<div id="auth-overlay">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <div class="auth-logo-mark">⚡</div>
+      <div>
+        <div class="auth-logo-text">LuminDash</div>
+        <div class="auth-logo-sub">Admin Dashboard</div>
+      </div>
+    </div>
+    <div class="auth-heading">Welcome back</div>
+    <div class="auth-sub">Enter your dashboard secret to continue.</div>
+    <div class="form-group">
+      <label class="form-label" for="auth-secret-input">Dashboard Secret</label>
+      <input class="form-input mono" id="auth-secret-input" type="password"
+             placeholder="DASHBOARD_SECRET…" autocomplete="current-password" spellcheck="false"/>
+      <div class="form-error" id="auth-error"></div>
+    </div>
+    <button class="btn btn-primary btn-full" id="auth-submit-btn"
+            style="margin-top:8px" onclick="window._attemptLogin()">
+      Enter Dashboard
+    </button>
+  </div>
+</div>
+
+<!-- ═══════════════════ APP SHELL ═════════════════════════════════════════ -->
+<div id="app">
+
+  <!-- SIDEBAR -->
+  <nav id="sidebar" aria-label="Main navigation">
+    <div class="sidebar-header">
+      <div class="sidebar-brand">
+        <div class="brand-mark">⚡</div>
+        <div>
+          <div class="brand-name">LuminDash</div>
+          <div class="brand-version">v1.0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-bot-strip">
+      <img class="bot-strip-avatar" id="sidebar-bot-avatar" src="" alt="bot"/>
+      <div class="bot-strip-info">
+        <div class="bot-strip-name" id="sidebar-bot-name">Loading…</div>
+        <div class="bot-strip-status">
+          <span class="status-indicator" id="sidebar-bot-status-dot"></span>
+          <span class="status-label"     id="sidebar-bot-status-label">Connecting</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-nav" id="sidebar-nav"></div>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-clock" id="sidebar-clock">—</div>
+    </div>
+  </nav>
+
+  <!-- MAIN -->
+  <div id="main">
+
+    <!-- Topbar -->
+    <header id="topbar">
+      <div class="topbar-title" id="topbar-title">Bot Overview</div>
+      <div class="topbar-actions">
+        <div class="lockdown-chip" id="lockdown-chip">
+          <span class="lockdown-dot"></span> LOCKDOWN
+        </div>
+        <span class="topbar-clock" id="topbar-clock"></span>
+        <div class="topbar-divider"></div>
+        <button class="topbar-btn" onclick="window._refresh()"><span>⟳</span><span>Refresh</span></button>
+        <button class="topbar-btn danger" onclick="window._logout()"><span>↩</span><span>Logout</span></button>
+      </div>
+    </header>
+
+    <!-- Scrollable content -->
+    <div id="content">
+
+      <!-- OVERVIEW -->
+      <div class="section active" id="section-overview">
+        <div class="profile-card">
+          <div class="profile-avatar-wrap">
+            <img class="profile-avatar" id="profile-avatar" src="" alt="bot"/>
+            <div class="profile-avatar-status"></div>
+          </div>
+          <div class="profile-info">
+            <div class="profile-name" id="profile-name">Loading…</div>
+            <div class="profile-tag"  id="profile-tag"></div>
+            <div class="profile-meta" id="profile-meta"></div>
+          </div>
+        </div>
+        <div class="stat-grid" id="stat-grid"></div>
+      </div>
+
+      <!-- SERVERS -->
+      <div class="section" id="section-servers">
+        <div class="section-header">
+          <div class="section-title">
+            Servers
+            <span style="font-size:14px;font-weight:400;color:var(--text-secondary);margin-left:8px"
+                  id="servers-count">0</span>
+          </div>
+          <div class="section-desc">All Discord servers the bot is currently in.</div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Server</th><th>Members</th><th>Owner ID</th>
+                <th>Blacklisted</th><th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="servers-tbody">
+              <tr><td colspan="5"><div class="loading-row"><div class="spinner"></div>Loading…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- COMMANDS -->
+      <div class="section" id="section-commands">
+        <div class="section-header">
+          <div class="section-title">Admin Commands</div>
+          <div class="section-desc">25 direct controls for your bot — no Discord required.</div>
+        </div>
+        <div class="cmd-grid" id="cmd-grid"></div>
+      </div>
+
+      <!-- ANNOUNCE -->
+      <div class="section" id="section-announce">
+        <div class="section-header">
+          <div class="section-title">Global Announcement</div>
+          <div class="section-desc">Broadcast a message to all servers instantly.</div>
+        </div>
+        <div id="announce-grid"
+             style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start">
+          <div class="card" style="display:flex;flex-direction:column;gap:16px">
+            <div class="card-title">Compose</div>
+            <div class="form-group">
+              <label class="form-label">Embed Title</label>
+              <input class="form-input" id="ann-title" value="📢 Announcement"/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Message</label>
+              <textarea class="form-textarea" id="ann-message"
+                        placeholder="Write your announcement…" style="min-height:140px"></textarea>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Color</label>
+                <input class="form-input" id="ann-color" type="color" value="#CF6A37"/>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Format</label>
+                <select class="form-select" id="ann-format">
+                  <option value="true">Rich Embed</option>
+                  <option value="false">Plain Text</option>
+                </select>
+              </div>
+            </div>
+            <button class="btn btn-primary" id="ann-send-btn" onclick="window._sendAnnounce()">
+              Send to All Servers
+            </button>
+            <div class="result-banner" id="ann-result"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title" style="margin-bottom:16px">Live Preview</div>
+            <div class="announce-preview" id="ann-preview">
+              <div class="announce-preview-title" id="ann-preview-title">📢 Announcement</div>
+              <div class="announce-preview-body"  id="ann-preview-body">Your message will appear here…</div>
+            </div>
+            <div style="margin-top:16px;font-size:12px;color:var(--text-tertiary);line-height:1.6">
+              Sent to the first writable channel in every server.
+              Servers where the bot lacks permissions are skipped.
+            </div>
+          </div>
+        </div>
+        <style>
+          @media(max-width:767px){
+            #announce-grid{display:flex!important;flex-direction:column!important}
+          }
+        </style>
+      </div>
+
+      <!-- LOCKDOWN -->
+      <div class="section" id="section-lockdown">
+        <div class="section-header">
+          <div class="section-title">Global Lockdown</div>
+          <div class="section-desc">Instantly halt or resume all bot activity across every server.</div>
+        </div>
+
+        <div class="lockdown-hero" id="lockdown-hero">
+          <div class="lockdown-icon-wrap"><span id="lockdown-icon">🔓</span></div>
+          <div class="lockdown-text">
+            <div class="lockdown-title" id="lockdown-title">Bot is Active</div>
+            <div class="lockdown-desc"  id="lockdown-desc">
+              The bot is responding normally to all messages across all servers.
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0">
+            <span style="font-size:12px;color:var(--text-tertiary);font-weight:500"
+                  id="lockdown-toggle-label">Lockdown OFF</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="lockdown-toggle"
+                     onchange="window._toggleLockdown(this.checked)"/>
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="result-banner" id="lockdown-result" style="margin-bottom:16px"></div>
+
+        <div class="card">
+          <div class="card-title" style="margin-bottom:14px">What lockdown does</div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;gap:12px;align-items:flex-start">
+              <span style="color:var(--danger);font-size:13px;margin-top:2px;font-weight:700">✕</span>
+              <div>
+                <div style="font-size:13px;font-weight:500;margin-bottom:2px">Blocks all message responses</div>
+                <div style="font-size:12px;color:var(--text-secondary)">Bot stops replying in all servers and DMs instantly.</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:12px;align-items:flex-start">
+              <span style="color:var(--success);font-size:13px;margin-top:2px;font-weight:700">✓</span>
+              <div>
+                <div style="font-size:13px;font-weight:500;margin-bottom:2px">Slash commands still work</div>
+                <div style="font-size:12px;color:var(--text-secondary)">Discord handles slash commands — they respond but won't process messages.</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:12px;align-items:flex-start">
+              <span style="color:var(--success);font-size:13px;margin-top:2px;font-weight:700">✓</span>
+              <div>
+                <div style="font-size:13px;font-weight:500;margin-bottom:2px">Zero data loss</div>
+                <div style="font-size:12px;color:var(--text-secondary)">All state and history preserved. Toggle off to resume immediately.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- NODE CONSOLE -->
+      <div class="section" id="section-node-console">
+        <div class="section-header">
+          <div class="section-title">Node.js REPL</div>
+          <div class="section-desc">Live interactive shell on your Render instance. Evaluate any JS expression.</div>
+        </div>
+        <div class="terminal-card">
+          <div class="terminal-titlebar">
+            <div class="traffic-lights">
+              <div class="tl tl-red"></div><div class="tl tl-yel"></div><div class="tl tl-grn"></div>
+            </div>
+            <div class="terminal-title">node — Render Runtime</div>
+            <div class="terminal-conn-badge disconnected" id="node-conn-badge">Disconnected</div>
+          </div>
+          <div class="terminal-body" id="node-terminal-body"></div>
+          <div class="terminal-footer">
+            <button class="btn btn-secondary btn-sm" onclick="TERM.connectNode()">⟳ Connect</button>
+            <button class="btn btn-ghost    btn-sm" onclick="TERM.disconnectNode()">✕ Disconnect</button>
+            <button class="btn btn-ghost    btn-sm" onclick="TERM.clearNode()">🗑 Clear</button>
+            <span class="terminal-hint">Full Node.js REPL · any JS expression</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- MONGO CONSOLE -->
+      <div class="section" id="section-mongo-console">
+        <div class="section-header">
+          <div class="section-title">MongoDB Shell</div>
+          <div class="section-desc">
+            Interactive shell using your bot's
+            <code style="font-family:var(--font-mono);font-size:12px;background:var(--bg-surface);padding:1px 6px;border-radius:4px">MONGODB_URI</code>.
+            Use <code style="font-family:var(--font-mono);font-size:12px;background:var(--bg-surface);padding:1px 6px;border-radius:4px">db</code> to query.
+          </div>
+        </div>
+        <div class="terminal-card">
+          <div class="terminal-titlebar">
+            <div class="traffic-lights">
+              <div class="tl tl-red"></div><div class="tl tl-yel"></div><div class="tl tl-grn"></div>
+            </div>
+            <div class="terminal-title">mongosh — Bot Database</div>
+            <div class="terminal-conn-badge disconnected" id="mongo-conn-badge">Disconnected</div>
+          </div>
+          <div class="terminal-body" id="mongo-terminal-body"></div>
+          <div class="terminal-footer">
+            <button class="btn btn-secondary btn-sm" onclick="TERM.connectMongo()">⟳ Connect</button>
+            <button class="btn btn-ghost    btn-sm" onclick="TERM.disconnectMongo()">✕ Disconnect</button>
+            <button class="btn btn-ghost    btn-sm" onclick="TERM.clearMongo()">🗑 Clear</button>
+            <span class="terminal-hint">
+              <code style="font-family:var(--font-mono)">db</code> ·
+              <code style="font-family:var(--font-mono)">await listCollections()</code>
+            </span>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- BOTTOM NAV (mobile) -->
+<nav id="bottom-nav" aria-label="Mobile navigation">
+  <div class="bottom-nav-inner" id="bottom-nav-inner"></div>
+</nav>
+
+<!-- TOAST REGION -->
+<div id="toast-region" role="alert" aria-live="polite"></div>
+
+<!-- Entry point -->
+<script type="module" src="js/app.js"></script>
+
+</body>
+</html>
