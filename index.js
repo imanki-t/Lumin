@@ -12,10 +12,11 @@ import {
   REST,
   Routes
 } from 'discord.js';
+import { createServer } from 'http';
 import express from 'express';
 
 import config from './config.js';
-import { startDashboard, isGlobalLockdown } from './dashboard/server.js';
+import { mountDashboard, isGlobalLockdown } from './dashboard/server.js';
 import {
   client,
   token,
@@ -83,7 +84,8 @@ initialize().catch(error => {
 // EXPRESS HEALTH SERVER
 // ============================================================================
 
-const app = express();
+const app        = express();
+const httpServer = createServer(app);
 
 app.get(EXPRESS_CONFIG.STATUS_PATH, (_req, res) => {
   res.json({
@@ -104,9 +106,12 @@ app.get(EXPRESS_CONFIG.HEALTH_CHECK_PATH, (_req, res) => {
   });
 });
 
-app.listen(EXPRESS_CONFIG.PORT, () => {
+httpServer.listen(EXPRESS_CONFIG.PORT, () => {
   logger.info(`Express server running on port ${EXPRESS_CONFIG.PORT}`);
 });
+
+// Mount admin dashboard at /dashboard on the same port
+mountDashboard(app, httpServer);
 
 // ============================================================================
 // TEMP FILE CLEANUP
@@ -201,7 +206,6 @@ client.on('guildCreate', async (guild) => {
 client.on('messageCreate', async (message) => {
   try {
     if (message.author.bot)                          return;
-    if (isGlobalLockdown())                          return;  // Dashboard: global lockdown
     if (message.content.startsWith('!'))             return;
     if (IGNORED_MESSAGE_TYPES.has(message.type))     return;
 
@@ -419,13 +423,10 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ============================================================================
-// LOGIN + DASHBOARD
+// LOGIN
 // ============================================================================
 
 client.login(token).catch(error => {
   logger.critical('Failed to login to Discord', error);
   process.exit(1);
 });
-
-// Start admin dashboard (port from DASHBOARD_PORT env var, default 3001)
-startDashboard();
