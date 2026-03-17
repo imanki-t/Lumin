@@ -16,16 +16,13 @@
 </head>
 <body>
 
-<!-- ═══════════════ LOGIN ══════════════════════════════════════════════════ -->
+<!-- LOGIN -->
 <div id="login-page">
   <div class="login-grid"></div>
   <div class="login-glow"></div>
   <div class="login-card">
     <div class="login-brand">
       <img src="lumin.png" class="login-logo-img" alt="Lumin" onerror="this.style.display='none'"/>
-      <div class="login-logo-fallback" id="login-logo-fallback" style="display:none">
-        <svg viewBox="0 0 32 32" fill="none" width="28" height="28"><path d="M16 4L4 10v12l12 6 12-6V10L16 4z" stroke="#6D5AE6" stroke-width="1.5" fill="rgba(109,90,230,0.15)"/><path d="M16 4v24M4 10l12 6 12-6" stroke="#6D5AE6" stroke-width="1.5"/><circle cx="16" cy="16" r="3" fill="#6D5AE6"/></svg>
-      </div>
       <div>
         <div class="login-brand-name">LUMIN</div>
         <div class="login-brand-sub">Control Panel</div>
@@ -42,10 +39,10 @@
   </div>
 </div>
 
-<!-- ═══════════════ APP ════════════════════════════════════════════════════ -->
+<!-- APP -->
 <div id="app" class="hidden">
 
-  <!-- SIDEBAR (desktop) -->
+  <!-- SIDEBAR -->
   <nav id="sidebar">
     <div class="sb-brand">
       <img src="lumin.png" class="sb-logo" alt="Lumin" onerror="this.style.display='none';document.getElementById('sb-logo-svg').style.display='flex'"/>
@@ -70,7 +67,7 @@
         <div class="sb-user-name" id="sb-user-name">—</div>
         <div class="sb-user-email mono" id="sb-user-email">—</div>
       </div>
-      <button class="sb-logout" id="logout-btn" title="Sign out" onclick="window._logout()">
+      <button class="sb-logout" title="Sign out" onclick="window._logout()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="15" height="15"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
       </button>
     </div>
@@ -78,7 +75,6 @@
 
   <!-- MAIN -->
   <div id="main">
-    <!-- Topbar -->
     <header id="topbar">
       <button class="menu-btn" id="menu-btn" onclick="window._toggleSidebar()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -91,31 +87,30 @@
       </div>
     </header>
 
-    <!-- Content -->
     <div id="content">
 
       <!-- ══ OVERVIEW ══════════════════════════════════════════════════════ -->
       <section class="section active" id="section-overview">
         <div class="hero-grid">
-          <div class="hero-card" id="hc-servers">
+          <div class="hero-card">
             <div class="hc-label">Servers</div>
             <div class="hc-value mono" id="hc-servers">—</div>
             <div class="hc-sub">Active guilds</div>
             <svg class="hc-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="12" cy="12" r="10"/><ellipse cx="12" cy="12" rx="4" ry="10"/><path d="M2 12h20"/></svg>
           </div>
-          <div class="hero-card" id="hc-members">
+          <div class="hero-card">
             <div class="hc-label">Members</div>
             <div class="hc-value mono" id="hc-members">—</div>
             <div class="hc-sub">Total across guilds</div>
             <svg class="hc-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
           </div>
-          <div class="hero-card" id="hc-ping">
+          <div class="hero-card">
             <div class="hc-label">WS Ping</div>
             <div class="hc-value mono" id="hc-ping">—</div>
             <div class="hc-sub" id="hc-ping-sub">WebSocket latency</div>
             <svg class="hc-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           </div>
-          <div class="hero-card" id="hc-uptime">
+          <div class="hero-card">
             <div class="hc-label">Uptime</div>
             <div class="hc-value mono" id="hc-uptime">—</div>
             <div class="hc-sub">Since last restart</div>
@@ -163,18 +158,15 @@
       <section class="section" id="section-servers">
         <div class="sec-hdr">
           <div>
-            <div class="sec-title">Servers</div>
+            <div class="sec-title">Servers <span class="sec-count" id="servers-count"></span></div>
             <div class="sec-desc">All guilds the bot is currently in, sorted by member count.</div>
           </div>
           <div class="hdr-actions">
-            <input class="search-input" id="server-search" placeholder="Search servers..." oninput="window._filterServers(this.value)"/>
-            <button class="btn-act" onclick="window._loadServers()">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
-              Refresh
-            </button>
+            <input class="search-input" id="server-search" placeholder="Search by name or ID…" oninput="window._filterServers(this.value)"/>
           </div>
         </div>
         <div id="servers-grid" class="servers-grid"><div class="loading-msg">Loading servers...</div></div>
+        <div id="servers-pagination"></div>
       </section>
 
       <!-- ══ COMMANDS ═══════════════════════════════════════════════════════ -->
@@ -182,7 +174,7 @@
         <div class="sec-hdr">
           <div>
             <div class="sec-title">Admin Commands</div>
-            <div class="sec-desc">Full bot control — no Discord required.</div>
+            <div class="sec-desc">Full bot control — no Discord required. Accepts User ID or username#tag.</div>
           </div>
         </div>
         <div id="cmd-grid" class="cmd-grid"></div>
@@ -193,24 +185,27 @@
         <div class="sec-hdr">
           <div>
             <div class="sec-title">User Management</div>
-            <div class="sec-desc">Look up settings, history, and manage individual users.</div>
+            <div class="sec-desc">Look up users by ID or username, manage history and settings.</div>
           </div>
         </div>
         <div class="users-layout">
           <div class="panel">
             <div class="panel-hdr">Lookup User</div>
-            <div class="form-row"><label class="form-label">User ID</label>
-              <input class="form-input" id="user-lookup-id" placeholder="Discord User ID"/>
+            <div class="form-row">
+              <label class="form-label">User ID or Username</label>
+              <input class="form-input" id="user-lookup-id" placeholder="123456789 or username#tag"/>
             </div>
             <button class="btn-primary" onclick="window._lookupUser()">Lookup</button>
             <div id="user-lookup-result" class="lookup-result hidden"></div>
           </div>
           <div class="panel">
             <div class="panel-hdr">Send DM</div>
-            <div class="form-row"><label class="form-label">User ID</label>
-              <input class="form-input" id="dm-user-id" placeholder="Discord User ID"/>
+            <div class="form-row">
+              <label class="form-label">User ID or Username</label>
+              <input class="form-input" id="dm-user-id" placeholder="123456789 or username#tag"/>
             </div>
-            <div class="form-row"><label class="form-label">Message</label>
+            <div class="form-row">
+              <label class="form-label">Message</label>
               <textarea class="form-textarea" id="dm-message" rows="4" placeholder="Your message..."></textarea>
             </div>
             <button class="btn-primary" onclick="window._sendDm()">Send DM</button>
@@ -218,10 +213,12 @@
           </div>
           <div class="panel">
             <div class="panel-hdr">Blacklist Management</div>
-            <div class="form-row"><label class="form-label">User ID</label>
-              <input class="form-input" id="bl-user-id" placeholder="Discord User ID"/>
+            <div class="form-row">
+              <label class="form-label">User ID or Username</label>
+              <input class="form-input" id="bl-user-id" placeholder="User ID or username#tag"/>
             </div>
-            <div class="form-row"><label class="form-label">Guild ID</label>
+            <div class="form-row">
+              <label class="form-label">Guild ID</label>
               <input class="form-input" id="bl-guild-id" placeholder="Guild ID (or ALL)"/>
             </div>
             <div class="btn-row">
@@ -248,37 +245,63 @@
             <div class="sec-desc">Control what the bot shows as its status and activity.</div>
           </div>
         </div>
-        <div class="panel" style="max-width:560px">
-          <div class="panel-hdr">Set Presence</div>
-          <div class="form-row"><label class="form-label">Online Status</label>
-            <select class="form-select" id="presence-status">
-              <option value="online">Online</option>
-              <option value="idle">Idle</option>
-              <option value="dnd">Do Not Disturb</option>
-              <option value="invisible">Invisible</option>
-            </select>
+        <div style="max-width:600px">
+          <div class="panel" style="margin-bottom:14px">
+            <div class="panel-hdr">Current Presence</div>
+            <div id="presence-current-display" class="presence-current">
+              <span style="color:var(--tm);font-size:12px">Loading current presence…</span>
+            </div>
           </div>
-          <div class="form-row"><label class="form-label">Activity Text</label>
-            <input class="form-input" id="presence-activity" placeholder="e.g. with 1000 servers"/>
-          </div>
-          <div class="form-row"><label class="form-label">Activity Type</label>
-            <select class="form-select" id="presence-type">
-              <option value="0">Playing</option>
-              <option value="1">Streaming</option>
-              <option value="2">Listening to</option>
-              <option value="3">Watching</option>
-              <option value="5">Competing in</option>
-            </select>
-          </div>
-          <button class="btn-primary" onclick="window._setPresence()">Update Presence</button>
-          <div id="presence-result" class="cmd-result hidden"></div>
-          <div class="presence-presets">
-            <div class="preset-label">Quick Presets</div>
-            <div class="preset-btns">
-              <button class="preset-btn" onclick="window._applyPreset('online','','0')">Online (default)</button>
-              <button class="preset-btn" onclick="window._applyPreset('dnd','Bot maintenance','3')">Maintenance</button>
-              <button class="preset-btn" onclick="window._applyPreset('idle','','0')">Idle</button>
-              <button class="preset-btn" onclick="window._applyPreset('invisible','','0')">Invisible</button>
+          <div class="panel">
+            <div class="panel-hdr">Force Override</div>
+            <div class="form-row">
+              <label class="form-label">Online Status</label>
+              <select class="form-select" id="presence-status">
+                <option value="online">Online</option>
+                <option value="idle">Idle</option>
+                <option value="dnd">Do Not Disturb</option>
+                <option value="invisible">Invisible</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Activity Text</label>
+              <input class="form-input" id="presence-activity" placeholder="e.g. with 1000 servers"/>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Activity Type</label>
+              <select class="form-select" id="presence-type">
+                <option value="0">Playing</option>
+                <option value="1">Streaming</option>
+                <option value="2">Listening to</option>
+                <option value="3">Watching</option>
+                <option value="5">Competing in</option>
+              </select>
+            </div>
+            <button class="btn-primary" onclick="window._setPresence()">Update Presence</button>
+            <div id="presence-result" class="cmd-result hidden"></div>
+            <div class="presence-presets">
+              <div class="preset-label">Quick Presets</div>
+              <div class="preset-btns">
+                <button class="preset-btn" onclick="window._applyPreset('online','','0')">🟢 Online</button>
+                <button class="preset-btn" onclick="window._applyPreset('idle','','0')">🟡 Idle</button>
+                <button class="preset-btn" onclick="window._applyPreset('dnd','','0')">🔴 DND</button>
+                <button class="preset-btn" onclick="window._applyPreset('invisible','','0')">⚫ Invisible</button>
+                <button class="preset-btn" onclick="window._applyPreset('dnd','Bot maintenance','3')">🔧 Maintenance</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','your messages','2')">🎧 Listening</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','anime','3')">📺 Watching Anime</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','homework help','2')">📚 Homework Help</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','video games','0')">🎮 Gaming</button>
+                <button class="preset-btn" onclick="window._applyPreset('idle','be right back','0')">💤 AFK</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','with your feelings','0')">💜 Emotional Support</button>
+                <button class="preset-btn" onclick="window._applyPreset('dnd','updating systems','3')">⚙️ Updating</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','study playlists','2')">📖 Studying</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','the tournament','5')">🏆 Competing</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','cooking shows','3')">🍳 Cooking</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','j-pop','2')">🎵 Listening to J-Pop</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','big sister','0')">👧 Big Sister Mode</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','over you','3')">💔 Over You</button>
+                <button class="preset-btn" onclick="window._applyPreset('online','all servers','3')">🌐 Watching All Servers</button>
+              </div>
             </div>
           </div>
         </div>
@@ -289,20 +312,40 @@
         <div class="sec-hdr">
           <div>
             <div class="sec-title">Global Announcement</div>
-            <div class="sec-desc">Broadcast a message to all servers simultaneously.</div>
+            <div class="sec-desc">Broadcast a message to all servers, or DM users directly.</div>
           </div>
         </div>
         <div class="announce-grid">
           <div class="panel">
             <div class="panel-hdr">Compose</div>
-            <div class="form-row"><label class="form-label">Title</label>
+            <!-- Target selector -->
+            <div class="ann-target-wrap">
+              <div class="ann-target-label">Send to</div>
+              <div class="ann-target-row">
+                <button class="ann-target-btn active" data-target="both">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>
+                  All
+                </button>
+                <button class="ann-target-btn" data-target="servers">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="10"/><ellipse cx="12" cy="12" rx="4" ry="10"/><path d="M2 12h20"/></svg>
+                  Servers Only
+                </button>
+                <button class="ann-target-btn" data-target="users">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                  Users DM
+                </button>
+              </div>
+            </div>
+            <div class="form-row" id="ann-title-row">
+              <label class="form-label">Title</label>
               <input class="form-input" id="ann-title" value="Announcement"/>
             </div>
-            <div class="form-row"><label class="form-label">Message</label>
+            <div class="form-row">
+              <label class="form-label">Message</label>
               <textarea class="form-textarea" id="ann-message" rows="6" placeholder="Write your announcement..."></textarea>
             </div>
             <div class="form-inline">
-              <div class="form-row" style="flex:1">
+              <div class="form-row" style="flex:1" id="ann-color-row">
                 <label class="form-label">Color</label>
                 <input class="form-input" id="ann-color" type="text" placeholder="#6D5AE6" value="#6D5AE6"/>
               </div>
@@ -314,7 +357,9 @@
                 </select>
               </div>
             </div>
-            <button class="btn-primary" id="ann-btn" onclick="window._sendAnnounce()">Send to All Servers</button>
+            <button class="btn-primary" id="ann-btn" onclick="window._sendAnnounce()">
+              <span id="ann-send-label">Send to All Servers</span>
+            </button>
             <div id="ann-result" class="cmd-result hidden"></div>
           </div>
           <div class="panel">
@@ -351,15 +396,15 @@
           <div id="lockdown-result" class="cmd-result hidden"></div>
           <div class="lockdown-info">
             <div class="lockdown-info-row">
-              <svg viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="1.5" width="15" height="15"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--err)" stroke-width="1.5" width="15" height="15"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
               <span>Blocks all message responses globally</span>
             </div>
             <div class="lockdown-info-row">
-              <svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="1.5" width="15" height="15"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>
-              <span>Slash commands remain functional</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--err)" stroke-width="1.5" width="15" height="15"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+              <span>Slash commands reply with a lockdown warning</span>
             </div>
             <div class="lockdown-info-row">
-              <svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="1.5" width="15" height="15"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="1.5" width="15" height="15"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>
               <span>Zero data loss — all state preserved</span>
             </div>
           </div>
@@ -376,6 +421,7 @@
           <div class="term-controls">
             <div class="conn-badge" id="node-badge"><span class="conn-dot"></span><span class="conn-lbl">Disconnected</span></div>
             <button class="btn-term-disconnect hidden" id="node-disconnect" onclick="window.TERM.disconnectNode()">Disconnect</button>
+            <button class="btn-term-reconnect hidden" id="node-reconnect" onclick="window.TERM.reconnectNode()">Reconnect</button>
             <button class="btn-term-clear" onclick="window.TERM.clearNode()">Clear</button>
           </div>
         </div>
@@ -395,6 +441,7 @@
           <div class="term-controls">
             <div class="conn-badge" id="mongo-badge"><span class="conn-dot"></span><span class="conn-lbl">Disconnected</span></div>
             <button class="btn-term-disconnect hidden" id="mongo-disconnect" onclick="window.TERM.disconnectMongo()">Disconnect</button>
+            <button class="btn-term-reconnect hidden" id="mongo-reconnect" onclick="window.TERM.reconnectMongo()">Reconnect</button>
             <button class="btn-term-clear" onclick="window.TERM.clearMongo()">Clear</button>
           </div>
         </div>
@@ -407,19 +454,12 @@
     </div><!-- /content -->
   </div><!-- /main -->
 
-  <!-- MOBILE BOTTOM NAV -->
-  <nav id="bottom-nav">
-    <div id="bnav-inner"></div>
-  </nav>
-
-  <!-- MOBILE SIDEBAR OVERLAY -->
+  <nav id="bottom-nav"><div id="bnav-inner"></div></nav>
   <div id="sb-overlay" class="hidden" onclick="window._closeSidebar()"></div>
 
 </div><!-- /app -->
 
-<!-- Toast -->
 <div id="toast-region" role="alert" aria-live="polite"></div>
-
 <script type="module" src="js/app.js"></script>
 </body>
 </html>
