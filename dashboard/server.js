@@ -691,3 +691,196 @@ export function mountDashboard(app, httpServer) {
 }
 
 export const isGlobalLockdown = () => state.globalLockdown === true;
+
+// ── Get current presence ──────────────────────────────────────────────────────
+router.get('/api/cmd/get-presence', authenticate, (req, res) => {
+  try {
+    const presence = client?.user?.presence;
+    if (!presence) return res.json({ success: true, presence: null });
+    const activities = presence.activities?.map(a => ({ name: a.name, type: a.type, url: a.url })) || [];
+    res.json({ success: true, presence: { status: presence.status, activities } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Resolve username to user ID ───────────────────────────────────────────────
+router.post('/api/cmd/resolve-username', authenticate, async (req, res) => {
+  try {
+    const { username } = req.body;
+    if (!username) return res.status(400).json({ error: 'username required.' });
+    for (const [, guild] of (client?.guilds?.cache ?? new Map())) {
+      const member = guild.members.cache.find(m =>
+        m.user.username?.toLowerCase() === username.toLowerCase() ||
+        m.user.tag?.toLowerCase() === username.toLowerCase()
+      );
+      if (member) return res.json({ success: true, id: member.user.id, tag: member.user.tag });
+    }
+    res.status(404).json({ success: false, error: 'User not found in any cached guild.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Fetch user profile ────────────────────────────────────────────────────────
+router.get('/api/cmd/user-profile/:userId', authenticate, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await client?.users?.fetch(userId, { force: true }).catch(() => null);
+    if (!user) return res.status(404).json({ success: false, error: 'User not found.' });
+    let mutualGuilds = 0;
+    for (const [, guild] of (client?.guilds?.cache ?? new Map())) {
+      if (guild.members.cache.has(userId)) mutualGuilds++;
+    }
+    const hasSettings = !!(state.userSettings?.[userId] && Object.keys(state.userSettings[userId]).length);
+    const hasHistory  = !!(state.chatHistories?.[userId]);
+    res.json({
+      success: true,
+      user: {
+        id:          user.id,
+        username:    user.username,
+        displayName: user.displayName || user.globalName || user.username,
+        tag:         user.tag,
+        avatarURL:   user.displayAvatarURL({ size: 128, extension: 'png' }),
+        bot:         user.bot,
+        system:      user.system,
+        createdAt:   user.createdAt?.toISOString(),
+        mutualGuilds,
+        hasSettings,
+        hasHistory,
+      }
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Guild info ────────────────────────────────────────────────────────────────
+router.get('/api/cmd/guild-info/:guildId', authenticate, async (req, res) => {
+  try {
+    const guild = client?.guilds?.cache?.get(req.params.guildId);
+    if (!guild) return res.status(404).json({ success: false, error: 'Guild not found.' });
+    res.json({
+      success: true,
+      guild: {
+        id: guild.id, name: guild.name, ownerId: guild.ownerId,
+        memberCount: guild.memberCount, iconURL: guild.iconURL(),
+        createdAt: guild.createdAt?.toLocaleDateString(),
+        premiumSubscriptionCount: guild.premiumSubscriptionCount || 0,
+        description: guild.description || null,
+      }
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Reset user settings ───────────────────────────────────────────────────────
+router.post('/api/cmd/reset-user-settings', authenticate, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required.' });
+    delete state.userSettings[userId];
+    if (db.saveUserSettings) await db.saveUserSettings(userId, {});
+    res.json({ success: true, message: 'User settings reset for ' + userId + '.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Clear reminders ───────────────────────────────────────────────────────────
+router.post('/api/cmd/clear-reminders', authenticate, async (req, res) => {
+  try {
+    const count = safeCount(state.reminders);
+    state.reminders = {};
+    await saveStateToFile();
+    res.json({ success: true, message: 'Cleared ' + count + ' reminder(s).' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Clear birthdays ───────────────────────────────────────────────────────────
+router.post('/api/cmd/clear-birthdays', authenticate, async (req, res) => {
+  try {
+    const count = safeCount(state.birthdays);
+    state.birthdays = {};
+    await saveStateToFile();
+    res.json({ success: true, message: 'Cleared ' + count + ' birthday(s).' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Clear starter usage ───────────────────────────────────────────────────────
+router.post('/api/cmd/clear-starter-usage', authenticate, async (req, res) => {
+  try {
+    const count = safeCount(state.starterUsage);
+    state.starterUsage = {};
+    await saveStateToFile();
+    res.json({ success: true, message: 'Cleared starter usage for ' + count + ' users.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Clear compliment usage ────────────────────────────────────────────────────
+router.post('/api/cmd/clear-compliment-usage', authenticate, async (req, res) => {
+  try {
+    const count = safeCount(state.complimentUsage);
+    state.complimentUsage = {};
+    await saveStateToFile();
+    res.json({ success: true, message: 'Cleared compliment usage for ' + count + ' users.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── DM all server owners ──────────────────────────────────────────────────────
+router.post('/api/cmd/dm-all-owners', authenticate, async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ error: 'message required.' });
+    let sent = 0, failed = 0;
+    for (const [, guild] of (client?.guilds?.cache ?? new Map())) {
+      try {
+        const owner = await client.users.fetch(guild.ownerId);
+        await owner.send(message);
+        sent++;
+      } catch { failed++; }
+    }
+    res.json({ success: true, message: 'DM sent to ' + sent + ' owners. Failed: ' + failed + '.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Reload slash commands ─────────────────────────────────────────────────────
+router.post('/api/cmd/reload-commands', authenticate, async (req, res) => {
+  try {
+    const { REST, Routes } = await import('discord.js');
+    const token = process.env.DISCORD_TOKEN || process.env.TOKEN || '';
+    const rest = new REST().setToken(token);
+    const cmdModule = await import('../commands.js');
+    const cmds = cmdModule.commands || cmdModule.default || [];
+    await rest.put(Routes.applicationCommands(client.user.id), { body: cmds });
+    res.json({ success: true, message: 'Slash commands reloaded successfully.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Purge blacklist ───────────────────────────────────────────────────────────
+router.post('/api/cmd/purge-blacklist', authenticate, async (req, res) => {
+  try {
+    const total = Object.values(state.blacklistedUsers || {}).flat().length;
+    state.blacklistedUsers = {};
+    await saveStateToFile();
+    res.json({ success: true, message: 'Purged ' + total + ' blacklist entries.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Announce to users via DM ──────────────────────────────────────────────────
+router.post('/api/cmd/announce-users', authenticate, async (req, res) => {
+  try {
+    const { message, title = 'Announcement', embedColor = '#6D5AE6', useEmbed = true } = req.body;
+    if (!message) return res.status(400).json({ error: 'message is required.' });
+    const { EmbedBuilder } = await import('discord.js');
+    const seen = new Set();
+    let sent = 0, failed = 0;
+    for (const [, guild] of (client?.guilds?.cache ?? new Map())) {
+      for (const [uid, member] of guild.members.cache) {
+        if (member.user.bot || seen.has(uid)) continue;
+        seen.add(uid);
+        try {
+          if (useEmbed) {
+            const embed = new EmbedBuilder().setColor(embedColor).setTitle(title).setDescription(message).setTimestamp();
+            await member.user.send({ embeds: [embed] });
+          } else {
+            await member.user.send(message);
+          }
+          sent++;
+        } catch { failed++; }
+      }
+    }
+    res.json({ success: true, message: 'DM sent to ' + sent + ' users. Failed: ' + failed + '.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
