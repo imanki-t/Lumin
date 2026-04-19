@@ -542,11 +542,17 @@ export async function handleModelResponse(
 
             const functionResponses = await executeFunctionCalls(callDescriptors, userId, guildId, historyId);
 
-            // Pass raw model parts back — preserves id + thought_signature for Gemini 3
+            // Pass raw model parts back — preserves id + thought_signature for Gemini 3.
+            // Non-Gemini-3 models (e.g. gemini-2.5-flash) don't support context circulation
+            // and will 400 if thought_signature fields are present, so strip them.
+            const sanitizedFcParts = isGemini3(modelName)
+              ? functionCallParts
+              : functionCallParts.map(({ thought_signature, thoughtSignature, ...rest }) => rest);
+
             const turnContents = [
               ...(history || []).filter(Boolean),
               { role: 'user',  parts: (parts || []).filter(Boolean) },
-              { role: 'model', parts: functionCallParts },          // raw parts, not re-wrapped
+              { role: 'model', parts: sanitizedFcParts },
               { role: 'user',  parts: functionResponses }
             ];
 
