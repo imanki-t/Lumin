@@ -15,6 +15,8 @@ import {
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_USER_SETTINGS
 } from '../../managers/BotManager.js';
+import { checkAndIncrementDailyMessages } from '../../managers/QueueManager.js';
+import { getWeeklySummary } from '../../commands/summary/WeeklySummaryJob.js';
 import { memorySystem }  from '../../memory/MemorySystem.js';
 import { Logger }         from '../../core/Logger.js';
 import { Embeds }         from '../shared/embedBuilder.js';
@@ -23,6 +25,7 @@ import { typingManager, handleModelResponse } from './ResponseHandler.js';
 import { prepareMessageContent, extractFileText } from './PromptBuilder.js';
 import { processPromptAndMediaAttachments, isSupportedAttachment } from './MediaHandler.js';
 import config from '../../config.js';
+import { functionTools } from '../functions/FunctionRegistry.js';
 
 const logger = Logger.get('MessageProcessor');
 
@@ -40,11 +43,21 @@ const CONTEXT_MARKERS = Object.freeze({
   BATCH_SEPARATOR: '\n\n' + '='.repeat(50) + '\n\n'
 });
 
-// All tools enabled per turn — model decides which to invoke
+// ── Gemini tools: built-in (server-side) + custom function declarations ──────
+// Gemini 3 series supports combining built-in tools with function calling in a
+// single request. Built-in tools run server-side (no extra round-trip needed).
+// - googleSearch  → real-time web grounding
+// - urlContext    → deep-read any URL the model finds or is given
+// - codeExecution → run Python for maths/data tasks
+// - functionDeclarations → Lumin's custom tools (memory, reminders, etc.)
+//
+// NOTE: tool combinations are Preview, Gemini 3 models only. The fallback
+// model (gemini-2.5-flash) also supports these, so no guard needed.
 const ALL_TOOLS = Object.freeze([
-  { googleSearch: {} },
-  { urlContext:   {} },
-  { codeExecution: {} }
+  { googleSearch:  {} },
+  { urlContext:    {} },
+  { codeExecution: {} },
+  ...functionTools        // spreads the { functionDeclarations: [...] } object
 ]);
 
 // ============================================================================
@@ -83,7 +96,7 @@ function resolveMessageContext(userId, guildId, channelId) {
  * @param {string} [extraSuffix]
  * @returns {string}
  */
-function buildSystemInstruction(message, effectiveSettings, serverSettings, channelId, guildId, extraSuffix = '') {
+async function buildSystemInstruction(message, effectiveSettings, serverSettings, channelId, guildId, extraSuffix = '') {
   let instructions = config.coreSystemRules;
 
   let customInstructions;
@@ -112,6 +125,16 @@ function buildSystemInstruction(message, effectiveSettings, serverSettings, chan
   } else {
     instructions += `\n## Current User Information\n${userInfo}`;
   }
+
+  // ── Weekly summary injection (Redis L1 ~1ms — zero RAG cost) ───────────────
+  // Gives Lumin persistent baseline knowledge about the user so it never needs
+  // to run RAG just to recall basic facts. Falls through silently if not ready.
+  try {
+    const weeklySummary = await getWeeklySummary(message.author.id);
+    if (weeklySummary) {
+      instructions += `\n\n## User Background (Weekly Summary)\n${weeklySummary}`;
+    }
+  } catch { /* non-fatal */ }
 
   if (extraSuffix) instructions += extraSuffix;
 
@@ -200,6 +223,19 @@ export async function handleTextMessage(message) {
 
   typingManager.start(message.channel);
 
+  // ── Daily message limit (Gemini 3.1 Flash Lite: 500/day free tier) ────────
+  const limitCheck = checkAndIncrementDailyMessages();
+  if (!limitCheck.allowed) {
+    typingManager.stop(channelId);
+    const resetTime = new Date(limitCheck.resetAt).toUTCString();
+    await message.reply({
+      embeds: [Embeds.error('Daily Limit Reached',
+        `Lumin has reached the 500 message/day limit for today.\nResets at: **${resetTime}**`
+      )]
+    }).catch(() => {});
+    return;
+  }
+
   try {
     // Update realive tracking
     if (guildId && state.realive?.[guildId]) {
@@ -245,7 +281,7 @@ export async function handleTextMessage(message) {
     const { effectiveSettings, serverSettings, historyId, modelName } =
       resolveMessageContext(userId, guildId, channelId);
 
-    const systemInstruction = buildSystemInstruction(
+    const systemInstruction = await buildSystemInstruction(
       message, effectiveSettings, serverSettings, channelId, guildId
     );
 
@@ -337,7 +373,7 @@ export async function handleBatchedMessages(queuedMessages) {
 
     const batchSuffix = `\n\nIMPORTANT: The user has sent ${preparedMessages.length} messages in quick succession. Each is labeled with its queue position and timestamp. Respond to ALL messages together in a natural, cohesive way.`;
 
-    const systemInstruction = buildSystemInstruction(
+    const systemInstruction = await buildSystemInstruction(
       firstMessage, effectiveSettings, serverSettings, channelId, guildId, batchSuffix
     );
 

@@ -420,12 +420,23 @@ export async function handleModelResponse(
       .setDescription('The response is too large. It will be sent as a text file once completed.');
 
   // ── Consume one stream, accumulating text and function calls ───────────────
+  // IMPORTANT: for Gemini 3 built-in + custom tool combinations, the API
+  // requires `id` and `thought_signature` to be passed back in the model turn.
+  // We capture the full raw part objects (not just chunk.functionCalls) so
+  // those fields survive the round-trip intact.
   const drainStream = async (stream, params) => {
     const { onFunctionCall } = params;
     let finalResponse = params.initialResponse || '';
 
     for await (const chunk of stream) {
-      if (chunk.functionCalls?.length) onFunctionCall(chunk.functionCalls);
+      // Capture raw parts that are functionCall type — preserves id + thought_signature
+      if (chunk.candidates?.[0]?.content?.parts) {
+        const fcParts = chunk.candidates[0].content.parts.filter(p => p.functionCall);
+        if (fcParts.length) onFunctionCall(fcParts);
+      } else if (chunk.functionCalls?.length) {
+        // Fallback for older SDK response shape
+        onFunctionCall(chunk.functionCalls.map(fc => ({ functionCall: fc })));
+      }
 
       const chunkText = extractChunkText(chunk);
       if (chunkText) {
@@ -483,15 +494,16 @@ export async function handleModelResponse(
 
         typingManager.stop(channelId);
 
-        let functionCallParts = [];
-        const onFunctionCall  = (calls) => functionCallParts.push(...calls);
+        let functionCallParts = [];  // now stores raw Part objects {functionCall, id?, thought_signature?}
+        const onFunctionCall  = (parts) => functionCallParts.push(...parts);
 
         finalResponse = await drainStream(stream, { onFunctionCall, isLargeRef, initialResponse: '' });
 
         // ── Function calling loop ────────────────────────────────────────
-        // BUG FIX (original): function call contents were all bundled in a single
-        // user message. Gemini requires them as separate model/user turns:
-        //   [history…, user_message, model_function_calls, user_function_results]
+        // Gemini 3 built-in + custom tool combination requirement:
+        //   - model turn must include the raw parts (with id + thought_signature)
+        //   - function result parts must reference matching id fields
+        //   [history…, user_message, model_fc_parts, user_fc_results]
         if (functionCallParts.length > 0) {
           logger.debug(`Executing ${functionCallParts.length} function call(s)…`);
 
@@ -501,13 +513,18 @@ export async function handleModelResponse(
             functionTurnCount++;
             logger.debug(`Function turn ${functionTurnCount}/${MAX_FUNCTION_CALL_TURNS}`);
 
-            const functionResponses = await executeFunctionCalls(functionCallParts, userId, guildId, historyId);
+            // Extract the actual call descriptors for the executor
+            const callDescriptors = functionCallParts.map(p =>
+              p.functionCall ? p.functionCall : p  // handle both shapes
+            );
 
-            // Correct multi-turn contents layout for the Gemini API
+            const functionResponses = await executeFunctionCalls(callDescriptors, userId, guildId, historyId);
+
+            // Pass raw model parts back — preserves id + thought_signature for Gemini 3
             const turnContents = [
               ...(history || []).filter(Boolean),
               { role: 'user',  parts: (parts || []).filter(Boolean) },
-              { role: 'model', parts: functionCallParts.map(call => ({ functionCall: call })) },
+              { role: 'model', parts: functionCallParts },          // raw parts, not re-wrapped
               { role: 'user',  parts: functionResponses }
             ];
 
