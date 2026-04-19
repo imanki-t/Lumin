@@ -200,6 +200,32 @@ class RedisCache {
   get isAvailable() {
     return this._enabled && this._ready;
   }
+
+  /**
+   * Raw key-value get — for use outside the historyId/queryHash namespace.
+   * @param {string} key
+   * @returns {Promise<string|null>}
+   */
+  async rawGet(key) {
+    if (!this._enabled || !this._ready || !this._client) return null;
+    try {
+      return await this._client.get(key);
+    } catch { return null; }
+  }
+
+  /**
+   * Raw key-value set with explicit TTL.
+   * @param {string} key
+   * @param {string} value
+   * @param {number} ttlSeconds
+   * @returns {Promise<void>}
+   */
+  async rawSet(key, value, ttlSeconds) {
+    if (!this._enabled || !this._ready || !this._client) return;
+    try {
+      await this._client.set(key, value, { EX: ttlSeconds });
+    } catch { /* non-fatal */ }
+  }
 }
 
 export const redisCache = new RedisCache();

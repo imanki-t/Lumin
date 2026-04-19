@@ -27,7 +27,7 @@ const logger = Logger.get('MemorySystem');
 
 const RECENT_MESSAGE_WINDOW    = 10;
 const MAX_RAG_RESULTS          = 3;
-const MIN_SIMILARITY_THRESHOLD = 0.65;
+const MIN_SIMILARITY_THRESHOLD = 0.72; // Aligned with VECTOR_SEARCH_CONFIG.SCORE_THRESHOLD
 /** 30-second gap triggers a TIME ELAPSED marker in formatted history */
 const TIME_GAP_THRESHOLD_MS    = 30 * 1000;
 /** Context block exceeding this is dropped (too big for Gemini inline) */

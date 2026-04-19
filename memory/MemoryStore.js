@@ -53,6 +53,14 @@ class MemoryStore {
     this.lastIndexedCount  = new Map();
     /** @type {Map<string, object>} userId → { text, embedding, timestamp } */
     this.personalDataCache = new Map();
+
+    // ── Render free tier: nudge GC every 10 min to reclaim old buffers ────────
+    // --expose-gc is set in package.json start script.
+    setInterval(() => {
+      if (typeof global.gc === 'function') global.gc();
+      // Cap personalDataCache to prevent unbounded growth
+      if (this.personalDataCache.size > 50) this.personalDataCache.clear();
+    }, 10 * 60 * 1_000).unref(); // .unref() = won't block process exit
   }
 
   // ==========================================================================

@@ -8,8 +8,9 @@
  * @module memory/EmbeddingService
  */
 
-import { genAI } from '../managers/BotManager.js';
-import { Logger } from '../core/Logger.js';
+import { genAI }      from '../managers/BotManager.js';
+import { Logger }     from '../core/Logger.js';
+import { redisCache } from './RedisCache.js';
 
 const logger = Logger.get('EmbeddingService');
 
@@ -18,29 +19,17 @@ const logger = Logger.get('EmbeddingService');
 // ============================================================================
 
 const EMBEDDING_MODEL           = 'gemini-embedding-2-preview';
-const MAX_EMBEDDING_CACHE_SIZE  = 1000;
-const MAX_CONCURRENT_EMBEDDINGS = 5;
+const MAX_EMBEDDING_CACHE_SIZE  = 50;    // Hot in-process LRU window only
+const MAX_CONCURRENT_EMBEDDINGS = 3;
+const EMBEDDING_DIM    = 768;
+const MRL_SHORT_DIM    = 256;
+const MRL_CENTROID_DIM = 64;
 
-// ── MRL (Matryoshka Representation Learning) dimensions ──────────────────────
-// gemini-embedding-2-preview supports: 3072 | 1536 | 768 | 256 | 128 | 64
-//
-// EMBEDDING_DIM  — full dimension stored in DB and used for final re-ranking.
-// MRL_SHORT_DIM  — truncated dimension used for fast centroid comparison only.
-//                  Cluster centroids are sliced to this length so the first-pass
-//                  scan over many centroids stays cheap; candidates are then
-//                  re-ranked with full EMBEDDING_DIM vectors.
-
-const EMBEDDING_DIM    = 3072;  // full stored vector (gemini-embedding-2-preview max)
-const MRL_SHORT_DIM    = 1536;  // available for future fast-pass use; not active in ClusterEngine
-
-/**
- * Dimension used for the K-means centroid first-pass scan in ClusterEngine.
- * 256-dim is sufficient for approximate centroid ranking — the goal is just to
- * identify which clusters are worth searching, not precise similarity scoring.
- * Full 3072-dim vectors are used in searchWithinClustersParallel for final reranking.
- * This cuts centroid comparison math by 12× (3072 ÷ 256).
- */
-const MRL_CENTROID_DIM = 256;
+// Redis TTL for embeddings: 24h. Embeddings for the same text never change,
+// so a long TTL is safe. This replaces the old unlimited in-memory Map which
+// would grow proportionally with user count and OOM on Render free tier.
+const EMBEDDING_REDIS_TTL = 24 * 60 * 60;  // 24 hours in seconds
+const EMBEDDING_REDIS_PREFIX = 'lumin:emb:';
 
 // ── Per-modality feature flags ────────────────────────────────────────────────
 // Set to `true` to activate that modality in generateMultimodalEmbedding.
@@ -237,8 +226,62 @@ function validateAudios(audios) {
 
 class EmbeddingService {
   constructor() {
-    /** @type {Map<string, number[]>} LRU cache: cacheKey → embedding vector */
+    /**
+     * L1: hot in-process LRU — only the 50 most-recently-used embeddings.
+     * Prevents unbounded RAM growth with thousands of users.
+     * @type {Map<string, number[]>}
+     */
     this.embeddingCache = new Map();
+  }
+
+  // ── Cache key ─────────────────────────────────────────────────────────────
+
+  /** @param {string} text @param {string} taskType @returns {string} */
+  _cacheKey(text, taskType) {
+    return `${text.slice(0, 120)}_${taskType}`;
+  }
+
+  /** @param {string} key @returns {string} */
+  _redisKey(key) {
+    return `${EMBEDDING_REDIS_PREFIX}${key}`;
+  }
+
+  // ── Cache read: L1 (Map) → L2 (Redis) ────────────────────────────────────
+
+  async _cacheGet(key) {
+    // L1 hit: instant, no await
+    if (this.embeddingCache.has(key)) return this.embeddingCache.get(key);
+
+    // L2 hit: Redis (~1ms), survives restarts
+    try {
+      const raw = await redisCache.rawGet(this._redisKey(key));
+      if (raw) {
+        const vec = JSON.parse(raw);
+        this._lruInsert(key, vec);  // warm L1
+        return vec;
+      }
+    } catch { /* Redis miss is fine */ }
+
+    return null;
+  }
+
+  // ── Cache write: L1 + fire-and-forget L2 ─────────────────────────────────
+
+  _cacheSet(key, vec) {
+    this._lruInsert(key, vec);
+    // Write to Redis async — never blocks embedding generation
+    redisCache.rawSet(this._redisKey(key), JSON.stringify(vec), EMBEDDING_REDIS_TTL)
+      .catch(() => {});
+  }
+
+  /** LRU insert with size cap. */
+  _lruInsert(key, vec) {
+    this.embeddingCache.delete(key);  // move-to-end on re-insert
+    this.embeddingCache.set(key, vec);
+    if (this.embeddingCache.size > MAX_EMBEDDING_CACHE_SIZE) {
+      // Evict oldest (Map preserves insertion order)
+      this.embeddingCache.delete(this.embeddingCache.keys().next().value);
+    }
   }
 
   // ── Single embedding ──────────────────────────────────────────────────────
@@ -253,8 +296,9 @@ class EmbeddingService {
   async generateEmbedding(text, taskType = 'RETRIEVAL_DOCUMENT') {
     if (!text || typeof text !== 'string' || text.trim().length === 0) return null;
 
-    const cacheKey = `${text.slice(0, 100)}_${taskType}`;
-    if (this.embeddingCache.has(cacheKey)) return this.embeddingCache.get(cacheKey);
+    const cacheKey = this._cacheKey(text, taskType);
+    const cached   = await this._cacheGet(cacheKey);
+    if (cached) return cached;
 
     try {
       const result = await genAI.models.embedContent({
@@ -374,18 +418,17 @@ class EmbeddingService {
     const results    = new Array(texts.length).fill(null);
     const toGenerate = [];
 
-    // Pass 1: resolve cache hits
-    for (let i = 0; i < texts.length; i++) {
-      const text = texts[i];
-      if (!text || typeof text !== 'string' || text.trim().length === 0) continue;
-
-      const cacheKey = `${text.slice(0, 100)}_${taskType}`;
-      if (this.embeddingCache.has(cacheKey)) {
-        results[i] = this.embeddingCache.get(cacheKey);
+    // Pass 1: resolve cache hits (async — checks L1 Map then Redis)
+    await Promise.all(texts.map(async (text, i) => {
+      if (!text || typeof text !== 'string' || text.trim().length === 0) return;
+      const cacheKey = this._cacheKey(text, taskType);
+      const cached   = await this._cacheGet(cacheKey);
+      if (cached) {
+        results[i] = cached;
       } else {
         toGenerate.push({ index: i, text, cacheKey });
       }
-    }
+    }));
 
     if (toGenerate.length === 0) return results;
 
@@ -479,18 +522,9 @@ class EmbeddingService {
     });
   }
 
-  // ── Cache helpers ─────────────────────────────────────────────────────────
+  // ── Cache helpers (legacy stubs — logic moved to _cacheGet/_cacheSet) ──────
 
-  /** LRU insert with size cap. */
-  _cacheSet(key, value) {
-    this.embeddingCache.set(key, value);
-    if (this.embeddingCache.size > MAX_EMBEDDING_CACHE_SIZE) {
-      // Evict oldest (Map preserves insertion order)
-      this.embeddingCache.delete(this.embeddingCache.keys().next().value);
-    }
-  }
-
-  /** Clear the embedding cache. */
+  /** Clear the hot L1 embedding cache (Redis entries persist with TTL). */
   clearCache() {
     this.embeddingCache.clear();
   }
