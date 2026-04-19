@@ -34,6 +34,7 @@ import {
   withRetry,
   getCurrentClient,
   getApiKeyStats,
+  getApiKeyCount,
   switchToNextKey,
   switchToNextKeyOrModel
 } from './ApiKeyManager.js';
@@ -44,7 +45,8 @@ import {
   checkImageRateLimit,
   incrementImageUsage,
   checkSummaryRateLimit,
-  incrementSummaryUsage
+  incrementSummaryUsage,
+  getDailyMessageStats
 } from './QueueManager.js';
 
 import {
@@ -355,6 +357,7 @@ export {
   incrementImageUsage,
   checkSummaryRateLimit,
   incrementSummaryUsage,
+  getDailyMessageStats,
 
   // StateManager
   state,

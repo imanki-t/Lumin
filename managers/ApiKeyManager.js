@@ -642,6 +642,12 @@ export function getCurrentClient() {
  *   }>
  * }}
  */
+
+/** Returns the total number of loaded API keys. */
+export function getApiKeyCount() {
+  return apiKeys.length;
+}
+
 export function getApiKeyStats() {
   const now   = Date.now();
   const stats = [];

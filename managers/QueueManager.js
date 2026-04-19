@@ -14,8 +14,73 @@
 
 import config from '../config.js';
 import { Logger } from '../core/Logger.js';
+import { getApiKeyCount } from './ApiKeyManager.js';
 
 const logger = Logger.get('QueueManager');
+
+// ============================================================================
+// DAILY MESSAGE RATE LIMIT
+// Gemini 3.1 Flash Lite free tier: 500 messages/day PER KEY.
+// With 30 keys that's 30 × 500 = 15,000 messages/day total.
+// We compute this lazily on first use so ApiKeyManager has time to load keys.
+// ============================================================================
+
+const PER_KEY_DAILY_LIMIT = 500;
+
+function getDailyLimit() {
+  const keyCount = getApiKeyCount();
+  return Math.max(keyCount, 1) * PER_KEY_DAILY_LIMIT;
+}
+
+/** @type {{ count: number, resetAt: number }} */
+let dailyMessageUsage = { count: 0, resetAt: _nextMidnightUTC() };
+
+function _nextMidnightUTC() {
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  return next.getTime();
+}
+
+/**
+ * Check and increment the global daily message counter.
+ * Limit = number of loaded API keys × 500.
+ * @returns {{ allowed: boolean, remaining: number, resetAt: number, limit: number }}
+ */
+export function checkAndIncrementDailyMessages() {
+  const now   = Date.now();
+  const limit = getDailyLimit();
+  if (now >= dailyMessageUsage.resetAt) {
+    dailyMessageUsage = { count: 0, resetAt: _nextMidnightUTC() };
+  }
+  if (dailyMessageUsage.count >= limit) {
+    return { allowed: false, remaining: 0, resetAt: dailyMessageUsage.resetAt, limit };
+  }
+  dailyMessageUsage.count++;
+  return {
+    allowed:   true,
+    remaining: limit - dailyMessageUsage.count,
+    resetAt:   dailyMessageUsage.resetAt,
+    limit
+  };
+}
+
+/** Reset daily counter (called by scheduleDailyReset). */
+export function resetDailyMessageUsage() {
+  dailyMessageUsage = { count: 0, resetAt: _nextMidnightUTC() };
+}
+
+/** Current usage stats for health/status endpoints. */
+export function getDailyMessageStats() {
+  const limit = getDailyLimit();
+  return {
+    used:      dailyMessageUsage.count,
+    limit,
+    perKeyLimit: PER_KEY_DAILY_LIMIT,
+    keyCount:  getApiKeyCount(),
+    remaining: Math.max(0, limit - dailyMessageUsage.count),
+    resetAt:   new Date(dailyMessageUsage.resetAt).toISOString()
+  };
+}
 
 // ============================================================================
 // MUTEX

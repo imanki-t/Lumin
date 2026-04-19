@@ -26,7 +26,8 @@ import {
   setImageUsageStore,
   setSummaryUsageStore,
   resetImageUsage,
-  resetSummaryUsage
+  resetSummaryUsage,
+  resetDailyMessageUsage
 } from './QueueManager.js';
 import { DEFAULT_MODEL } from '../modules/config.js';
 
@@ -720,6 +721,7 @@ export function scheduleDailyReset() {
         preserveAttachmentContext(state.chatHistories);
         resetImageUsage();
         resetSummaryUsage();
+        resetDailyMessageUsage();
 
         await saveStateToFile();
         logger.info('Daily reset completed');
