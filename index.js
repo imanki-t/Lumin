@@ -27,7 +27,8 @@ import {
   initializeBlacklistForGuild,
   BOT_CONFIG,
   DEFAULT_USER_SETTINGS,
-  requestQueues   // ← direct import; avoids going through state getter
+  requestQueues,   // ← direct import; avoids going through state getter
+  getDailyMessageStats
 } from './managers/BotManager.js';
 
 import { Logger }       from './core/Logger.js';
@@ -50,6 +51,7 @@ import {
   handleButtonInteraction    as handleNewButtons,
   processMessageRoulette
 } from './commands/index.js';
+import { scheduleWeeklySummaryJob } from './commands/summary/WeeklySummaryJob.js';
 
 const logger = Logger.get('Index');
 
@@ -88,21 +90,30 @@ const app        = express();
 const httpServer = createServer(app);
 
 app.get(EXPRESS_CONFIG.STATUS_PATH, (_req, res) => {
+  const mem = process.memoryUsage();
   res.json({
     status:    'online',
     bot:       client.user?.tag || 'Starting…',
     uptime:    process.uptime(),
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    memory: {
+      heapUsedMB:  (mem.heapUsed  / 1_048_576).toFixed(1),
+      heapTotalMB: (mem.heapTotal / 1_048_576).toFixed(1),
+      rssMB:       (mem.rss       / 1_048_576).toFixed(1)
+    },
+    dailyMessages: getDailyMessageStats()
   });
 });
 
 app.get(EXPRESS_CONFIG.HEALTH_CHECK_PATH, (_req, res) => {
   const healthy = client.isReady() && client.ws.status === 0;
+  const msgStats = getDailyMessageStats();
   res.status(healthy ? 200 : 503).json({
-    status:    healthy ? 'healthy' : 'degraded',
-    ready:     client.isReady(),
-    wsStatus:  client.ws.status,
-    timestamp: new Date().toISOString()
+    status:        healthy ? 'healthy' : 'degraded',
+    ready:         client.isReady(),
+    wsStatus:      client.ws.status,
+    timestamp:     new Date().toISOString(),
+    dailyMessages: msgStats
   });
 });
 
@@ -180,6 +191,14 @@ client.once('clientReady', async () => {
     logger.info('Scheduled tasks initialized');
   } catch (error) {
     logger.error('Error initializing scheduled tasks', error);
+  }
+
+  // Weekly user context summary job — fires every Sunday at 02:00 UTC
+  try {
+    scheduleWeeklySummaryJob();
+    logger.info('Weekly summary job scheduled');
+  } catch (error) {
+    logger.error('Failed to schedule weekly summary job', error);
   }
 });
 
