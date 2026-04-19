@@ -467,6 +467,20 @@ export async function handleModelResponse(
     return finalResponse;
   };
 
+  // ── Tool helpers ───────────────────────────────────────────────────────────
+  // Gemini 3 models support combining built-in tools (googleSearch, urlContext,
+  // codeExecution) with functionDeclarations in a single request.
+  // Older models (gemini-2.5-flash, etc.) throw 400 if you mix them — strip
+  // built-in tools and leave only the functionDeclarations entries.
+  // For Gemini 3 we also must opt-in via toolConfig.includeServerSideToolInvocations.
+  const isGemini3 = (name) => /gemini-3/i.test(name);
+
+  const resolveTools = (allTools, name) =>
+    isGemini3(name) ? allTools : allTools.filter(t => t.functionDeclarations);
+
+  const resolveToolConfig = (name) =>
+    isGemini3(name) ? { includeServerSideToolInvocations: true } : undefined;
+
   // ── Main retry loop ────────────────────────────────────────────────────────
 
   try {
@@ -479,13 +493,21 @@ export async function handleModelResponse(
         const generationConfig = getGenerationConfig(modelName);
         logger.debug(`Using model: ${modelName} (attempt ${modelAttempts + 1}/${maxModelAttempts})`);
 
+        const effectiveTools   = resolveTools(tools, modelName);
+        const effectiveToolCfg = resolveToolConfig(modelName);
+
         const request = {
           model:    modelName,
           contents: [
             ...(history || []).filter(Boolean),
             { role: 'user', parts: (parts || []).filter(Boolean) }
           ],
-          config: { systemInstruction, ...(generationConfig || {}), tools },
+          config: {
+            systemInstruction,
+            ...(generationConfig || {}),
+            tools: effectiveTools,
+            ...(effectiveToolCfg ? { toolConfig: effectiveToolCfg } : {})
+          },
           safetySettings
         };
 
@@ -531,7 +553,12 @@ export async function handleModelResponse(
             const nextRequest = {
               model:    modelName,
               contents: turnContents,
-              config:   { systemInstruction, ...(generationConfig || {}), tools },
+              config:   {
+                systemInstruction,
+                ...(generationConfig || {}),
+                tools: effectiveTools,
+                ...(effectiveToolCfg ? { toolConfig: effectiveToolCfg } : {})
+              },
               safetySettings
             };
 
