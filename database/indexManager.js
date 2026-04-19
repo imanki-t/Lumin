@@ -50,6 +50,13 @@ export async function createIndexes() {
 
       // ── User facts ────────────────────────────────────────────────────────
       { col: COLLECTIONS.USER_FACTS,          idx: { userId: 1, createdAt: -1 }       },
+
+      // ── Weekly summaries ──────────────────────────────────────────────────
+      { col: COLLECTIONS.WEEKLY_SUMMARIES,    idx: { userId: 1 },                      opts: { unique: true } },
+      { col: COLLECTIONS.WEEKLY_SUMMARIES,    idx: { generatedAt: -1 }                },
+
+      // ── Daily message usage ───────────────────────────────────────────────
+      { col: COLLECTIONS.DAILY_MSG_USAGE,     idx: { date: 1 },                        opts: { unique: true } },
     ];
 
     await Promise.all(

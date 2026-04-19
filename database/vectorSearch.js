@@ -17,11 +17,12 @@ const logger = Logger.get('VectorSearch');
 /**
  * Find similar memories using Atlas $vectorSearch.
  * Returns null (not throws) when the index is missing — callers fall back to
- * keyword search.
+ * keyword search. Applies SCORE_THRESHOLD to drop low-quality results early,
+ * reducing tokens passed to the LLM and improving sub-3s latency.
  *
  * @param {string}   historyId      - History identifier for the filter
  * @param {number[]} queryEmbedding - Dense vector from the embedding model
- * @param {number}   [limit=5]      - Maximum results to return
+ * @param {number}   [limit=4]      - Maximum results to return
  * @returns {Promise<Array|null>}
  */
 export async function findSimilarMemories(
@@ -42,13 +43,20 @@ export async function findSimilarMemories(
         }
       },
       {
+        $addFields: { score: { $meta: 'vectorSearchScore' } }
+      },
+      // Drop low-relevance results before they reach the app layer
+      {
+        $match: { score: { $gte: VECTOR_SEARCH_CONFIG.SCORE_THRESHOLD } }
+      },
+      {
         $project: {
           _id:       0,
           messages:  1,
           timestamp: 1,
           text:      1,
           metadata:  1,
-          score: { $meta: 'vectorSearchScore' }
+          score:     1
         }
       }
     ];
@@ -97,13 +105,19 @@ export async function findSimilarMemoriesWithFilter(
         }
       },
       {
+        $addFields: { score: { $meta: 'vectorSearchScore' } }
+      },
+      {
+        $match: { score: { $gte: VECTOR_SEARCH_CONFIG.SCORE_THRESHOLD } }
+      },
+      {
         $project: {
           _id:       0,
           messages:  1,
           timestamp: 1,
           text:      1,
           metadata:  1,
-          score: { $meta: 'vectorSearchScore' }
+          score:     1
         }
       }
     ];

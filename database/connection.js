@@ -15,11 +15,11 @@ const logger = Logger.get('Database');
 
 /** MongoDB driver connection pool settings. */
 export const CONNECTION_CONFIG = Object.freeze({
-  MAX_POOL_SIZE:                10,
-  MIN_POOL_SIZE:                2,
+  MAX_POOL_SIZE:                3,   // Render free tier: keep low
+  MIN_POOL_SIZE:                1,
   SERVER_SELECTION_TIMEOUT_MS:  5_000,
-  SOCKET_TIMEOUT_MS:            45_000,
-  MAX_IDLE_TIME_MS:             300_000,
+  SOCKET_TIMEOUT_MS:            30_000,
+  MAX_IDLE_TIME_MS:             60_000,  // Aggressively close idle sockets
   RETRY_WRITES:                 true,
   W:                            'majority'
 });
@@ -33,10 +33,11 @@ export const RETRY_CONFIG = Object.freeze({
 
 /** Atlas Vector Search settings. */
 export const VECTOR_SEARCH_CONFIG = Object.freeze({
-  INDEX_NAME:               'vector_index',
-  PATH:                     'embedding',
-  NUM_CANDIDATES_MULTIPLIER: 20,
-  DEFAULT_LIMIT:             5
+  INDEX_NAME:                'vector_index',
+  PATH:                      'embedding',
+  NUM_CANDIDATES_MULTIPLIER: 10,  // Was 20 — halved for sub-3s on Render free tier
+  DEFAULT_LIMIT:             4,   // Was 5 — 4 results plenty, saves one doc parse
+  SCORE_THRESHOLD:           0.72 // Skip results below this similarity score
 });
 
 /** Canonical collection name registry.
@@ -65,7 +66,9 @@ export const COLLECTIONS = Object.freeze({
   REALIVE:              'realive',
   SUMMARY_USAGE:        'summaryUsage',
   QUOTE_USAGE:          'quoteUsage',  // BUG FIX: was missing
-  USER_FACTS:           'userFacts'
+  USER_FACTS:           'userFacts',
+  WEEKLY_SUMMARIES:     'weeklySummaries',
+  DAILY_MSG_USAGE:      'dailyMsgUsage'
 });
 
 // ============================================================================
