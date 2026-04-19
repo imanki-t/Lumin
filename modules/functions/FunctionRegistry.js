@@ -16,7 +16,8 @@ export const FUNCTION_NAMES = Object.freeze({
   SET_REMINDER:  'set_reminder',
   SET_BIRTHDAY:  'set_birthday',
   SET_TIMEZONE:  'set_timezone',
-  CHECK_TIME:    'check_time_elapsed'
+  CHECK_TIME:    'check_time_elapsed',
+  GET_TIMESTAMP: 'get_message_timestamp'
 });
 
 export const MEMORY_ACTIONS = Object.freeze({
@@ -64,7 +65,7 @@ export const functionTools = [
       },
       {
         name:        FUNCTION_NAMES.SEARCH_MEMORY,
-        description: 'Search the database for specific past conversations or facts using a query.',
+        description: 'Search the database for specific past conversations or facts. ONLY call this when: (1) you genuinely lack the knowledge to answer and cannot infer it from current context, (2) user asks explicitly about a past conversation ("do you remember...", "what did I say about..."), or (3) user asks direct personal questions about themselves. Do NOT call for general chat, questions answerable from current context, or casual conversation.',
         parameters: {
           type: PARAMETER_TYPES.OBJECT,
           properties: {
@@ -137,6 +138,20 @@ export const functionTools = [
               description: 'Optional reason for checking the time passage.'
             }
           }
+        }
+      },
+      {
+        name:        FUNCTION_NAMES.GET_TIMESTAMP,
+        description: 'Fetch the exact timestamp (date and time) of a specific message from long-term memory. Use when the user asks when something was said or when a specific event/conversation occurred (e.g. "when did I tell you about X?", "what date did I mention Y?").',
+        parameters: {
+          type: PARAMETER_TYPES.OBJECT,
+          properties: {
+            query: {
+              type:        PARAMETER_TYPES.STRING,
+              description: 'Description of the message or topic to find the timestamp for'
+            }
+          },
+          required: ['query']
         }
       }
     ]

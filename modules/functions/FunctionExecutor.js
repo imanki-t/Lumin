@@ -230,9 +230,47 @@ async function handleCheckTimeElapsed(historyId, userId, guildId) {
   }
 }
 
-// ============================================================================
-// MAIN DISPATCHER
-// ============================================================================
+/**
+ * Handle `get_message_timestamp` — find the exact timestamp of a message matching a query.
+ * Uses vector search to locate the closest memory entry, then returns its stored timestamp.
+ *
+ * @param {string}      userId
+ * @param {string|null} guildId
+ * @param {string|null} historyId
+ * @param {string}      query
+ * @returns {Promise<{ result: string }>}
+ */
+async function handleGetMessageTimestamp(userId, guildId, historyId, query) {
+  try {
+    const targetId = historyId || guildId || userId;
+    const { embeddingService } = await import('../../memory/EmbeddingService.js');
+    const { findSimilarMemories } = await import('../../database/vectorSearch.js');
+
+    const queryEmbedding = await embeddingService.generateEmbedding(query, 'RETRIEVAL_QUERY');
+    if (!queryEmbedding) return { result: 'Could not generate embedding for timestamp search.' };
+
+    const results = await findSimilarMemories(targetId, queryEmbedding, 1);
+    if (!results?.length) return { result: 'No matching message found in memory.' };
+
+    const entry = results[0];
+    if (!entry.timestamp) return { result: 'Message found but timestamp not recorded.' };
+
+    const date = new Date(entry.timestamp);
+    const formatted = date.toLocaleString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long',
+      day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
+    });
+
+    // Extract a snippet of the matched message text
+    const snippet = entry.text ? ` (about: "${entry.text.slice(0, 80)}...")` : '';
+    return { result: `That message was sent on: ${formatted}${snippet}` };
+  } catch (error) {
+    logger.error('Error getting message timestamp', error);
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+
 
 /**
  * Execute all function calls produced by the model in a single turn.
@@ -242,7 +280,7 @@ async function handleCheckTimeElapsed(historyId, userId, guildId) {
  * Returns an array of `{ functionResponse: { name, response } }` objects
  * ready to be included in the next Gemini `contents` turn.
  *
- * @param {object[]}    calls      - array of { name: string, args: object }
+ * @param {object[]}    calls      - array of { name, args } OR { functionCall: { name, args } }
  * @param {string}      userId
  * @param {string|null} guildId
  * @param {string|null} historyId
@@ -250,7 +288,9 @@ async function handleCheckTimeElapsed(historyId, userId, guildId) {
  */
 export async function executeFunctionCalls(calls, userId, guildId, historyId) {
   return Promise.all(
-    calls.map(async (call) => {
+    calls.map(async (raw) => {
+      // Normalise: handle both flat {name,args} and wrapped {functionCall:{name,args}}
+      const call = raw?.functionCall ?? raw;
       const args = call.args || {};
       let response = {};
 
@@ -278,6 +318,10 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId) {
 
           case FUNCTION_NAMES.CHECK_TIME:
             response = await handleCheckTimeElapsed(historyId, userId, guildId);
+            break;
+
+          case FUNCTION_NAMES.GET_TIMESTAMP:
+            response = await handleGetMessageTimestamp(userId, guildId, historyId, args.query);
             break;
 
           default:
