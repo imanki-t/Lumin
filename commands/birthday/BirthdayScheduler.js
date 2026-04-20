@@ -46,7 +46,7 @@ export function scheduleBirthdayChecks(client) {
 async function checkBirthdays(client) {
   if (!state.birthdays) return;
 
-  for (const [key, data] of Object.entries(state.birthdays)) {
+  for (const [key, data] of Object.entries(state.birthdays ?? {})) {
     try {
       const userId  = key.split('_')[0];
       const userNow = getUserTime(userId);
