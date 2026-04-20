@@ -451,7 +451,7 @@ export async function executeSearchInteraction(interaction) {
 
     const showActionButtons = effective.showActionButtons ?? DEFAULT_USER_SETTINGS.showActionButtons;
     const selectedModel     = effective.selectedModel || DEFAULT_MODEL;
-    const modelName         = MODELS[selectedModel];
+    const modelName         = MODELS[selectedModel] || DEFAULT_MODEL;
     const responseFormat    = effective.responseFormat || BOT_CONFIG.DEFAULT_RESPONSE_FORMAT;
     const embedColor        = effective.embedColor     || BOT_CONFIG.HEX_COLOUR;
 

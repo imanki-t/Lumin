@@ -174,7 +174,7 @@ async function checkAndRevive(client) {
 
   const now = Date.now();
 
-  for (const [guildId, guildConfig] of Object.entries(state.realive)) {
+  for (const [guildId, guildConfig] of Object.entries(state.realive ?? {})) {
     if (!guildConfig.enabled || !guildConfig.lastChannelId) continue;
 
     const intervalMs       = guildConfig.intervalHours * 60 * 60 * 1000;
