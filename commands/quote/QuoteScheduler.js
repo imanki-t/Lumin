@@ -16,7 +16,7 @@ import { Logger }                from '../../core/Logger.js';
 
 const logger = Logger.get('QuoteScheduler');
 
-const QUOTE_MODEL    = MODELS['gemini-2.5-flash-lite'];
+const QUOTE_MODEL = MODELS['gemini-2.5-flash'];
 const FALLBACK_MODEL = DEFAULT_MODEL;
 
 const FALLBACK_QUOTE = '"The only way to do great work is to love what you do." — Steve Jobs';
