@@ -11,7 +11,7 @@ import { Logger }                         from '../../core/Logger.js';
 
 const logger = Logger.get('StarterHandler');
 
-const FUN_MODEL           = MODELS['gemini-2.5-flash-lite'];
+const FUN_MODEL = MODELS['gemini-2.5-flash'];
 const FALLBACK_MODEL      = DEFAULT_MODEL;
 const MAX_STARTERS_PER_DAY = 15;
 const ONE_DAY              = 86_400_000;
