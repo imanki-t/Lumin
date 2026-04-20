@@ -36,14 +36,6 @@ const HEX_PATTERN = /^#?([0-9A-Fa-f]{6})$/;
 // USER SELECT MENU HANDLERS
 // ============================================================================
 
-export async function handleUserModelSelect(interaction) {
-  const userId = interaction.user.id;
-  if (!state.userSettings[userId]) state.userSettings[userId] = {};
-  state.userSettings[userId].selectedModel = interaction.values[0];
-  await persistUser(userId);
-  await showUserSettings(interaction, true);
-}
-
 export async function handleUserResponseFormat(interaction) {
   const userId = interaction.user.id;
   if (!state.userSettings[userId]) state.userSettings[userId] = {};

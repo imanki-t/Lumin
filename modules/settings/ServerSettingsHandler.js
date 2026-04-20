@@ -90,14 +90,6 @@ export async function showServerSettings(interaction, isUpdate = false) {
   const showButtons    = ss.showActionButtons ?? DEFAULT_SERVER_SETTINGS.showActionButtons;
   const embedColor     = ss.embedColor        || BOT_CONFIG.HEX_COLOUR;
 
-  const modelSelect = new StringSelectMenuBuilder()
-    .setCustomId('server_model_select').setPlaceholder('Select AI Model')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Gemini 3.1 Flash Lite').setDescription('Latest AI model — Pro-level intelligence at Flash speed')
-        .setValue('gemini-3.1-flash-lite-preview').setEmoji('⚡').setDefault(selectedModel === 'gemini-2.5-flash')
-    );
-
   const responseFormatSelect = new StringSelectMenuBuilder()
     .setCustomId('server_response_format').setPlaceholder('Response Format')
     .addOptions(
@@ -135,7 +127,6 @@ export async function showServerSettings(interaction, isUpdate = false) {
   const payload = {
     embeds: [embed],
     components: [
-      new ActionRowBuilder().addComponents(modelSelect),
       new ActionRowBuilder().addComponents(responseFormatSelect),
       new ActionRowBuilder().addComponents(actionButtonsSelect),
       new ActionRowBuilder().addComponents(backBtn, nextBtn)
@@ -413,15 +404,6 @@ export async function showChannelManagementMenu(interaction, isUpdate = false) {
 // ============================================================================
 // SELECT MENU HANDLERS (called from SettingsRouter)
 // ============================================================================
-
-export async function handleServerModelSelect(interaction) {
-  if (!requireManageGuild(interaction)) return;
-  const guildId = interaction.guild.id;
-  if (!state.serverSettings[guildId]) state.serverSettings[guildId] = {};
-  state.serverSettings[guildId].selectedModel = interaction.values[0];
-  await persistServer(guildId);
-  await showServerSettings(interaction, true);
-}
 
 export async function handleServerResponseFormat(interaction) {
   if (!requireManageGuild(interaction)) return;

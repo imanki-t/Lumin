@@ -160,15 +160,6 @@ export async function showUserSettings(interaction, isUpdate = false) {
   const showActionButtons = userSettings.showActionButtons ?? DEFAULT_USER_SETTINGS.showActionButtons;
   const embedColor        = userSettings.embedColor       || BOT_CONFIG.HEX_COLOUR;
 
-  const modelSelect = new StringSelectMenuBuilder()
-    .setCustomId('user_model_select')
-    .setPlaceholder('Select AI Model')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Gemini 3.1 Flash Lite').setDescription('Latest AI model — Pro-level intelligence at Flash speed')
-        .setValue('gemini-3.1-flash-lite-preview').setEmoji('⚡').setDefault(selectedModel === 'gemini-2.5-flash')
-    );
-
   const responseFormatSelect = new StringSelectMenuBuilder()
     .setCustomId('user_response_format').setPlaceholder('Response Format')
     .addOptions(
@@ -199,7 +190,7 @@ export async function showUserSettings(interaction, isUpdate = false) {
   const embed = new EmbedBuilder()
     .setColor(embedColor)
     .setTitle('👤 User Settings')
-    .setDescription('**Page 1 of 3** • Core Preferences\n\nConfigure your personal AI model and response settings.')
+    .setDescription('**Page 1 of 3** • Core Preferences\n\nConfigure your personal AI response settings.')
     .addFields(
       { name: '🤖 AI Model',        value: `\`${selectedModel}\``,                        inline: true },
       { name: '📋 Response Format', value: `\`${responseFormat}\``,                       inline: true },
@@ -210,7 +201,6 @@ export async function showUserSettings(interaction, isUpdate = false) {
   const payload = {
     embeds: [embed],
     components: [
-      new ActionRowBuilder().addComponents(modelSelect),
       new ActionRowBuilder().addComponents(responseFormatSelect),
       new ActionRowBuilder().addComponents(actionButtonsSelect),
       new ActionRowBuilder().addComponents(backBtn, nextBtn)

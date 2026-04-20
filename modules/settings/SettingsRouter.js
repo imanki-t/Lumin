@@ -38,7 +38,6 @@ import {
   showServerPersonalityModal,
   removeServerPersonality,
   showServerEmbedColorModal,
-  handleServerModelSelect,
   handleServerResponseFormat,
   handleServerActionButtons,
   handleServerContinuousReply,
@@ -47,7 +46,6 @@ import {
 } from './ServerSettingsHandler.js';
 
 import {
-  handleUserModelSelect,
   handleUserResponseFormat,
   handleUserActionButtons,
   handleUserContinuousReply,
@@ -163,8 +161,6 @@ export async function handleButtonInteraction(interaction) {
 
 /** Maps customId → handler for string/channel select menus. */
 const SELECT_HANDLERS = {
-  'user_model_select':     handleUserModelSelect,
-  'server_model_select':   handleServerModelSelect,
   'user_response_format':  handleUserResponseFormat,
   'server_response_format': handleServerResponseFormat,
   'user_action_buttons':   handleUserActionButtons,
