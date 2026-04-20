@@ -1,6 +1,25 @@
 import { HarmBlockThreshold, HarmCategory } from '@google/genai';
 
 // ============================================================================
+// MASTER OVERRIDE — edit this to control the bot globally
+// These settings take precedence over ALL user and server settings.
+// ============================================================================
+
+/**
+ * Set to true to force ALL conversations through Gemma.
+ * Ignores any user/server selectedModel setting.
+ * Set to false to use Gemini (default behaviour).
+ */
+export const FORCE_GEMMA = false;
+
+/**
+ * When FORCE_GEMMA is false, this is the Gemini model every conversation uses.
+ * Must be a key from the MODELS object below.
+ * Change this to instantly switch every user to a different model.
+ */
+export const FORCE_MODEL = 'gemini-3.1-flash-lite';
+
+// ============================================================================
 // MODEL CONFIGURATION
 // ============================================================================
 
@@ -15,11 +34,14 @@ export const DEFAULT_MODEL = 'gemini-3.1-flash-lite-preview';
  */
 export const MODELS = {
   'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',
-  'gemini-3-flash': 'gemini-3-flash-preview',
-  'gemini-2.5-flash': 'gemini-2.5-flash',
-  'gemini-2.5-pro': 'gemini-2.5-pro',
-  'gemini-2.0-flash-lite': 'gemini-2.0-flash-lite'
-};
+  'gemini-3-flash':        'gemini-3-flash-preview',
+  'gemini-2.5-flash':      'gemini-2.5-flash',
+  'gemini-2.5-pro':        'gemini-2.5-pro',
+  'gemini-2.0-flash-lite': 'gemini-2.0-flash-lite',
+  'gemma-4-27b':           'gemma-4-27b-it',
+  'gemma-4-9b':            'gemma-4-9b-it',
+  'gemma-4-26b':           'gemma-4-26b-a4b-it',
+  'gemma-4-31b':           'gemma-4-31b-it'};
 
 /**
  * Gemini 3 model identifiers
@@ -29,6 +51,35 @@ export const GEMINI_3_MODELS = [
   'gemini-3-flash-preview',
   'gemini-3-pro-preview'
 ];
+
+/**
+ * Gemma model identifiers
+ */
+export const GEMMA_MODELS = [
+  'gemma-4-26b-a4b-it',
+  'gemma-4-31b-it'
+];
+
+/**
+ * Max daily requests per API key for Gemma models (RPD limit)
+ */
+export const GEMMA_DAILY_LIMIT_PER_KEY = 1500;
+
+/**
+ * Gemma-supported attachment MIME type prefixes and extensions.
+ * Only images and GIFs — everything else is silently ignored.
+ */
+export const GEMMA_SUPPORTED_MIME_PREFIXES = ['image/'];
+export const GEMMA_SUPPORTED_EXTENSIONS    = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff'];
+
+/**
+ * Check if a model is a Gemma model
+ * @param {string} modelName
+ * @returns {boolean}
+ */
+export function isGemmaModel(modelName) {
+  return GEMMA_MODELS.includes(modelName) || /gemma/i.test(modelName);
+}
 
 /**
  * Model fallback chain for rate limiting
@@ -137,6 +188,20 @@ function isGemini3Model(modelName) {
 }
 
 /**
+ * Get generation config for Gemma models
+ * Thinking is on/off only — no levels
+ * @param {boolean} [thinking=false]
+ * @returns {Object}
+ */
+function getGemmaConfig(thinking = false) {
+  return {
+    temperature: GENERATION_CONFIG_DEFAULTS.TEMPERATURE,
+    topP:        GENERATION_CONFIG_DEFAULTS.TOP_P,
+    ...(thinking ? { thinkingConfig: { thinkingLevel: 'high' } } : {})
+  };
+}
+
+/**
  * Get generation config for Gemini 3 models
  * @returns {Object} Generation configuration
  */
@@ -175,9 +240,8 @@ function getGemini2Config() {
  * @returns {Object} Generation configuration
  */
 export function getGenerationConfig(modelName) {
-  if (isGemini3Model(modelName)) {
-    return getGemini3Config();
-  }
+  if (isGemmaModel(modelName))    return getGemmaConfig();
+  if (isGemini3Model(modelName))  return getGemini3Config();
   return getGemini2Config();
 }
 
@@ -191,13 +255,20 @@ export const generationConfig = getGenerationConfig('gemini-3-flash-preview');
 // ============================================================================
 
 export default {
+  FORCE_GEMMA,
+  FORCE_MODEL,
   DEFAULT_MODEL,
   MODELS,
   GEMINI_3_MODELS,
+  GEMMA_MODELS,
+  GEMMA_DAILY_LIMIT_PER_KEY,
+  GEMMA_SUPPORTED_MIME_PREFIXES,
+  GEMMA_SUPPORTED_EXTENSIONS,
   MODEL_FALLBACK_CHAIN,
   MODEL_CALL_THRESHOLDS,
   RATE_LIMIT_ERRORS,
   safetySettings,
   getGenerationConfig,
-  generationConfig
+  generationConfig,
+  isGemmaModel
 };
