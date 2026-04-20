@@ -6,6 +6,7 @@
 import axios from 'axios';
 import path from 'path';
 import { Logger } from '../../core/Logger.js';
+import { isGemmaModel, GEMMA_SUPPORTED_MIME_PREFIXES, GEMMA_SUPPORTED_EXTENSIONS } from '../../modules/config.js';
 
 const logger = Logger.get('MediaHandler');
 
@@ -228,17 +229,35 @@ export async function processGifLinks(messageContent, message, replaceAllMention
 // ============================================================================
 
 /**
+ * Check if an attachment is supported by Gemma (images/GIFs only).
+ * @param {object} att
+ * @returns {boolean}
+ */
+function isGemmaSupported(att) {
+  const ct  = (att.contentType || '').toLowerCase();
+  const ext = path.extname(att.name || '').toLowerCase();
+  return (
+    GEMMA_SUPPORTED_MIME_PREFIXES.some(p => ct.startsWith(p)) ||
+    GEMMA_SUPPORTED_EXTENSIONS.includes(ext)
+  );
+}
+
+/**
  * Build a Gemini-compatible `parts` array from a text prompt and message attachments.
- * Media files are processed via `attachmentProcessor.js`; text-only parts are inlined.
+ * For Gemma models, silently skips any attachment that isn't an image or GIF.
  *
  * @param {string} prompt
  * @param {import('discord.js').Message} message
  * @param {object[]|null} [attachments]
+ * @param {string} [modelName]
  * @returns {Promise<object[]>}
  */
-export async function processPromptAndMediaAttachments(prompt, message, attachments = null) {
+export async function processPromptAndMediaAttachments(prompt, message, attachments = null, modelName = '') {
+  const gemma = isGemmaModel(modelName);
+
   const all = (attachments || Array.from(message.attachments.values()))
-    .slice(0, ATTACHMENT_LIMITS.MAX_ATTACHMENTS);
+    .slice(0, ATTACHMENT_LIMITS.MAX_ATTACHMENTS)
+    .filter(att => !gemma || isGemmaSupported(att)); // silently drop unsupported for Gemma
 
   const parts = [{ text: prompt }];
 

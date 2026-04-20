@@ -19,7 +19,7 @@ import {
 import { Logger }  from '../../core/Logger.js';
 import { Embeds, addGroundingFields, addUrlContextFields, GOOGLE_AI_ICON } from '../shared/embedBuilder.js';
 import { executeFunctionCalls }         from '../functions/FunctionExecutor.js';
-import { getGenerationConfig, RATE_LIMIT_ERRORS, MODEL_FALLBACK_CHAIN } from '../../modules/config.js';
+import { getGenerationConfig, RATE_LIMIT_ERRORS, MODEL_FALLBACK_CHAIN, isGemmaModel } from '../../modules/config.js';
 import { extractFileText }              from './PromptBuilder.js';
 import { processPromptAndMediaAttachments } from './MediaHandler.js';
 import { saveMessageHistory }           from './HistoryManager.js';
@@ -302,19 +302,22 @@ function isRateLimitError(error) {
 /**
  * Extract all text output from a single stream chunk, including code execution blocks.
  * @param {object} chunk
+ * @param {string} [modelName]
  * @returns {string}
  */
-function extractChunkText(chunk) {
+function extractChunkText(chunk, modelName = '') {
   let text = chunk.text || '';
 
-  if (chunk.executableCode?.code) {
-    const lang = (chunk.executableCode.language || 'python').toLowerCase();
-    text += `\n**Generated Code (${lang}):**\n\`\`\`${lang}\n${chunk.executableCode.code}\n\`\`\`\n`;
-  }
+  if (!isGemmaModel(modelName)) {
+    if (chunk.executableCode?.code) {
+      const lang = (chunk.executableCode.language || 'python').toLowerCase();
+      text += `\n**Generated Code (${lang}):**\n\`\`\`${lang}\n${chunk.executableCode.code}\n\`\`\`\n`;
+    }
 
-  if (chunk.codeExecutionResult?.output) {
-    const outcome = chunk.codeExecutionResult.outcome || 'UNKNOWN';
-    text += `\n**Code Execution (${outcome}):**\n\`\`\`\n${chunk.codeExecutionResult.output}\n\`\`\`\n`;
+    if (chunk.codeExecutionResult?.output) {
+      const outcome = chunk.codeExecutionResult.outcome || 'UNKNOWN';
+      text += `\n**Code Execution (${outcome}):**\n\`\`\`\n${chunk.codeExecutionResult.output}\n\`\`\`\n`;
+    }
   }
 
   return text;
@@ -438,7 +441,7 @@ export async function handleModelResponse(
         onFunctionCall(chunk.functionCalls.map(fc => ({ functionCall: fc })));
       }
 
-      const chunkText = extractChunkText(chunk);
+      const chunkText = extractChunkText(chunk, modelName);
       if (chunkText) {
         finalResponse += chunkText;
         tempResponse  += chunkText;
@@ -460,26 +463,32 @@ export async function handleModelResponse(
         }
       }
 
-      if (chunk.candidates?.[0]?.groundingMetadata)    groundingMetadata   = chunk.candidates[0].groundingMetadata;
-      if (chunk.candidates?.[0]?.url_context_metadata) urlContextMetadata  = chunk.candidates[0].url_context_metadata;
+      if (chunk.candidates?.[0]?.groundingMetadata)                        groundingMetadata   = chunk.candidates[0].groundingMetadata;
+      if (!isGemmaModel(modelName) && chunk.candidates?.[0]?.url_context_metadata) urlContextMetadata  = chunk.candidates[0].url_context_metadata;
     }
 
     return finalResponse;
   };
 
   // ── Tool helpers ───────────────────────────────────────────────────────────
-  // Gemini 3 models support combining built-in tools (googleSearch, urlContext,
+  // Gemini 3 supports combining built-in tools (googleSearch, urlContext,
   // codeExecution) with functionDeclarations in a single request.
-  // Older models (gemini-2.5-flash, etc.) throw 400 if you mix them — strip
-  // built-in tools and leave only the functionDeclarations entries.
-  // For Gemini 3 we also must opt-in via toolConfig.includeServerSideToolInvocations.
+  // Older Gemini models throw 400 if you mix them — strip built-in tools.
+  // Gemma models: googleSearch works, but urlContext/codeExecution do not.
   const isGemini3 = (name) => /gemini-3/i.test(name);
+  const isGemma   = (name) => isGemmaModel(name);
 
-  const resolveTools = (allTools, name) =>
-    isGemini3(name) ? allTools : allTools.filter(t => t.functionDeclarations);
+  const resolveTools = (allTools, name) => {
+    if (isGemma(name)) {
+      // Keep googleSearch + functionDeclarations, drop urlContext + codeExecution
+      return allTools.filter(t => t.googleSearch || t.functionDeclarations);
+    }
+    if (isGemini3(name)) return allTools;
+    return allTools.filter(t => t.functionDeclarations);
+  };
 
   const resolveToolConfig = (name) =>
-    isGemini3(name) ? { includeServerSideToolInvocations: true } : undefined;
+    isGemini3(name) && !isGemma(name) ? { includeServerSideToolInvocations: true } : undefined;
 
   // ── Main retry loop ────────────────────────────────────────────────────────
 
@@ -542,12 +551,13 @@ export async function handleModelResponse(
 
             const functionResponses = await executeFunctionCalls(callDescriptors, userId, guildId, historyId);
 
-            // Pass raw model parts back — preserves id + thought_signature for Gemini 3.
-            // Non-Gemini-3 models (e.g. gemini-2.5-flash) don't support context circulation
-            // and will 400 if thought_signature fields are present, so strip them.
-            const sanitizedFcParts = isGemini3(modelName)
+            // Gemini 3: pass thought_signature + id back exactly as received (required).
+            // Gemma: no thought_signature ever — pass parts as-is.
+            // Other Gemini (e.g. 2.5-flash): strip BOTH thought_signature AND id —
+            //   sending either triggers "context circulation not enabled" 400 error.
+            const sanitizedFcParts = (isGemini3(modelName) && !isGemma(modelName))
               ? functionCallParts
-              : functionCallParts.map(({ thought_signature, thoughtSignature, ...rest }) => rest);
+              : functionCallParts.map(({ thought_signature, thoughtSignature, id, ...rest }) => rest);
 
             const turnContents = [
               ...(history || []).filter(Boolean),
@@ -665,7 +675,7 @@ export async function handleModelResponse(
               Promise.resolve(cleanHistoryFiles(history)),
               (async () => {
                 const { finalPrompt, summaryParts } = await extractFileText(originalMessage, originalPrompt);
-                const updated = await processPromptAndMediaAttachments(finalPrompt, originalMessage, allAttachments);
+                const updated = await processPromptAndMediaAttachments(finalPrompt, originalMessage, allAttachments, modelName);
                 if (summaryParts?.length) updated.push(...summaryParts);
                 return updated;
               })()

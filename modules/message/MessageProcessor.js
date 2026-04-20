@@ -20,7 +20,7 @@ import { getWeeklySummary } from '../../commands/summary/WeeklySummaryJob.js';
 import { memorySystem }  from '../../memory/MemorySystem.js';
 import { Logger }         from '../../core/Logger.js';
 import { Embeds }         from '../shared/embedBuilder.js';
-import { MODELS, safetySettings, DEFAULT_MODEL } from '../../modules/config.js';
+import { MODELS, safetySettings, DEFAULT_MODEL, GEMMA_MODELS, FORCE_GEMMA, FORCE_MODEL } from '../../modules/config.js';
 import { typingManager, handleModelResponse } from './ResponseHandler.js';
 import { prepareMessageContent, extractFileText } from './PromptBuilder.js';
 import { processPromptAndMediaAttachments, isSupportedAttachment } from './MediaHandler.js';
@@ -81,8 +81,20 @@ function resolveMessageContext(userId, guildId, channelId) {
   const isChannelHistory = guildId ? !!state.channelWideChatHistory[channelId] : false;
   const historyId = isServerHistory ? guildId : (isChannelHistory ? channelId : userId);
 
-  const selectedModel = effectiveSettings.selectedModel || DEFAULT_MODEL;
-  const modelName     = MODELS[selectedModel];
+  // FORCE_GEMMA / FORCE_MODEL in config.js overrides all user & server settings.
+  // When set, every conversation uses that model regardless of what was previously configured.
+  let modelName;
+  if (FORCE_GEMMA) {
+    modelName = GEMMA_MODELS[0]; // gemma-4-26b-a4b-it
+  } else if (FORCE_MODEL) {
+    modelName = MODELS[FORCE_MODEL] || DEFAULT_MODEL;
+  } else {
+    const gemmaEnabled  = effectiveSettings.gemmaEnabled ?? false;
+    const selectedModel = gemmaEnabled
+      ? GEMMA_MODELS[0]
+      : (effectiveSettings.selectedModel || DEFAULT_MODEL);
+    modelName = gemmaEnabled ? GEMMA_MODELS[0] : (MODELS[selectedModel] || DEFAULT_MODEL);
+  }
 
   return { userSettings, serverSettings, effectiveSettings, historyId, modelName };
 }
@@ -268,19 +280,19 @@ export async function handleTextMessage(message) {
       return;
     }
 
+    // ── Resolve context ────────────────────────────────────────────────
+    const { effectiveSettings, serverSettings, historyId, modelName } =
+      resolveMessageContext(userId, guildId, channelId);
+
     // ── Build Gemini parts array ───────────────────────────────────────
     const [fileExtractResult, initialParts] = await Promise.all([
       extractFileText(message, prepared.messageContent),
-      processPromptAndMediaAttachments(prepared.messageContent, message, allAttachments)
+      processPromptAndMediaAttachments(prepared.messageContent, message, allAttachments, modelName)
     ]);
 
     const { finalPrompt, summaryParts } = fileExtractResult;
     let parts = initialParts;
     if (summaryParts?.length) parts.push(...summaryParts);
-
-    // ── Resolve context ────────────────────────────────────────────────
-    const { effectiveSettings, serverSettings, historyId, modelName } =
-      resolveMessageContext(userId, guildId, channelId);
 
     const systemInstruction = await buildSystemInstruction(
       message, effectiveSettings, serverSettings, channelId, guildId
@@ -366,11 +378,11 @@ export async function handleBatchedMessages(queuedMessages) {
       return;
     }
 
-    let parts = await processPromptAndMediaAttachments(combinedPrompt, firstMessage, allAttachments);
-    if (allSummaryParts.length) parts.push(...allSummaryParts);
-
     const { effectiveSettings, serverSettings, historyId, modelName } =
       resolveMessageContext(userId, guildId, channelId);
+
+    let parts = await processPromptAndMediaAttachments(combinedPrompt, firstMessage, allAttachments, modelName);
+    if (allSummaryParts.length) parts.push(...allSummaryParts);
 
     const batchSuffix = `\n\nIMPORTANT: The user has sent ${preparedMessages.length} messages in quick succession. Each is labeled with its queue position and timestamp. Respond to ALL messages together in a natural, cohesive way.`;
 
