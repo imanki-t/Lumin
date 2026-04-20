@@ -123,6 +123,41 @@ export const client = new Client({
  *
  * @type {Proxy}
  */
+
+/**
+ * Strip Gemini-3-only config fields when the model rotates to a non-Gemini-3 model.
+ * Called inside the proxy callback every time ApiKeyManager picks a model.
+ * Without this, toolConfig.includeServerSideToolInvocations and built-in tools
+ * (urlContext, codeExecution) stay in the request after a fallback, causing
+ * 400 INVALID_ARGUMENT on gemini-2.5-flash — retried 90× burning all quota.
+ *
+ * @param {object} request - Mutated in place.
+ * @param {string} modelName - The model ApiKeyManager is about to call.
+ */
+function sanitizeRequestForModel(request, modelName) {
+  const isGemini3 = /gemini-3/i.test(modelName);
+  const isGemma   = /gemma/i.test(modelName);
+
+  if (!request.config) return;
+
+  // Remove Gemini-3-only toolConfig flag for all other models
+  if (!isGemini3 || isGemma) {
+    delete request.config.toolConfig;
+  }
+
+  // Strip built-in server-side tools for non-Gemini-3
+  // Gemma keeps googleSearch, strips urlContext + codeExecution
+  if (request.config.tools?.length) {
+    if (isGemma) {
+      request.config.tools = request.config.tools.filter(
+        t => t.googleSearch || t.functionDeclarations
+      );
+    } else if (!isGemini3) {
+      request.config.tools = request.config.tools.filter(t => t.functionDeclarations);
+    }
+  }
+}
+
 export const genAI = new Proxy({}, {
   get(_target, prop) {
     // ── models ───────────────────────────────────────────────────────────────
@@ -132,6 +167,7 @@ export const genAI = new Proxy({}, {
           withRetryPerModel(
             (modelName) => {
               request.model = modelName;
+              sanitizeRequestForModel(request, modelName);
               return getCurrentClient().models.generateContent(request);
             },
             request.model
@@ -141,6 +177,7 @@ export const genAI = new Proxy({}, {
           withRetryPerModel(
             (modelName) => {
               request.model = modelName;
+              sanitizeRequestForModel(request, modelName);
               return getCurrentClient().models.generateContentStream(request);
             },
             request.model

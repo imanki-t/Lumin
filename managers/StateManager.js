@@ -57,7 +57,8 @@ export const DEFAULT_SERVER_SETTINGS = Object.freeze({
   embedColor:           '#5B7C99',
   overrideUserSettings: true,
   serverChatHistory:    false,
-  allowedChannels:      []
+  allowedChannels:      [],
+  gemmaEnabled:         false
 });
 
 /** Default settings applied to new users. @readonly */
@@ -67,7 +68,8 @@ export const DEFAULT_USER_SETTINGS = Object.freeze({
   showActionButtons: false,
   continuousReply:   true,
   customPersonality: null,
-  embedColor:        '#5B7C99'
+  embedColor:        '#5B7C99',
+  gemmaEnabled:      false
 });
 
 /** Poll feature configuration. @readonly */
@@ -722,6 +724,9 @@ export function scheduleDailyReset() {
         resetImageUsage();
         resetSummaryUsage();
         resetDailyMessageUsage();
+
+        const { resetGemmaKeyDailyCounts } = await import('./ApiKeyManager.js');
+        resetGemmaKeyDailyCounts();
 
         await saveStateToFile();
         logger.info('Daily reset completed');

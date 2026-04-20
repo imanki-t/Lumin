@@ -13,7 +13,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import { MODEL_FALLBACK_CHAIN, MODEL_CALL_THRESHOLDS, DEFAULT_MODEL } from '../modules/config.js';
+import { MODEL_FALLBACK_CHAIN, MODEL_CALL_THRESHOLDS, DEFAULT_MODEL, isGemmaModel, GEMMA_DAILY_LIMIT_PER_KEY } from '../modules/config.js';
 import { Logger } from '../core/Logger.js';
 
 const logger = Logger.get('ApiKeyManager');
@@ -185,6 +185,39 @@ apiKeys.forEach((_, i) => {
   keyModelRateLimits.set(i, new Map());
   keyModelCooldowns.set(i, new Map());
 });
+
+/**
+ * Per-key daily call counts for Gemma models.
+ * Resets at UTC midnight via resetGemmaKeyDailyCounts().
+ * @type {Map<number, number>}
+ */
+const gemmaKeyDailyCounts = new Map();
+apiKeys.forEach((_, i) => gemmaKeyDailyCounts.set(i, 0));
+
+/**
+ * Reset all per-key Gemma daily counters. Called by StateManager's daily reset.
+ */
+export function resetGemmaKeyDailyCounts() {
+  apiKeys.forEach((_, i) => gemmaKeyDailyCounts.set(i, 0));
+  logger.info('Gemma daily key counters reset');
+}
+
+/**
+ * Check if a key has hit the Gemma daily limit.
+ * @param {number} keyIdx
+ * @returns {boolean}
+ */
+function isGemmaKeyExhausted(keyIdx) {
+  return (gemmaKeyDailyCounts.get(keyIdx) || 0) >= GEMMA_DAILY_LIMIT_PER_KEY;
+}
+
+/**
+ * Increment the daily counter for a Gemma request on the given key.
+ * @param {number} keyIdx
+ */
+function incrementGemmaDailyCount(keyIdx) {
+  gemmaKeyDailyCounts.set(keyIdx, (gemmaKeyDailyCounts.get(keyIdx) || 0) + 1);
+}
 
 // ============================================================================
 // RATE-LIMIT HELPERS
@@ -470,6 +503,19 @@ export async function withRetryPerModel(apiCall, initialModelName) {
     }
 
     try {
+      // ── GEMMA DAILY LIMIT PRE-CHECK ────────────────────────────────────────
+      if (isGemmaModel(currentModel) && isGemmaKeyExhausted(currentKeyIdx)) {
+        logger.warn(`Gemma Key ${currentKeyIdx + 1} daily limit reached before request`);
+        const nextKey = apiKeys.findIndex((_, i) => i !== currentKeyIdx && !isGemmaKeyExhausted(i));
+        if (nextKey !== -1) {
+          currentKeyIdx = nextKey;
+          currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
+          logger.info(`Gemma pre-rotated to Key ${currentKeyIdx + 1}`);
+          continue;
+        }
+        throw new Error('All Gemma API keys have reached their daily limit (1500 req/key). Resets at midnight UTC.');
+      }
+
       // ── PROACTIVE RATE-LIMIT CHECK ─────────────────────────────────────────
       if (isModelRateLimited(currentKeyIdx, currentModel)) {
         logger.warn(`Key ${currentKeyIdx + 1} / Model ${currentModel} hit RPM limit`);
@@ -496,6 +542,23 @@ export async function withRetryPerModel(apiCall, initialModelName) {
       const result = await apiCall(currentModel);
 
       if (stats) stats.successfulRequests++;
+
+      // Gemma: track daily usage per key, rotate key if limit hit (no model fallback).
+      if (isGemmaModel(currentModel)) {
+        incrementGemmaDailyCount(currentKeyIdx);
+        if (isGemmaKeyExhausted(currentKeyIdx)) {
+          logger.warn(`Gemma Key ${currentKeyIdx + 1} hit daily limit (${GEMMA_DAILY_LIMIT_PER_KEY}) — rotating key`);
+          const nextKey = apiKeys.findIndex((_, i) => i !== currentKeyIdx && !isGemmaKeyExhausted(i));
+          if (nextKey !== -1) {
+            currentKeyIdx = nextKey;
+            currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
+            logger.info(`Gemma rotated to Key ${currentKeyIdx + 1}`);
+          } else {
+            logger.warn('All Gemma keys exhausted for today');
+          }
+        }
+        return result;
+      }
 
       // Proactive model switch after call-count threshold.
       const newCount = (modelGlobalCallCounts.get(currentModel) || 0) + 1;
@@ -575,6 +638,17 @@ export async function withRetryPerModel(apiCall, initialModelName) {
         error?.message?.includes('502');
 
       if (!isApiError) throw error; // local crash — retrying would just mask bugs
+
+      // 400 INVALID_ARGUMENT errors are permanent — retrying wastes all quota.
+      // Common cause: thought_signature / id fields sent to a model that doesn't support them.
+      const isInvalidArgument =
+        error?.status === 400 ||
+        error?.code === 400 ||
+        error?.message?.includes('400') ||
+        error?.message?.includes('INVALID_ARGUMENT') ||
+        error?.message?.includes('context circulation');
+
+      if (isInvalidArgument) throw error;
 
       if (totalAttempts >= maxTotal) {
         throw new Error(
