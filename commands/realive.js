@@ -9,8 +9,7 @@ import { EmbedBuilder, PermissionsBitField, MessageFlags } from 'discord.js';
 import { state, saveStateToFile, genAI } from '../managers/BotManager.js';
 import * as db                            from '../database/index.js';
 import { memorySystem }                   from '../memory/MemorySystem.js';
-import { MODELS, DEFAULT_MODEL } from '../modules/config.js';  // ← renamed to avoid collision with local guildConfig
-import { MODELS }                         from '../modules/config.js';
+import { MODELS, DEFAULT_MODEL } from '../modules/config.js';  // ← renamed to avoid collision with local 
 import { Logger }                         from '../core/Logger.js';
 
 const logger = Logger.get('Realive');
