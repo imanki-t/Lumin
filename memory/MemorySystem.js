@@ -420,9 +420,16 @@ class MemorySystem {
       const formattedContext = this.buildContextMessage(contextSections);
       const formattedRecent  = this.formatHistoryForAPI(recentMessages);
 
-      return formattedContext
-        ? [formattedContext, ...formattedRecent]
-        : formattedRecent;
+      if (!formattedContext) return formattedRecent;
+
+      // If formattedRecent starts with 'user', prepend a model ack so the
+      // context user-block and the first real user turn don't collide.
+      const needsBridge = formattedRecent.length > 0 && formattedRecent[0].role === 'user';
+      const bridge = needsBridge
+        ? [{ role: 'model', parts: [{ text: '[Context noted]' }] }]
+        : [];
+
+      return [formattedContext, ...bridge, ...formattedRecent];
 
     } catch (error) {
       logger.error('History optimization failed', error);
@@ -528,7 +535,39 @@ class MemorySystem {
       if (apiEntry.parts.length > 0) formatted.push(apiEntry);
     }
 
-    return formatted;
+    return this.sanitizeHistory(formatted);
+  }
+
+  /**
+   * Enforce strict user→model alternation required by the Gemini API.
+   * Merges consecutive same-role entries, drops leading model turns,
+   * and drops a trailing user turn (prevents double-user collision with
+   * the live message that follows).
+   *
+   * @param {object[]} entries
+   * @returns {object[]}
+   */
+  sanitizeHistory(entries) {
+    if (!entries?.length) return [];
+
+    // Merge consecutive same-role entries
+    const merged = [];
+    for (const entry of entries) {
+      const last = merged[merged.length - 1];
+      if (last && last.role === entry.role) {
+        last.parts.push(...entry.parts);
+      } else {
+        merged.push({ role: entry.role, parts: [...entry.parts] });
+      }
+    }
+
+    // History must start with 'user'
+    while (merged.length > 0 && merged[0].role !== 'user') merged.shift();
+
+    // Drop unpaired trailing 'user' — live message supplies the next user turn
+    if (merged.length > 0 && merged[merged.length - 1].role === 'user') merged.pop();
+
+    return merged;
   }
 
   // ==========================================================================
