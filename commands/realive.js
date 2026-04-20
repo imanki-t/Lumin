@@ -15,7 +15,7 @@ import { Logger }                         from '../core/Logger.js';
 
 const logger = Logger.get('Realive');
 
-const REVIVAL_MODEL     = MODELS['gemini-2.5-flash-lite'];
+const REVIVAL_MODEL = DEFAULT_MODEL;
 const CHECK_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
 
 // ============================================================================
