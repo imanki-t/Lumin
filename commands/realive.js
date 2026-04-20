@@ -9,7 +9,7 @@ import { EmbedBuilder, PermissionsBitField, MessageFlags } from 'discord.js';
 import { state, saveStateToFile, genAI } from '../managers/BotManager.js';
 import * as db                            from '../database/index.js';
 import { memorySystem }                   from '../memory/MemorySystem.js';
-import botConfig                          from '../config.js';         // ← renamed to avoid collision with local guildConfig
+import { MODELS, DEFAULT_MODEL } from '../modules/config.js';  // ← renamed to avoid collision with local guildConfig
 import { MODELS }                         from '../modules/config.js';
 import { Logger }                         from '../core/Logger.js';
 
