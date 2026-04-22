@@ -20,7 +20,12 @@ import { getWeeklySummary } from '../../commands/summary/WeeklySummaryJob.js';
 import { memorySystem }  from '../../memory/MemorySystem.js';
 import { Logger }         from '../../core/Logger.js';
 import { Embeds }         from '../shared/embedBuilder.js';
-import { MODELS, safetySettings, DEFAULT_MODEL, GEMMA_MODELS, FORCE_GEMMA, FORCE_MODEL } from '../../modules/config.js';
+import {
+  MODELS, safetySettings, DEFAULT_MODEL, GEMMA_MODELS,
+  ENABLE_GEMMA, GEMMA_DEFAULT_MODEL,
+  PDF_ENABLED_FOR_GEMINI, RAM_MEDIA_SUSPEND_THRESHOLD_MB,
+  isGemmaModel
+} from '../../modules/config.js';
 import { typingManager, handleModelResponse } from './ResponseHandler.js';
 import { prepareMessageContent, extractFileText } from './PromptBuilder.js';
 import { processPromptAndMediaAttachments, isSupportedAttachment } from './MediaHandler.js';
@@ -66,6 +71,39 @@ const ALL_TOOLS = Object.freeze([
 // ============================================================================
 
 /**
+ * Filter attachments based on model capabilities and current RAM pressure.
+ *
+ * Rules:
+ *  - PDFs are stripped for Gemini when PDF_ENABLED_FOR_GEMINI = false
+ *  - All media (images/video/audio) is stripped when RAM is above the
+ *    safety threshold (isMediaSuspended()) to give the process room to breathe
+ *
+ * @param {object[]} attachments
+ * @param {string}   modelName
+ * @returns {object[]}
+ */
+function filterAttachments(attachments, modelName) {
+  if (!attachments?.length) return attachments;
+
+  // RAM safety guard — suspend all media processing when under pressure
+  const ramMB = process.memoryUsage().rss / 1024 / 1024;
+  if (RAM_MEDIA_SUSPEND_THRESHOLD_MB > 0 && ramMB > RAM_MEDIA_SUSPEND_THRESHOLD_MB) {
+    logger.warn(`RAM pressure: ${Math.round(ramMB)}MB > ${RAM_MEDIA_SUSPEND_THRESHOLD_MB}MB — suspending media for this message`);
+    return []; // drop all attachments to protect stability
+  }
+
+  // PDF filter — strip PDFs for Gemini models unless explicitly enabled
+  if (!PDF_ENABLED_FOR_GEMINI && !isGemmaModel(modelName)) {
+    return attachments.filter(att => {
+      const name = (att.name || att.filename || '').toLowerCase();
+      return !name.endsWith('.pdf') && att.contentType !== 'application/pdf';
+    });
+  }
+
+  return attachments;
+}
+
+/**
  * Resolve effective settings, history ID, and model name for a message.
  * @param {string}  userId
  * @param {string|null} guildId
@@ -81,19 +119,18 @@ function resolveMessageContext(userId, guildId, channelId) {
   const isChannelHistory = guildId ? !!state.channelWideChatHistory[channelId] : false;
   const historyId = isServerHistory ? guildId : (isChannelHistory ? channelId : userId);
 
-  // FORCE_GEMMA / FORCE_MODEL in config.js overrides all user & server settings.
-  // When set, every conversation uses that model regardless of what was previously configured.
+  // ENABLE_GEMMA in config.js is a server-side master override.
+  // When true, all chat conversations use GEMMA_DEFAULT_MODEL.
+  // NOTE: Gemma is NOT applied to slash commands that need incompatible tools
+  // (e.g. /search, /summary) — those contexts override modelName themselves.
   let modelName;
-  if (FORCE_GEMMA) {
-    modelName = GEMMA_MODELS[0]; // gemma-4-26b-a4b-it
-  } else if (FORCE_MODEL) {
-    modelName = MODELS[FORCE_MODEL] || DEFAULT_MODEL;
+  if (ENABLE_GEMMA) {
+    modelName = MODELS[GEMMA_DEFAULT_MODEL] || GEMMA_MODELS[0];
   } else {
     const gemmaEnabled  = effectiveSettings.gemmaEnabled ?? false;
-    const selectedModel = gemmaEnabled
-      ? GEMMA_MODELS[0]
-      : (effectiveSettings.selectedModel || DEFAULT_MODEL);
-    modelName = gemmaEnabled ? GEMMA_MODELS[0] : (MODELS[selectedModel] || DEFAULT_MODEL);
+    modelName = gemmaEnabled
+      ? (MODELS[GEMMA_DEFAULT_MODEL] || GEMMA_MODELS[0])
+      : (MODELS[effectiveSettings.selectedModel] || DEFAULT_MODEL);
   }
 
   return { userSettings, serverSettings, effectiveSettings, historyId, modelName };
@@ -284,10 +321,13 @@ export async function handleTextMessage(message) {
     const { effectiveSettings, serverSettings, historyId, modelName } =
       resolveMessageContext(userId, guildId, channelId);
 
+    // ── Filter attachments based on model capabilities + RAM safety ───
+    const filteredAttachments = filterAttachments(allAttachments, modelName);
+
     // ── Build Gemini parts array ───────────────────────────────────────
     const [fileExtractResult, initialParts] = await Promise.all([
       extractFileText(message, prepared.messageContent),
-      processPromptAndMediaAttachments(prepared.messageContent, message, allAttachments, modelName)
+      processPromptAndMediaAttachments(prepared.messageContent, message, filteredAttachments, modelName)
     ]);
 
     const { finalPrompt, summaryParts } = fileExtractResult;
@@ -381,7 +421,8 @@ export async function handleBatchedMessages(queuedMessages) {
     const { effectiveSettings, serverSettings, historyId, modelName } =
       resolveMessageContext(userId, guildId, channelId);
 
-    let parts = await processPromptAndMediaAttachments(combinedPrompt, firstMessage, allAttachments, modelName);
+    const filteredAttachments = filterAttachments(allAttachments, modelName);
+    let parts = await processPromptAndMediaAttachments(combinedPrompt, firstMessage, filteredAttachments, modelName);
     if (allSummaryParts.length) parts.push(...allSummaryParts);
 
     const batchSuffix = `\n\nIMPORTANT: The user has sent ${preparedMessages.length} messages in quick succession. Each is labeled with its queue position and timestamp. Respond to ALL messages together in a natural, cohesive way.`;
