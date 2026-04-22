@@ -16,16 +16,16 @@ const logger = Logger.get('ClusterEngine');
 // CONSTANTS
 // ============================================================================
 
-const MAX_CLUSTERS                = 50;  // 1 cluster per 50 memories, up to 50 max
-const NUM_CLUSTERS                = 8;   // baseline — minimum until enough memories exist
-const MIN_MEMORIES_FOR_CLUSTERING = 240;
-const TOP_CLUSTERS_TO_SEARCH      = 3;
+const MAX_CLUSTERS                = 20;  // was 50 — fewer centroids, less RAM per cluster set
+const NUM_CLUSTERS                = 5;   // was 8  — baseline minimum
+const MIN_MEMORIES_FOR_CLUSTERING = 150; // was 240 — cluster sooner, search better earlier
+const TOP_CLUSTERS_TO_SEARCH      = 2;   // was 3
 const MIN_CLUSTER_SIMILARITY      = 0.45;
-const RECLUSTERING_INTERVAL       = 100; // new memories before background rebuild (was 20 — too aggressive)
-const MAX_KMEANS_ITERATIONS       = 15;
+const RECLUSTERING_INTERVAL       = 150; // was 100 — rebuild less frequently
+const MAX_KMEANS_ITERATIONS       = 10;  // was 15 — faster convergence check
 const KMEANS_CONVERGENCE_THRESHOLD = 0.001;
-const CLUSTER_CACHE_TTL_MS       = 10 * 60 * 1000;
-const MAX_MEMORIES_PER_CLUSTER   = 10;
+const CLUSTER_CACHE_TTL_MS       = 15 * 60 * 1000; // was 10 min — keep longer, rebuild less
+const MAX_MEMORIES_PER_CLUSTER   = 8;   // was 10
 const MAX_RAG_RESULTS            = 3;
 const MIN_SIMILARITY_THRESHOLD   = 0.65;
 
@@ -50,9 +50,13 @@ const EMBEDDINGS_CACHE_TTL_MS    = 2 * 60 * 1000;  // 2 minutes
  *     retrieval path. 50 entries is more than enough to surface top-3 results.
  */
 const EMBEDDING_LIMITS = Object.freeze({
-  CLUSTER_SAMPLE:       2_000,
-  CLUSTER_TIME_BUCKETS: 20,    // 20 strata × 100 entries each = 2 000 total
-  FALLBACK_SEARCH:      50,
+  // ⚠️ RAM BUDGET: each embedding ≈ 12 KB (1536 floats × 8 bytes)
+  // CLUSTER_SAMPLE × 12 KB × embeddingsCache.max = total RAM for embeddings
+  // 300 × 12 KB × 15 users ≈ 54 MB — safe for 512 MB deployments
+  // Old values (2000 × 200 users) caused ~4.9 GB OOM crashes — do not raise.
+  CLUSTER_SAMPLE:       300,   // was 2_000
+  CLUSTER_TIME_BUCKETS: 6,     // was 20 (proportional: 6 strata × 50 entries = 300)
+  FALLBACK_SEARCH:      30,    // was 50
 });
 
 // ============================================================================
@@ -61,14 +65,17 @@ const EMBEDDING_LIMITS = Object.freeze({
 
 class ClusterEngine {
   constructor() {
-    /** @type {LRUCache<string, object>} historyId → { centroids, clusters, lastUpdate, memoryCount, iterations } */
-    this.clusterCache         = new LRUCache({ max: 200 });
+    /** @type {LRUCache<string, object>} historyId → { centroids, clusters, lastUpdate, memoryCount, iterations }
+     *  max: 50 — centroids are small (~50 × 256-dim truncated = ~100 KB/user), 50 users ≈ 5 MB */
+    this.clusterCache         = new LRUCache({ max: 50 });
     /** @type {Map<string, number>} historyId → memoryCount at last clustering */
     this.lastClusterUpdate    = new Map();
     /** @type {Map<string, boolean>} historyId → background rebuild in progress */
     this.clusteringInProgress = new Map();
-    /** @type {LRUCache<string, { entries: Array, fetchedAt: number }>} historyId → lean embedding docs */
-    this.embeddingsCache      = new LRUCache({ max: 200 });
+    /** @type {LRUCache<string, { entries: Array, fetchedAt: number }>} historyId → lean embedding docs
+     *  max: 15 — each entry ≈ 3.7 MB (300 embeddings × 12 KB). 15 users ≈ 55 MB total.
+     *  ⚠️ DO NOT raise this without understanding the RAM budget. Old value of 200 caused OOM. */
+    this.embeddingsCache      = new LRUCache({ max: 15 });
   }
 
   // ==========================================================================

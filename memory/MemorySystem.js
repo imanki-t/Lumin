@@ -18,6 +18,7 @@ import { memoryCache }      from './MemoryCache.js';
 import { clusterEngine }    from './ClusterEngine.js';
 import { memoryStore }      from './MemoryStore.js';
 import { redisCache }       from './RedisCache.js';
+import { CACHE_ENABLED }    from '../modules/config.js';
 
 const logger = Logger.get('MemorySystem');
 
@@ -88,7 +89,11 @@ class MemorySystem {
    * @returns {Promise<void>}
    */
   async init() {
-    await redisCache.connect();
+    // Redis cache is optional — controlled by CACHE_ENABLED in modules/config.js.
+    // When disabled, the in-memory L1/L2 cache (MemoryCache) still works fine.
+    if (CACHE_ENABLED) {
+      await redisCache.connect();
+    }
   }
 
   /**
@@ -167,7 +172,18 @@ class MemorySystem {
     try {
       const historyId = guildId || userId;
 
-      // L1: exact in-memory hit
+      // When cache is disabled, go straight to Atlas $vectorSearch
+      if (!CACHE_ENABLED) {
+        const queryEmbedding = await embeddingService.generateEmbedding(query, 'RETRIEVAL_QUERY');
+        if (!queryEmbedding) return [];
+        const results = await db.findSimilarMemories(historyId, queryEmbedding, MAX_RAG_RESULTS * 2);
+        return (results || [])
+          .filter(e => e.score >= MIN_SIMILARITY_THRESHOLD)
+          .slice(0, MAX_RAG_RESULTS)
+          .map(entry => `[Memory] ${extractTextFromMessage({ content: entry.messages[0]?.content })}`);
+      }
+
+      // Cache enabled: check L1/L2 first
       const exact = memoryCache.getCachedQueryResults(historyId, query, userId, guildId);
       if (exact) {
         return exact.map(entry =>
@@ -178,7 +194,6 @@ class MemorySystem {
       const queryEmbedding = await embeddingService.generateEmbedding(query, 'RETRIEVAL_QUERY');
       if (!queryEmbedding) return [];
 
-      // L2: semantic in-memory hit
       const semantic = memoryCache.getSemanticallyCachedResults(historyId, queryEmbedding, userId, guildId);
       if (semantic) {
         return semantic.map(entry =>
@@ -206,10 +221,21 @@ class MemorySystem {
 
   /**
    * Retrieve relevant historical context for the current query via RAG.
-   * Runs three parallel search tracks when applicable:
-   *   1. Main historyId cluster search
-   *   2. Cross-RAG: server memories filtered by user (if DM in server)
-   *   3. Cross-RAG: user DM memories (if server query)
+   *
+   * TWO CODE PATHS — controlled by CACHE_ENABLED in modules/config.js:
+   *
+   *   CACHE_ENABLED = false  →  _directVectorSearch()
+   *     Skips ALL cache layers (L1/L2/L3) and the ClusterEngine entirely.
+   *     Every call goes directly to MongoDB Atlas $vectorSearch.
+   *     Zero local RAM used for embeddings — Atlas does all computation.
+   *     Best for: budget deployments, 512 MB RAM, 10k users.
+   *
+   *   CACHE_ENABLED = true  →  full L1 → L2 → L3 → ClusterEngine pipeline
+   *     L1: exact in-memory hit     (<0.1 ms, free)
+   *     L2: semantic in-memory hit  (<1 ms, free)
+   *     L3: Redis hit               (~1-2 ms, survives restarts)
+   *     L4: ClusterEngine + Atlas   (full RAG, ~50-200 ms)
+   *     Best for: dedicated servers with ≥2 GB RAM.
    *
    * @param {string}      historyId
    * @param {string}      currentQuery
@@ -222,14 +248,20 @@ class MemorySystem {
     try {
       if (!currentQuery?.trim()) return { messages: [], personalData: null };
 
-      // ── L1: Exact in-memory hit (free, <0.1ms) ──────────────────────────────
+      // ── CACHE DISABLED: direct Atlas $vectorSearch, zero local RAM ───────────
+      if (!CACHE_ENABLED) {
+        return await this._directVectorSearch(
+          historyId, currentQuery, recentMessageTimestamps, userId, guildId
+        );
+      }
+
+      // ── L1: Exact in-memory hit (free, <0.1ms) ───────────────────────────────
       const exactCached = memoryCache.getCachedQueryResults(historyId, currentQuery, userId, guildId);
       if (exactCached) {
         const personalData = userId ? await memoryStore.getUserPersonalData(userId) : null;
         return { messages: exactCached, personalData };
       }
 
-      // Fetch embedding + personal data in parallel — needed for semantic check + search
       const [queryEmbedding, personalData] = await Promise.all([
         embeddingService.generateEmbedding(currentQuery, 'RETRIEVAL_QUERY'),
         userId ? memoryStore.getUserPersonalData(userId) : Promise.resolve(null)
@@ -238,62 +270,40 @@ class MemorySystem {
       if (!queryEmbedding) return { messages: [], personalData };
 
       // ── L2: Semantic in-memory hit (free, <1ms) ──────────────────────────────
-      // Catches rephrased duplicates ("what did I say about X" vs "tell me about X")
-      // without any DB or API round trip.
       const semanticCached = memoryCache.getSemanticallyCachedResults(historyId, queryEmbedding, userId, guildId);
-      if (semanticCached) {
-        return { messages: semanticCached, personalData };
-      }
+      if (semanticCached) return { messages: semanticCached, personalData };
 
-      // ── L3: Redis hit (~1-2ms, survives restarts) ────────────────────────────
-      // Only reached on cache miss — saves full RAG pipeline after bot restarts.
+      // ── L3: Redis hit (~1-2ms, survives restarts) ─────────────────────────────
       const queryHash   = memoryCache.generateQueryHash(historyId, currentQuery, userId, guildId);
       const redisCached = await redisCache.get(historyId, queryHash);
       if (redisCached) {
-        // Warm L1 so the next identical query is free
         memoryCache.cacheQueryResults(historyId, currentQuery, redisCached, userId, guildId, queryEmbedding);
         return { messages: redisCached, personalData };
       }
 
+      // ── L4: ClusterEngine + Atlas full RAG ───────────────────────────────────
       const cutoffTimestamp = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
 
-      // Build parallel search promise array
       const searchPromises = [
-        // Track 1: Main history search (always)
         clusterEngine.clusterSearch(historyId, queryEmbedding, cutoffTimestamp)
       ];
 
-      // Track 2: Server memories filtered by this specific user
       if (userId && guildId && historyId !== guildId) {
         searchPromises.push(
           db.findSimilarMemoriesWithFilter(guildId, queryEmbedding, 1, { userId })
             .then(results => (results || [])
-              .filter(e =>
-                (e.timestamp || 0) < cutoffTimestamp &&
-                e.score >= MIN_SIMILARITY_THRESHOLD
-              )
-              .map(e => ({
-                messages:  e.messages,
-                score:     e.score * 0.85, // slightly downweight cross-context
-                source:    'server-context',
-                timestamp: e.timestamp
-              }))
-            )
-            .catch(() => [])
+              .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
+              .map(e => ({ messages: e.messages, score: e.score * 0.85, source: 'server-context', timestamp: e.timestamp }))
+            ).catch(() => [])
         );
       }
 
-      // Track 3: User DM memories for server queries
       if (guildId && historyId === guildId && userId) {
         searchPromises.push(
           clusterEngine.clusterSearch(userId, queryEmbedding, cutoffTimestamp)
             .then(results => (results || []).map(e => ({
-              messages:  e.messages.slice(-6), // trim to avoid context bloat
-              score:     e.score * 0.75,
-              source:    'user-context',
-              timestamp: e.timestamp
-            })))
-            .catch(() => [])
+              messages: e.messages.slice(-6), score: e.score * 0.75, source: 'user-context', timestamp: e.timestamp
+            }))).catch(() => [])
         );
       }
 
@@ -301,18 +311,74 @@ class MemorySystem {
       allResults.sort((a, b) => b.score - a.score);
       const topResults = allResults.slice(0, MAX_RAG_RESULTS);
 
-      // Store in both caches — Redis write is fire-and-forget, never blocks response
+      // Write-back to L1 + L3 (Redis is fire-and-forget)
       memoryCache.cacheQueryResults(historyId, currentQuery, topResults, userId, guildId, queryEmbedding);
       redisCache.set(historyId, queryHash, topResults);
 
       return { messages: topResults, personalData };
+
     } catch (error) {
       logger.error('Context retrieval failed', error);
       return { messages: [], personalData: null };
     }
   }
 
-  // ==========================================================================
+  /**
+   * Direct MongoDB Atlas $vectorSearch — the CACHE_ENABLED=false fast path.
+   *
+   * All three tracks fire as parallel Atlas aggregations.
+   * No local embeddings held in RAM. No LRU. No ClusterEngine.
+   * Atlas handles all similarity computation server-side via the vector index.
+   *
+   * @private
+   */
+  async _directVectorSearch(historyId, currentQuery, recentMessageTimestamps, userId, guildId) {
+    const cutoffTimestamp = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
+
+    const [queryEmbedding, personalData] = await Promise.all([
+      embeddingService.generateEmbedding(currentQuery, 'RETRIEVAL_QUERY'),
+      userId ? memoryStore.getUserPersonalData(userId) : Promise.resolve(null)
+    ]);
+
+    if (!queryEmbedding) return { messages: [], personalData };
+
+    const searchPromises = [
+      // Track 1: main history — direct Atlas $vectorSearch
+      db.findSimilarMemories(historyId, queryEmbedding, MAX_RAG_RESULTS * 2)
+        .then(results => (results || [])
+          .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
+          .map(e => ({ messages: e.messages, score: e.score, source: 'conversation-history', timestamp: e.timestamp }))
+        ).catch(() => [])
+    ];
+
+    // Track 2: server cross-context
+    if (userId && guildId && historyId !== guildId) {
+      searchPromises.push(
+        db.findSimilarMemoriesWithFilter(guildId, queryEmbedding, 1, { userId })
+          .then(results => (results || [])
+            .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
+            .map(e => ({ messages: e.messages, score: e.score * 0.85, source: 'server-context', timestamp: e.timestamp }))
+          ).catch(() => [])
+      );
+    }
+
+    // Track 3: DM cross-context for server queries
+    if (guildId && historyId === guildId && userId) {
+      searchPromises.push(
+        db.findSimilarMemories(userId, queryEmbedding, 2)
+          .then(results => (results || [])
+            .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
+            .map(e => ({ messages: e.messages.slice(-6), score: e.score * 0.75, source: 'user-context', timestamp: e.timestamp }))
+          ).catch(() => [])
+      );
+    }
+
+    const allResults = (await Promise.all(searchPromises)).flat();
+    allResults.sort((a, b) => b.score - a.score);
+    return { messages: allResults.slice(0, MAX_RAG_RESULTS), personalData };
+  }
+
+    // ==========================================================================
   // MAIN ENTRY POINT
   // ==========================================================================
 
@@ -596,12 +662,13 @@ class MemorySystem {
         parallelIndexBatchSize:  3
       },
       cacheConfig: {
-        queryCacheTTL:        '2m',
-        clusterCacheTTL:      '10m',
+        mode:                 CACHE_ENABLED ? 'full (L1+L2+L3+ClusterEngine)' : 'disabled (direct Atlas $vectorSearch)',
+        queryCacheTTL:        CACHE_ENABLED ? '2m' : 'n/a',
+        clusterCacheTTL:      CACHE_ENABLED ? '15m' : 'n/a',
         personalDataCacheTTL: '5m',
         timeGapThreshold:     '30s',
-        backgroundClustering: 'enabled',
-        redisCache:           redisCache.isAvailable ? 'connected' : 'disabled'
+        backgroundClustering: CACHE_ENABLED ? 'enabled' : 'disabled',
+        redisCache:           CACHE_ENABLED ? (redisCache.isAvailable ? 'connected' : 'disconnected') : 'disabled'
       },
       entries: Array.from(memoryStore.lastIndexedCount.entries()).map(([id, count]) => ({
         historyId:               id,
