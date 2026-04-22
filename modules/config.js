@@ -11,19 +11,19 @@ import { HarmBlockThreshold, HarmCategory } from '@google/genai';
  * Gemma is automatically excluded from contexts requiring incompatible tools
  * (e.g. /search slash command, /summary — those fall back to Gemini).
  */
-export const ENABLE_GEMMA = false;
+export const ENABLE_GEMMA = true;
 
 /**
  * Primary Gemma model when ENABLE_GEMMA is true.
  * Must be a key from the MODELS object below (e.g. 'gemma-4-27b').
  */
-export const GEMMA_DEFAULT_MODEL = 'gemma-4-27b';
+export const GEMMA_DEFAULT_MODEL = 'gemma-4-26b';
 
 /**
  * Fallback Gemma model used when GEMMA_DEFAULT_MODEL is rate-limited.
  * Must be a key from the MODELS object below (e.g. 'gemma-4-9b').
  */
-export const GEMMA_FALLBACK_MODEL = 'gemma-4-9b';
+export const GEMMA_FALLBACK_MODEL = 'gemma-4-31b';
 
 /**
  * When true, cycles through Gemma models AFTER all Gemini models are exhausted
