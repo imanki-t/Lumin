@@ -13,7 +13,12 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import { MODEL_FALLBACK_CHAIN, MODEL_CALL_THRESHOLDS, DEFAULT_MODEL, isGemmaModel, GEMMA_DAILY_LIMIT_PER_KEY } from '../modules/config.js';
+import {
+  MODEL_FALLBACK_CHAIN, MODEL_CALL_THRESHOLDS, DEFAULT_MODEL,
+  isGemmaModel, GEMMA_DAILY_LIMIT_PER_KEY,
+  CYCLE_GEMMA_WITH_GEMINI, GEMMA_DEFAULT_MODEL, GEMMA_FALLBACK_MODEL, MODELS,
+  KEY_SWITCH_HOLD_MS
+} from '../modules/config.js';
 import { Logger } from '../core/Logger.js';
 
 const logger = Logger.get('ApiKeyManager');
@@ -163,6 +168,21 @@ const keyCooldowns = new Map();
  */
 const modelGlobalCallCounts = new Map();
 (MODEL_FALLBACK_CHAIN || []).forEach(m => modelGlobalCallCounts.set(m, 0));
+
+// ── Gemma cycle injection ─────────────────────────────────────────────────────
+// When CYCLE_GEMMA_WITH_GEMINI = true, append Gemma models to the end of the
+// fallback chain so the bot cycles into Gemma after all Gemini RPM is exhausted,
+// then back to Gemini. Gemma fallback is always appended last (lowest priority).
+if (CYCLE_GEMMA_WITH_GEMINI) {
+  const gemmaModels = [
+    MODELS[GEMMA_DEFAULT_MODEL],
+    MODELS[GEMMA_FALLBACK_MODEL]
+  ].filter(m => m && !MODEL_FALLBACK_CHAIN.includes(m));
+
+  MODEL_FALLBACK_CHAIN.push(...gemmaModels);
+  gemmaModels.forEach(m => modelGlobalCallCounts.set(m, 0));
+  logger.info(`Gemma cycle enabled — fallback chain: ${MODEL_FALLBACK_CHAIN.join(' → ')}`);
+}
 
 /**
  * Per-model per-key rate-limit window tracking.
@@ -378,7 +398,7 @@ function findAvailableKey() {
  * @param {string} currentModelName - Model that encountered the error.
  * @returns {{keyRotated: boolean, modelChanged: boolean, newModel: string|null}}
  */
-export function switchToNextKeyOrModel(error, currentModelName) {
+export async function switchToNextKeyOrModel(error, currentModelName) {
   const oldKeyIdx = currentKeyIdx;
 
   const isRateLimit =
@@ -418,6 +438,11 @@ export function switchToNextKeyOrModel(error, currentModelName) {
       currentKeyIdx = nextKeyIdx;
       currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
       logger.info(`Rotated to Key ${nextKeyIdx + 1}, continuing with model: ${currentModelName}`);
+      // Brief hold after key switch — prevents hammering the new key with queued messages.
+      // KEY_SWITCH_HOLD_MS is configured in modules/config.js.
+      if (KEY_SWITCH_HOLD_MS > 0) {
+        await new Promise(r => setTimeout(r, KEY_SWITCH_HOLD_MS));
+      }
       return { keyRotated: true, modelChanged: false, newModel: currentModelName };
     }
 
@@ -493,6 +518,7 @@ export async function withRetryPerModel(apiCall, initialModelName) {
         attemptsPerKey.set(currentKeyIdx, 0);
         currentModel = initialModelName; // fresh key → reset to preferred model
         logger.info(`Key ${currentKey + 1} exhausted (${keyAttempts} tries) → rotating to Key ${currentKeyIdx + 1}`);
+        if (KEY_SWITCH_HOLD_MS > 0) await new Promise(r => setTimeout(r, KEY_SWITCH_HOLD_MS));
         continue;
       } else {
         throw new Error(
@@ -511,6 +537,7 @@ export async function withRetryPerModel(apiCall, initialModelName) {
           currentKeyIdx = nextKey;
           currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
           logger.info(`Gemma pre-rotated to Key ${currentKeyIdx + 1}`);
+          if (KEY_SWITCH_HOLD_MS > 0) await new Promise(r => setTimeout(r, KEY_SWITCH_HOLD_MS));
           continue;
         }
         throw new Error('All Gemma API keys have reached their daily limit (1500 req/key). Resets at midnight UTC.');
@@ -553,6 +580,7 @@ export async function withRetryPerModel(apiCall, initialModelName) {
             currentKeyIdx = nextKey;
             currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
             logger.info(`Gemma rotated to Key ${currentKeyIdx + 1}`);
+            if (KEY_SWITCH_HOLD_MS > 0) await new Promise(r => setTimeout(r, KEY_SWITCH_HOLD_MS));
           } else {
             logger.warn('All Gemma keys exhausted for today');
           }

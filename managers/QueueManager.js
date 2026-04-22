@@ -15,6 +15,7 @@
 import config from '../config.js';
 import { Logger } from '../core/Logger.js';
 import { getApiKeyCount } from './ApiKeyManager.js';
+import { MAX_QUEUE_DEPTH_PER_USER, RAM_MEDIA_SUSPEND_THRESHOLD_MB } from '../modules/config.js';
 
 const logger = Logger.get('QueueManager');
 
@@ -164,6 +165,47 @@ export const chatHistoryLock = new Mutex();
  * @type {Map<string, {queue: Function[], isProcessing: boolean}>}
  */
 export const requestQueues = new Map();
+
+// ============================================================================
+// RAM PRESSURE & QUEUE SAFETY HELPERS
+// ============================================================================
+
+/**
+ * Returns true when process RSS RAM exceeds RAM_MEDIA_SUSPEND_THRESHOLD_MB.
+ * Used by MediaHandler and MessageProcessor to skip media processing under
+ * memory pressure — letting the bot handle text-only until RAM recovers.
+ * Returns false when the threshold is 0 (guard disabled).
+ *
+ * @returns {boolean}
+ */
+export function isMediaSuspended() {
+  if (!RAM_MEDIA_SUSPEND_THRESHOLD_MB) return false;
+  const usedMB = process.memoryUsage().rss / 1024 / 1024;
+  return usedMB > RAM_MEDIA_SUSPEND_THRESHOLD_MB;
+}
+
+/**
+ * Returns current process RAM usage in MB (RSS).
+ * @returns {number}
+ */
+export function getRamUsageMB() {
+  return Math.round(process.memoryUsage().rss / 1024 / 1024);
+}
+
+/**
+ * Check whether a user's queue can accept another message.
+ * Drops messages beyond MAX_QUEUE_DEPTH_PER_USER to prevent unbounded RAM
+ * growth when a user sends a flood of messages while the bot is busy.
+ *
+ * @param {string} userId
+ * @returns {{ allowed: boolean, queueDepth: number }}
+ */
+export function checkQueueDepth(userId) {
+  const entry     = requestQueues.get(userId);
+  const queueDepth = entry ? entry.queue.length : 0;
+  const allowed    = !MAX_QUEUE_DEPTH_PER_USER || queueDepth < MAX_QUEUE_DEPTH_PER_USER;
+  return { allowed, queueDepth };
+}
 
 // ============================================================================
 // IMAGE GENERATION RATE LIMITER

@@ -46,7 +46,9 @@ import {
   incrementImageUsage,
   checkSummaryRateLimit,
   incrementSummaryUsage,
-  getDailyMessageStats
+  getDailyMessageStats,
+  checkQueueDepth,
+  getRamUsageMB
 } from './QueueManager.js';
 
 import {
