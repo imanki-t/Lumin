@@ -6,18 +6,66 @@ import { HarmBlockThreshold, HarmCategory } from '@google/genai';
 // ============================================================================
 
 /**
- * Set to true to force ALL conversations through Gemma.
- * Ignores any user/server selectedModel setting.
- * Set to false to use Gemini (default behaviour).
+ * Enable Gemma for all chat conversations globally.
+ * When true, every conversation uses GEMMA_DEFAULT_MODEL automatically.
+ * Gemma is automatically excluded from contexts requiring incompatible tools
+ * (e.g. /search slash command, /summary — those fall back to Gemini).
  */
-export const FORCE_GEMMA = false;
+export const ENABLE_GEMMA = false;
 
 /**
- * When FORCE_GEMMA is false, this is the Gemini model every conversation uses.
- * Must be a key from the MODELS object below.
- * Change this to instantly switch every user to a different model.
+ * Primary Gemma model when ENABLE_GEMMA is true.
+ * Must be a key from the MODELS object below (e.g. 'gemma-4-27b').
  */
-export const FORCE_MODEL = 'gemini-3.1-flash-lite';
+export const GEMMA_DEFAULT_MODEL = 'gemma-4-27b';
+
+/**
+ * Fallback Gemma model used when GEMMA_DEFAULT_MODEL is rate-limited.
+ * Must be a key from the MODELS object below (e.g. 'gemma-4-9b').
+ */
+export const GEMMA_FALLBACK_MODEL = 'gemma-4-9b';
+
+/**
+ * When true, cycles through Gemma models AFTER all Gemini models are exhausted
+ * in the RPM fallback chain. Server-side setting — applies to all users.
+ * Gemma is added to the end of MODEL_FALLBACK_CHAIN automatically at runtime.
+ */
+export const CYCLE_GEMMA_WITH_GEMINI = false;
+
+/**
+ * Enable or disable Redis RAG cache.
+ * Set to false to save RAM and avoid Redis costs (in-memory L1/L2 still active).
+ * Redis cache is an L3 layer that survives restarts — not needed on a budget.
+ */
+export const CACHE_ENABLED = false;
+
+/**
+ * Disable PDF attachments for normal Gemini models.
+ * PDFs are large and expensive to process. Disable to save RAM and quota.
+ * Gemma already ignores PDFs by its own limitations.
+ */
+export const PDF_ENABLED_FOR_GEMINI = false;
+
+/**
+ * RAM threshold in MB. When process RAM exceeds this, media processing
+ * (images, video, audio) is temporarily suspended to allow recovery.
+ * Suspension lifts automatically once RAM drops below the threshold.
+ * Set to 0 to disable the safety guard entirely.
+ */
+export const RAM_MEDIA_SUSPEND_THRESHOLD_MB = 380;
+
+/**
+ * When switching API keys due to rate limits, wait this many ms before
+ * dispatching queued messages. Prevents hammering the new key immediately.
+ * Set to 0 to disable the hold.
+ */
+export const KEY_SWITCH_HOLD_MS = 1500;
+
+/**
+ * Max queue depth per user. If a user's queue grows beyond this, new messages
+ * are dropped with a warning rather than queued. Prevents unbounded RAM growth.
+ */
+export const MAX_QUEUE_DEPTH_PER_USER = 5;
 
 // ============================================================================
 // MODEL CONFIGURATION
@@ -255,8 +303,15 @@ export const generationConfig = getGenerationConfig('gemini-3-flash-preview');
 // ============================================================================
 
 export default {
-  FORCE_GEMMA,
-  FORCE_MODEL,
+  ENABLE_GEMMA,
+  GEMMA_DEFAULT_MODEL,
+  GEMMA_FALLBACK_MODEL,
+  CYCLE_GEMMA_WITH_GEMINI,
+  CACHE_ENABLED,
+  PDF_ENABLED_FOR_GEMINI,
+  RAM_MEDIA_SUSPEND_THRESHOLD_MB,
+  KEY_SWITCH_HOLD_MS,
+  MAX_QUEUE_DEPTH_PER_USER,
   DEFAULT_MODEL,
   MODELS,
   GEMINI_3_MODELS,
