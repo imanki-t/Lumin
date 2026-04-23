@@ -130,13 +130,7 @@ async function handleSearchMemory(userId, guildId, query) {
 }
 
 /**
- * Handle `set_reminder` — parse relative time, persist, and schedule the reminder.
- *
- * BUG FIX (original): `parseRelativeTime` was loaded via dynamic
- * `import('./utils.js')` on every invocation. Now it is a static top-level
- * import, which avoids repeated module resolution overhead and makes the
- * dependency visible at load time.
- *
+ * Handle `set_reminder` — parse relative time, persist, and schedule.
  * @param {string} userId
  * @param {string} message
  * @param {string} timeRelative  - e.g. "5 minutes", "tomorrow at 10am"
@@ -191,14 +185,6 @@ async function handleSetTimezone(userId, timezone) {
 
 /**
  * Handle `check_time_elapsed` — calculate time since the last history entry.
- *
- * BUG FIX (original): used `for...in` with `hasOwnProperty` to iterate history.
- * Replaced with `Object.keys()`.
- *
- * BUG FIX (original): called `memorySystem.formatDuration()` which no longer
- * exists as a public method. Now imports `formatDuration` from shared
- * `messageFormatter.js`.
- *
  * @param {string|null} historyId
  * @param {string}      userId
  * @param {string|null} guildId
@@ -210,7 +196,6 @@ async function handleCheckTimeElapsed(historyId, userId, guildId) {
     const allHistory = await db.getChatHistory(targetId);
     if (!allHistory) return { result: 'No conversation history found.' };
 
-    // BUG FIX: Object.keys() instead of for...in + hasOwnProperty
     const historyArray = [];
     for (const key of Object.keys(allHistory)) {
       historyArray.push(...(allHistory[key] || []));
@@ -222,7 +207,6 @@ async function handleCheckTimeElapsed(historyId, userId, guildId) {
     const lastMsg = historyArray[historyArray.length - 1];
     const diff    = Date.now() - (lastMsg.timestamp || Date.now());
 
-    // BUG FIX: formatDuration imported from shared module, not called on memorySystem
     return { result: `${MSG.TIME_CHECKED} ${formatDuration(diff)}` };
   } catch (error) {
     logger.error('Error checking time elapsed', error);
