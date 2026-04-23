@@ -61,13 +61,10 @@ import {
   initializeBlacklistForGuild,
   scheduleDailyReset,
   runMigrations,
-  BOT_CONFIG,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_USER_SETTINGS,
-  POLL_CONFIG,
-  MIGRATION_CONFIG
 } from './StateManager.js';
-import { RESOURCE_CONFIG } from './config.js';
+import { RESOURCE_CONFIG, BOT_CONFIG, POLL_CONFIG, MIGRATION_CONFIG } from './config.js';
 
 const logger = Logger.get('BotManager');
 
