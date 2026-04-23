@@ -1,19 +1,6 @@
 /**
  * @fileoverview Discord message action-button factories — Save and Delete.
- *               Single source of truth replacing the duplicate implementations
- *               that existed in both the old root responseHandler.js and
- *               buttonHandlers.js.
- *
- * BUG FIXES vs original buttonHandlers.js:
- *   1. `createButtonRows` was called but the function was named `createSecondaryRow`
- *      → ReferenceError crash on every second-row scenario.
- *   2. `hasRoomForButton` received a components *array* but the old version did
- *      `actionRow.components.length` (double-dereference) → TypeError crash.
- *
- * The canonical delete button includes `userId` in the custom ID
- * (`delete_message-{msgId}-{userId}`) so the interaction handler can verify
- * that only the original requester can delete the message.
- *
+ * Delete button encodes userId in its custom ID so only the requester can trigger it.
  * @module modules/shared/buttonHandlers
  */
 
@@ -84,12 +71,8 @@ function getOrCreateActionRow(messageComponents) {
 }
 
 /**
- * Check whether a components *array* has room for one more button.
- *
- * BUG FIX: the original did `actionRow.components.length` after being passed an
- * array — i.e. `array.components.length` = `undefined.length` = TypeError crash.
- * This version receives the array directly and calls `.length` on it.
- *
+ * Check whether a components array has room for one more button.
+ * Receives the `.components` array directly, not the ActionRow wrapper.
  * @param {readonly import('discord.js').ButtonComponent[]} componentsArray
  * @returns {boolean}
  */
@@ -98,13 +81,9 @@ function hasRoomForButton(componentsArray) {
 }
 
 /**
- * Build two ActionRows when the existing row is already full:
+ * Build two ActionRows when the existing row is full:
  *   Row 0 — all previous buttons (rebuilt)
  *   Row 1 — the new button alone
- *
- * BUG FIX: original called `createButtonRows` which was never defined
- * (the function was actually named `createSecondaryRow`) → ReferenceError crash.
- *
  * @param {readonly import('discord.js').ActionRow[]} messageComponents
  * @param {ButtonBuilder} newButton
  * @returns {ActionRowBuilder[]}
@@ -172,7 +151,7 @@ export async function addDeleteButton(botMessage, msgId, userId) {
     if (
       components.length > 0 &&
       components[0].type === ComponentType.ActionRow &&
-      hasRoomForButton(components[0].components)   // BUG FIX: pass .components array, not ActionRow
+      hasRoomForButton(components[0].components)
     ) {
       const actionRow = ActionRowBuilder.from(components[0]);
       actionRow.addComponents(deleteButton);
@@ -181,7 +160,7 @@ export async function addDeleteButton(botMessage, msgId, userId) {
 
     // Case 2: existing ActionRow that is full → spill into second row
     if (components.length > 0) {
-      const rows = createButtonRows(components, deleteButton); // BUG FIX: was calling undefined fn
+      const rows = createButtonRows(components, deleteButton);
       return await botMessage.edit({ components: rows });
     }
 
