@@ -23,7 +23,6 @@ import {
   safetySettings,
   getGenerationConfig,
   RATE_LIMIT_ERRORS,
-  MODEL_FALLBACK_CHAIN,
   DEFAULT_MODEL
 } from '../../modules/config.js';
 
@@ -32,6 +31,12 @@ import { Logger } from '../../core/Logger.js';
 const logger = Logger.get('SummaryExecutor');
 
 const SUMMARY_MODEL          = DEFAULT_MODEL;
+// Summary always uses flash-lite → 2.5-flash, never Gemma:
+// summary needs file URI uploads and tool use that Gemma doesn't support.
+const SUMMARY_FALLBACK_CHAIN = [
+  'gemini-3.1-flash-lite-preview',
+  'gemini-2.5-flash'
+];
 const MAX_RETRY_ATTEMPTS     = 3;
 const MAX_UPLOAD_RETRIES     = 3;
 const MAX_PROCESSING_WAIT    = 60;   // seconds
@@ -327,8 +332,8 @@ export async function summarizeWebsite(interaction, websiteUrl) {
  */
 async function executeWithRetry(apiCallFn, initialModel, reuploadCallback = null) {
   let attempts           = 0;
-  let currentModelIndex  = Math.max(0, MODEL_FALLBACK_CHAIN.indexOf(initialModel));
-  let currentModel       = MODEL_FALLBACK_CHAIN[currentModelIndex];
+  let currentModelIndex  = Math.max(0, SUMMARY_FALLBACK_CHAIN.indexOf(initialModel));
+  let currentModel       = SUMMARY_FALLBACK_CHAIN[currentModelIndex];
 
   while (attempts < MAX_RETRY_ATTEMPTS) {
     try {
@@ -365,8 +370,8 @@ async function executeWithRetry(apiCallFn, initialModel, reuploadCallback = null
         logger.info('Rate limit hit — rotating key');
         switchToNextKey(error);
         currentModelIndex++;
-        if (currentModelIndex < MODEL_FALLBACK_CHAIN.length) {
-          currentModel = MODEL_FALLBACK_CHAIN[currentModelIndex];
+        if (currentModelIndex < SUMMARY_FALLBACK_CHAIN.length) {
+          currentModel = SUMMARY_FALLBACK_CHAIN[currentModelIndex];
           logger.info(`Falling back to ${currentModel}`);
         }
         await sleep(Math.min(1000 * Math.pow(2, attempts), 8000));
