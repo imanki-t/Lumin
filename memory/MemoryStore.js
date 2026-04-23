@@ -8,39 +8,22 @@ import * as db from '../database/index.js';
 import { Logger } from '../core/Logger.js';
 import { embeddingService } from './EmbeddingService.js';
 import { clusterEngine } from './ClusterEngine.js';
+import {
+  MEMORY_RECENT_WINDOW       as RECENT_MESSAGE_WINDOW,
+  MEMORY_CHUNK_SIZE           as CHUNK_SIZE,
+  MEMORY_CHUNK_OVERLAP        as CHUNK_OVERLAP,
+  MEMORY_INDEX_BATCH_SIZE     as PARALLEL_INDEX_BATCH_SIZE,
+  MEMORY_PERSONAL_CACHE_TTL_MS as PERSONAL_DATA_CACHE_TTL_MS
+} from './config.js';
 
 const logger = Logger.get('MemoryStore');
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const RECENT_MESSAGE_WINDOW    = 10;
-const CHUNK_SIZE               = 8;
-const CHUNK_OVERLAP            = 2;
-const PARALLEL_INDEX_BATCH_SIZE = 3;
-const PERSONAL_DATA_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-/**
- * Extract plain text from a history message entry.
- * Supports both `content` and `parts` field shapes.
- *
- * @param {object} message
- * @returns {string}
- */
+// Extract plain text from a history message entry. Supports `content` and `parts` shapes.
 function extractTextFromMessage(message) {
   if (!message || (!message.content && !message.parts)) return '';
   const parts = message.content || message.parts;
   if (!Array.isArray(parts)) return '';
-  return parts
-    .filter(p => p?.text)
-    .map(p => p.text)
-    .join(' ')
-    .trim();
+  return parts.filter(p => p?.text).map(p => p.text).join(' ').trim();
 }
 
 // ============================================================================
@@ -115,11 +98,7 @@ class MemoryStore {
 
   /**
    * Incrementally index old messages into the vector store.
-   * Called as fire-and-forget from MemorySystem.getOptimizedHistory — never awaited.
-   *
-   * BUG FIX (original): used `for...in` with `hasOwnProperty` on allHistory.
-   * Replaced with `Object.keys()` which is cleaner and avoids prototype pollution.
-   *
+   * Called fire-and-forget from MemorySystem.getOptimizedHistory — never awaited.
    * @param {string}      historyId
    * @param {object}      allHistory  - { [messagesId]: message[] }
    * @param {string|null} [userId]
@@ -292,11 +271,7 @@ class MemoryStore {
 
   /**
    * Force full synchronous indexing of all messages for a history.
-   * Admin/debug use only — this can be slow for large histories.
-   *
-   * BUG FIX (original): used `for...in` with `hasOwnProperty`. Replaced
-   * with `Object.keys()` iteration.
-   *
+   * Admin/debug use only — can be slow for large histories.
    * @param {string}      historyId
    * @param {string|null} [userId]
    * @param {string|null} [guildId]

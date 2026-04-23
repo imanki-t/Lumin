@@ -1,13 +1,6 @@
 /**
- * @fileoverview Memory system facade — the single entry point for all memory
- *               operations. Orchestrates RAG retrieval, history optimisation,
- *               context assembly, and exposes the debug/admin surface.
- *
- * REMOVED: `generateSummary` — the method called `genAI.chats.create()` which
- * does not exist in the `@google/genai` SDK (v0.7+). The old-messages fallback
- * (last-8 slice of older messages) is used instead, preserving context without
- * an extra API call and without the broken SDK path.
- *
+ * @fileoverview Memory system facade — single entry point for all memory operations.
+ * Orchestrates RAG retrieval, history optimisation, context assembly, and admin surface.
  * @module memory/MemorySystem
  */
 
@@ -18,59 +11,24 @@ import { memoryCache }      from './MemoryCache.js';
 import { clusterEngine }    from './ClusterEngine.js';
 import { memoryStore }      from './MemoryStore.js';
 import { redisCache }       from './RedisCache.js';
-import { CACHE_ENABLED }    from '../modules/config.js';
+import { formatDuration }   from '../modules/shared/messageFormatter.js';
+import {
+  CACHE_ENABLED,
+  MEMORY_RECENT_WINDOW    as RECENT_MESSAGE_WINDOW,
+  MEMORY_MAX_RAG_RESULTS  as MAX_RAG_RESULTS,
+  MEMORY_SCORE_THRESHOLD  as MIN_SIMILARITY_THRESHOLD,
+  MEMORY_TIME_GAP_MS      as TIME_GAP_THRESHOLD_MS,
+  MEMORY_MAX_INLINE_CTX   as MAX_INLINE_CONTEXT_SIZE
+} from './config.js';
 
 const logger = Logger.get('MemorySystem');
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const RECENT_MESSAGE_WINDOW    = 10;
-const MAX_RAG_RESULTS          = 3;
-const MIN_SIMILARITY_THRESHOLD = 0.72; // Aligned with VECTOR_SEARCH_CONFIG.SCORE_THRESHOLD
-/** 30-second gap triggers a TIME ELAPSED marker in formatted history */
-const TIME_GAP_THRESHOLD_MS    = 30 * 1000;
-/** Context block exceeding this is dropped (too big for Gemini inline) */
-const MAX_INLINE_CONTEXT_SIZE  = 1500;
-
-// ============================================================================
-// MODULE-LEVEL UTILITIES
-// ============================================================================
-
-/**
- * Extract plain text from a history message entry.
- * Supports both `content` and `parts` field shapes.
- *
- * @param {object} message
- * @returns {string}
- */
+// Extract plain text from a history message entry. Supports `content` and `parts` shapes.
 function extractTextFromMessage(message) {
   if (!message || (!message.content && !message.parts)) return '';
   const parts = message.content || message.parts;
   if (!Array.isArray(parts)) return '';
-  return parts
-    .filter(p => p?.text)
-    .map(p => p.text)
-    .join(' ')
-    .trim();
-}
-
-/**
- * Format a millisecond duration into a human-readable string.
- *
- * @param {number} ms
- * @returns {string} e.g. "3 hours", "12 minutes"
- */
-function formatDuration(ms) {
-  const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  const d = Math.floor(h / 24);
-  if (d > 0) return `${d} day${d > 1 ? 's' : ''}`;
-  if (h > 0) return `${h} hour${h > 1 ? 's' : ''}`;
-  if (m > 0) return `${m} minute${m > 1 ? 's' : ''}`;
-  return `${s} second${s > 1 ? 's' : ''}`;
+  return parts.filter(p => p?.text).map(p => p.text).join(' ').trim();
 }
 
 // ============================================================================
@@ -392,13 +350,6 @@ class MemorySystem {
    *   4. Assemble context sections (old-message sample, RAG hits, personal data)
    *   5. Return [contextMessage?, ...recentMessages] as Gemini contents array
    *
-   * NOTE: Summary generation has been removed. The original `generateSummary`
-   * used `genAI.chats.create()` which does not exist in `@google/genai` v0.7+.
-   * The last-8-messages slice of old messages is used instead.
-   *
-   * BUG FIX (original): `for...in` with `hasOwnProperty` replaced with
-   * `Object.keys()` throughout.
-   *
    * @param {string}      historyId
    * @param {string}      currentQuery
    * @param {string}      model         - passed for API compat; not used internally
@@ -411,7 +362,7 @@ class MemorySystem {
       const allHistory = await db.getChatHistory(historyId);
       if (!allHistory) return [];
 
-      // BUG FIX: Object.keys() instead of for...in + hasOwnProperty
+      // Flatten all history buckets into a single chronological array.
       const historyArray = [];
       for (const key of Object.keys(allHistory)) {
         historyArray.push(...(allHistory[key] || []));

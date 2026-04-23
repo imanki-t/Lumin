@@ -23,15 +23,14 @@
  */
 
 import { Logger } from '../core/Logger.js';
+import { MEMORY_CACHE_TTL_MS, EMBEDDING_REDIS_PREFIX } from './config.js';
 
 const logger = Logger.get('RedisCache');
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const REDIS_TTL_SECONDS = 120;   // 2 minutes — mirrors MemoryCache TTL
-const KEY_PREFIX        = 'lumin:rag:';
+// RAG query results TTL mirrors the in-memory cache (MEMORY_CACHE_TTL_MS = 2 min).
+const REDIS_TTL_SECONDS = Math.floor(MEMORY_CACHE_TTL_MS / 1000);
+// Separate key prefix from embedding keys so namespaces never collide.
+const KEY_PREFIX = 'lumin:rag:';
 
 // ============================================================================
 // REDIS CLIENT

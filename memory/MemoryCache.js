@@ -6,23 +6,12 @@
  */
 
 import crypto from 'crypto';
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const QUERY_CACHE_TTL_MS         = 2 * 60 * 1000; // 2 minutes
-const MAX_QUERY_CACHE_SIZE       = 200;
-const MIN_QUERY_LENGTH_FOR_CACHE = 10;
-
-/**
- * Cosine similarity threshold for semantic cache hits.
- * Queries scoring >= this value against a cached query embedding are treated
- * as equivalent and return the cached result without hitting the DB.
- * 0.92 is tight enough to avoid false positives (e.g. "my dog" vs "my cat")
- * while catching rephrased duplicates ("what did I say about X" vs "tell me about X").
- */
-const SEMANTIC_SIMILARITY_THRESHOLD = 0.92;
+import {
+  MEMORY_CACHE_TTL_MS        as QUERY_CACHE_TTL_MS,
+  MEMORY_CACHE_MAX_SIZE      as MAX_QUERY_CACHE_SIZE,
+  MEMORY_CACHE_MIN_QUERY_LEN as MIN_QUERY_LENGTH_FOR_CACHE,
+  MEMORY_CACHE_SEMANTIC_SIM  as SEMANTIC_SIMILARITY_THRESHOLD
+} from './config.js';
 
 // ============================================================================
 // MEMORY CACHE

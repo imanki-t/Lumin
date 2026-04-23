@@ -9,55 +9,24 @@ import { LRUCache } from 'lru-cache';
 import * as db from '../database/index.js';
 import { Logger } from '../core/Logger.js';
 import { embeddingService, truncateForCentroid } from './EmbeddingService.js';
+import {
+  CLUSTER_MAX                  as MAX_CLUSTERS,
+  CLUSTER_NUM_BASELINE         as NUM_CLUSTERS,
+  CLUSTER_MIN_MEMORIES         as MIN_MEMORIES_FOR_CLUSTERING,
+  CLUSTER_TOP_TO_SEARCH        as TOP_CLUSTERS_TO_SEARCH,
+  CLUSTER_MIN_SIMILARITY       as MIN_CLUSTER_SIMILARITY,
+  CLUSTER_REINDEX_INTERVAL     as RECLUSTERING_INTERVAL,
+  CLUSTER_MAX_KMEANS_ITERS     as MAX_KMEANS_ITERATIONS,
+  CLUSTER_CONVERGENCE_THRESHOLD as KMEANS_CONVERGENCE_THRESHOLD,
+  CLUSTER_CACHE_TTL_MS,
+  CLUSTER_MAX_PER_CLUSTER      as MAX_MEMORIES_PER_CLUSTER,
+  CLUSTER_EMBEDDINGS_TTL_MS   as EMBEDDINGS_CACHE_TTL_MS,
+  CLUSTER_EMBEDDING_LIMITS    as EMBEDDING_LIMITS,
+  MEMORY_MAX_RAG_RESULTS      as MAX_RAG_RESULTS,
+  MEMORY_SCORE_THRESHOLD      as MIN_SIMILARITY_THRESHOLD
+} from './config.js';
 
 const logger = Logger.get('ClusterEngine');
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const MAX_CLUSTERS                = 20;  // was 50 — fewer centroids, less RAM per cluster set
-const NUM_CLUSTERS                = 5;   // was 8  — baseline minimum
-const MIN_MEMORIES_FOR_CLUSTERING = 150; // was 240 — cluster sooner, search better earlier
-const TOP_CLUSTERS_TO_SEARCH      = 2;   // was 3
-const MIN_CLUSTER_SIMILARITY      = 0.45;
-const RECLUSTERING_INTERVAL       = 150; // was 100 — rebuild less frequently
-const MAX_KMEANS_ITERATIONS       = 10;  // was 15 — faster convergence check
-const KMEANS_CONVERGENCE_THRESHOLD = 0.001;
-const CLUSTER_CACHE_TTL_MS       = 15 * 60 * 1000; // was 10 min — keep longer, rebuild less
-const MAX_MEMORIES_PER_CLUSTER   = 8;   // was 10
-const MAX_RAG_RESULTS            = 3;
-const MIN_SIMILARITY_THRESHOLD   = 0.65;
-
-/** How long lean embeddings stay cached before a background DB refresh.
- *  Kept short so new memories appear within ~2 min without waiting for invalidation. */
-const EMBEDDINGS_CACHE_TTL_MS    = 2 * 60 * 1000;  // 2 minutes
-
-/**
- * Embedding load strategy constants.
- *
- * Two completely separate code paths — different DB queries, different cache keys:
- *
- *   'cluster' mode  — uses getMemoryEmbeddingsSampled():
- *     Stratified time-bucket sampling. Divides the full history into
- *     CLUSTER_TIME_BUCKETS equal eras and draws CLUSTER_SAMPLE / CLUSTER_TIME_BUCKETS
- *     entries from each. Old memories are guaranteed representation — centroid
- *     quality does not degrade as history grows. (HCAT/Grootendorst 2022 pattern)
- *
- *   'fallback' mode — uses getMemoryEmbeddings() (recent-first):
- *     Only runs when $vectorSearch is unavailable (MongoDB vector index down).
- *     Recent-only is acceptable here — it is an emergency path, not the main
- *     retrieval path. 50 entries is more than enough to surface top-3 results.
- */
-const EMBEDDING_LIMITS = Object.freeze({
-  // ⚠️ RAM BUDGET: each embedding ≈ 12 KB (1536 floats × 8 bytes)
-  // CLUSTER_SAMPLE × 12 KB × embeddingsCache.max = total RAM for embeddings
-  // 300 × 12 KB × 15 users ≈ 54 MB — safe for 512 MB deployments
-  // Old values (2000 × 200 users) caused ~4.9 GB OOM crashes — do not raise.
-  CLUSTER_SAMPLE:       300,   // was 2_000
-  CLUSTER_TIME_BUCKETS: 6,     // was 20 (proportional: 6 strata × 50 entries = 300)
-  FALLBACK_SEARCH:      30,    // was 50
-});
 
 // ============================================================================
 // CLUSTER ENGINE
@@ -317,10 +286,6 @@ class ClusterEngine {
    * 1. Cache fresh (< TTL)       → return immediately
    * 2. Cache stale (< 2×TTL)     → return immediately + trigger background rebuild
    * 3. Cache too old / missing   → build synchronously (first-time only)
-   *
-   * BUG FIX (original): the original fetched `db.getMemoryEntries(historyId, 1)`
-   * and used `memories.length` (always 1!) as `currentCount`. The TTL-based
-   * staleness check used here avoids that incorrect DB call entirely.
    *
    * @param {string} historyId
    * @returns {Promise<object|null>}

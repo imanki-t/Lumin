@@ -11,51 +11,39 @@
 import { genAI }      from '../managers/BotManager.js';
 import { Logger }     from '../core/Logger.js';
 import { redisCache } from './RedisCache.js';
+import {
+  EMBEDDING_MODEL,
+  EMBEDDING_CACHE_MAX_SIZE   as MAX_EMBEDDING_CACHE_SIZE,
+  EMBEDDING_MAX_CONCURRENT   as MAX_CONCURRENT_EMBEDDINGS,
+  EMBEDDING_DIM,
+  EMBEDDING_MRL_SHORT_DIM    as MRL_SHORT_DIM,
+  EMBEDDING_MRL_CENTROID_DIM as MRL_CENTROID_DIM,
+  EMBEDDING_REDIS_TTL,
+  EMBEDDING_REDIS_PREFIX,
+  EMBEDDING_ENABLE_PDF       as ENABLE_PDF,
+  EMBEDDING_ENABLE_VIDEO     as ENABLE_VIDEO,
+  EMBEDDING_ENABLE_AUDIO     as ENABLE_AUDIO,
+  EMBEDDING_IMAGE_LIMIT,
+  EMBEDDING_PDF_LIMIT,
+  EMBEDDING_VIDEO_LIMIT,
+  EMBEDDING_AUDIO_LIMIT
+} from './config.js';
 
 const logger = Logger.get('EmbeddingService');
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const EMBEDDING_MODEL           = 'gemini-embedding-2-preview';
-const MAX_EMBEDDING_CACHE_SIZE  = 50;    // Hot in-process LRU window only
-const MAX_CONCURRENT_EMBEDDINGS = 3;
-const EMBEDDING_DIM    = 768;
-const MRL_SHORT_DIM    = 256;
-const MRL_CENTROID_DIM = 64;
-
-// Redis TTL for embeddings: 24h. Embeddings for the same text never change,
-// so a long TTL is safe. This replaces the old unlimited in-memory Map which
-// would grow proportionally with user count and OOM on Render free tier.
-const EMBEDDING_REDIS_TTL = 24 * 60 * 60;  // 24 hours in seconds
-const EMBEDDING_REDIS_PREFIX = 'lumin:emb:';
-
-// ── Per-modality feature flags ────────────────────────────────────────────────
-// Set to `true` to activate that modality in generateMultimodalEmbedding.
-// Text and images are always active and processed in parallel.
-
-const ENABLE_PDF   = false;  // PDF support  (max 1 file · 6 pages · application/pdf)
-const ENABLE_VIDEO = false;  // Video support (max 1 file · 120s / 80s w/ audio · mp4/mov)
-const ENABLE_AUDIO = false;  // Audio support (max 1 file · 80s · mp3/wav)
-
-// ── Per-modality hard limits (gemini-embedding-2-preview) ────────────────────
-
-const LIMIT_IMAGE_MAX_COUNT              = 6;
-const LIMIT_IMAGE_MIME_TYPES             = new Set(['image/png', 'image/jpeg']);
-
-const LIMIT_PDF_MAX_COUNT                = 1;
-const LIMIT_PDF_MAX_PAGES                = 6;
-const LIMIT_PDF_MIME_TYPE                = 'application/pdf';
-
-const LIMIT_VIDEO_MAX_COUNT              = 1;
-const LIMIT_VIDEO_MAX_SECONDS            = 120;  // video-only (no audio track)
-const LIMIT_VIDEO_WITH_AUDIO_MAX_SECONDS = 80;   // video with embedded audio
-const LIMIT_VIDEO_MIME_TYPES             = new Set(['video/mp4', 'video/quicktime']);
-
-const LIMIT_AUDIO_MAX_COUNT              = 1;
-const LIMIT_AUDIO_MAX_SECONDS            = 80;
-const LIMIT_AUDIO_MIME_TYPES             = new Set(['audio/mpeg', 'audio/wav', 'audio/x-wav']);
+// Destructure per-modality limits for local use
+const LIMIT_IMAGE_MAX_COUNT              = EMBEDDING_IMAGE_LIMIT.MAX_COUNT;
+const LIMIT_IMAGE_MIME_TYPES             = EMBEDDING_IMAGE_LIMIT.MIME_TYPES;
+const LIMIT_PDF_MAX_COUNT                = EMBEDDING_PDF_LIMIT.MAX_COUNT;
+const LIMIT_PDF_MAX_PAGES                = EMBEDDING_PDF_LIMIT.MAX_PAGES;
+const LIMIT_PDF_MIME_TYPE                = EMBEDDING_PDF_LIMIT.MIME_TYPE;
+const LIMIT_VIDEO_MAX_COUNT              = EMBEDDING_VIDEO_LIMIT.MAX_COUNT;
+const LIMIT_VIDEO_MAX_SECONDS            = EMBEDDING_VIDEO_LIMIT.MAX_SECONDS;
+const LIMIT_VIDEO_WITH_AUDIO_MAX_SECONDS = EMBEDDING_VIDEO_LIMIT.WITH_AUDIO_MAX_SECONDS;
+const LIMIT_VIDEO_MIME_TYPES             = EMBEDDING_VIDEO_LIMIT.MIME_TYPES;
+const LIMIT_AUDIO_MAX_COUNT              = EMBEDDING_AUDIO_LIMIT.MAX_COUNT;
+const LIMIT_AUDIO_MAX_SECONDS            = EMBEDDING_AUDIO_LIMIT.MAX_SECONDS;
+const LIMIT_AUDIO_MIME_TYPES             = EMBEDDING_AUDIO_LIMIT.MIME_TYPES;
 
 // ============================================================================
 // MRL HELPER
