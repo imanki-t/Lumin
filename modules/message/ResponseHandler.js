@@ -481,8 +481,12 @@ export async function handleModelResponse(
 
   const resolveTools = (allTools, name) => {
     if (isGemma(name)) {
-      // Keep googleSearch + functionDeclarations, drop urlContext + codeExecution
-      return allTools.filter(t => t.googleSearch || t.functionDeclarations);
+      // Gemma supports functionDeclarations natively, but tool context circulation
+      // (include_server_side_tool_invocations) is Gemini 3 ONLY. Mixing built-in
+      // server-side tools (googleSearch, urlContext, codeExecution) with
+      // functionDeclarations without that flag causes a 400 INVALID_ARGUMENT error.
+      // Fix: keep functionDeclarations only — drop all built-in server-side tools.
+      return allTools.filter(t => t.functionDeclarations);
     }
     if (isGemini3(name)) return allTools;
     return allTools.filter(t => t.functionDeclarations);
