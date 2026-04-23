@@ -31,7 +31,7 @@ import { writeTempFile, safeUnlink } from '../modules/shared/tempFileManager.js'
 import { initializeBlacklistForGuild } from '../utils.js';
 import { processAttachment } from '../modules/attachments/FileUploader.js';
 import { processUserQueue }  from '../modules/message/MessageProcessor.js';
-import { MODELS, safetySettings, getGenerationConfig, RATE_LIMIT_ERRORS, DEFAULT_MODEL } from '../modules/config.js';
+import { MODELS, safetySettings, getGenerationConfig, RATE_LIMIT_ERRORS, DEFAULT_MODEL, ENABLE_GEMMA, GEMMA_DEFAULT_MODEL, isGemmaModel } from '../modules/config.js';
 import config                from '../config.js';
 
 const logger = Logger.get('SearchCommand');
@@ -104,12 +104,17 @@ function errorEmbed(color, title, description) {
 }
 
 /**
- * Build Gemini tool config for a search request.
- * Code execution is disabled when media is attached (not compatible with file input).
+ * Build tool config for a search request.
+ * - Gemma models: only googleSearch (no urlContext / codeExecution support).
+ * - Gemini models: googleSearch + urlContext, plus codeExecution when no media attached.
  * @param {boolean} hasMedia
+ * @param {string}  [modelName='']
  * @returns {object[]}
  */
-function buildSearchTools(hasMedia) {
+function buildSearchTools(hasMedia, modelName = '') {
+  if (isGemmaModel(modelName)) {
+    return [{ googleSearch: {} }];
+  }
   const tools = [{ googleSearch: {} }, { urlContext: {} }];
   if (!hasMedia) tools.push({ codeExecution: {} });
   return tools;
@@ -450,34 +455,52 @@ export async function executeSearchInteraction(interaction) {
     const effective      = serverSettings.overrideUserSettings ? serverSettings : userSettings;
 
     const showActionButtons = effective.showActionButtons ?? DEFAULT_USER_SETTINGS.showActionButtons;
-    const selectedModel     = effective.selectedModel || DEFAULT_MODEL;
-    const modelName         = MODELS[selectedModel] || DEFAULT_MODEL;
     const responseFormat    = effective.responseFormat || BOT_CONFIG.DEFAULT_RESPONSE_FORMAT;
     const embedColor        = effective.embedColor     || BOT_CONFIG.HEX_COLOUR;
 
-    const tools           = buildSearchTools(hasMedia);
-    const generationConfig = getGenerationConfig(modelName);
+    // ── Search fallback chain ──────────────────────────────────────────────
+    // Always: flash-lite (primary) → 2.5-flash (secondary) → gemma (tertiary, only when ENABLE_GEMMA).
+    // User's selectedModel setting is intentionally ignored here — search needs
+    // googleSearch tooling that Gemma partially supports and other custom models may not.
+    const searchFallbackChain = [
+      'gemini-3.1-flash-lite-preview',
+      'gemini-2.5-flash',
+      ...(ENABLE_GEMMA ? [MODELS[GEMMA_DEFAULT_MODEL] ?? 'gemma-4-26b-a4b-it'] : [])
+    ];
 
-    // ── Search with retry (replaces own inline retry loop) ────────────────
+    // ── Search with per-model retry + chain fallback ───────────────────────
     let searchResult;
-    try {
-      searchResult = await executeWithRetry(
-        () => runSearchGeneration(modelName, generationConfig, tools, parts),
-        {
-          maxAttempts:    3,
-          initialDelayMs: 1000,
-          maxDelayMs:     8000,
-          modelName,
-          onRateLimit: async () => {
-            logger.warn(`Rate limit on search, waiting…`);
+    let searchError;
+
+    for (const currentModel of searchFallbackChain) {
+      const modelTools     = buildSearchTools(hasMedia, currentModel);
+      const modelGenConfig = getGenerationConfig(currentModel);
+      try {
+        searchResult = await executeWithRetry(
+          () => runSearchGeneration(currentModel, modelGenConfig, modelTools, parts),
+          {
+            maxAttempts:    2,
+            initialDelayMs: 1000,
+            maxDelayMs:     8000,
+            modelName:      currentModel,
+            onRateLimit: async () => {
+              logger.warn(`Rate limit on search with ${currentModel}, moving to next fallback…`);
+            }
           }
-        }
-      );
-    } catch (retryError) {
-      logger.error('Search failed after retries', retryError);
+        );
+        searchError = null;
+        break; // succeeded — stop walking the chain
+      } catch (err) {
+        logger.warn(`Search failed with ${currentModel}, trying next fallback`, err);
+        searchError = err;
+      }
+    }
+
+    if (searchError) {
+      logger.error('Search failed after all fallbacks', searchError);
       return interaction.editReply({
         embeds: [errorEmbed(EMBED_COLORS.ERROR, ERR.SEARCH_FAILED,
-          retryError.message || 'Failed to complete search after multiple attempts.')]
+          searchError.message || 'Failed to complete search after multiple attempts.')]
       });
     }
 
