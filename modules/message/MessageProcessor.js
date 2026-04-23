@@ -28,7 +28,7 @@ import {
 } from '../../modules/config.js';
 import { typingManager, handleModelResponse } from './ResponseHandler.js';
 import { prepareMessageContent, extractFileText } from './PromptBuilder.js';
-import { processPromptAndMediaAttachments, isSupportedAttachment } from './MediaHandler.js';
+import { processPromptAndMediaAttachments, isSupportedAttachment, classifyAttachments } from './MediaHandler.js';
 import config from '../../config.js';
 import { functionTools } from '../functions/FunctionRegistry.js';
 
@@ -82,25 +82,24 @@ const ALL_TOOLS = Object.freeze([
  * @param {string}   modelName
  * @returns {object[]}
  */
+/**
+ * Split attachments into supported/unsupported for the active model.
+ * Returns { supported, unsupported } — unsupported items carry a `reason` string.
+ * @param {object[]} attachments
+ * @param {string}   modelName
+ * @returns {{ supported: object[], unsupported: { name: string, reason: string }[] }}
+ */
 function filterAttachments(attachments, modelName) {
-  if (!attachments?.length) return attachments;
+  if (!attachments?.length) return { supported: [], unsupported: [] };
 
-  // RAM safety guard — suspend all media processing when under pressure
+  // RAM safety guard — drop all media under memory pressure
   const ramMB = process.memoryUsage().rss / 1024 / 1024;
   if (RAM_MEDIA_SUSPEND_THRESHOLD_MB > 0 && ramMB > RAM_MEDIA_SUSPEND_THRESHOLD_MB) {
-    logger.warn(`RAM pressure: ${Math.round(ramMB)}MB > ${RAM_MEDIA_SUSPEND_THRESHOLD_MB}MB — suspending media for this message`);
-    return []; // drop all attachments to protect stability
+    logger.warn(`RAM pressure: ${Math.round(ramMB)}MB > ${RAM_MEDIA_SUSPEND_THRESHOLD_MB}MB — suspending media`);
+    return { supported: [], unsupported: [] };
   }
 
-  // PDF filter — strip PDFs for Gemini models unless explicitly enabled
-  if (!PDF_ENABLED_FOR_GEMINI && !isGemmaModel(modelName)) {
-    return attachments.filter(att => {
-      const name = (att.name || att.filename || '').toLowerCase();
-      return !name.endsWith('.pdf') && att.contentType !== 'application/pdf';
-    });
-  }
-
-  return attachments;
+  return classifyAttachments(attachments, modelName);
 }
 
 /**
@@ -322,7 +321,16 @@ export async function handleTextMessage(message) {
       resolveMessageContext(userId, guildId, channelId);
 
     // ── Filter attachments based on model capabilities + RAM safety ───
-    const filteredAttachments = filterAttachments(allAttachments, modelName);
+    const { supported: filteredAttachments, unsupported: rejectedAttachments } =
+      filterAttachments(allAttachments, modelName);
+
+    // Notify user about unsupported files (non-blocking — text still processes)
+    if (rejectedAttachments.length) {
+      const lines = rejectedAttachments.map(f => `• **${f.name}** — ${f.reason}`).join('\n');
+      message.reply({
+        embeds: [Embeds.error('Unsupported Media', `The following file(s) were skipped:\n${lines}\n\nYour message will still be processed.`)]
+      }).catch(() => {});
+    }
 
     // ── Build Gemini parts array ───────────────────────────────────────
     const [fileExtractResult, initialParts] = await Promise.all([
@@ -421,7 +429,16 @@ export async function handleBatchedMessages(queuedMessages) {
     const { effectiveSettings, serverSettings, historyId, modelName } =
       resolveMessageContext(userId, guildId, channelId);
 
-    const filteredAttachments = filterAttachments(allAttachments, modelName);
+    const { supported: filteredAttachments, unsupported: rejectedAttachments } =
+      filterAttachments(allAttachments, modelName);
+
+    if (rejectedAttachments.length) {
+      const lines = rejectedAttachments.map(f => `• **${f.name}** — ${f.reason}`).join('\n');
+      firstMessage.reply({
+        embeds: [Embeds.error('Unsupported Media', `The following file(s) were skipped:\n${lines}\n\nYour message will still be processed.`)]
+      }).catch(() => {});
+    }
+
     let parts = await processPromptAndMediaAttachments(combinedPrompt, firstMessage, filteredAttachments, modelName);
     if (allSummaryParts.length) parts.push(...allSummaryParts);
 

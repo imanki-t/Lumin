@@ -228,12 +228,15 @@ export async function processGifLinks(messageContent, message, replaceAllMention
 // ATTACHMENT PARTS
 // ============================================================================
 
+const GEMINI_MAX_MEDIA_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+
 /**
- * Check if an attachment is supported by Gemma (images/GIFs only).
+ * Check if an attachment is supported by Gemma.
+ * Gemma only accepts: images, GIFs (includes stickers and custom emojis which are image/gif).
  * @param {object} att
  * @returns {boolean}
  */
-function isGemmaSupported(att) {
+export function isGemmaSupported(att) {
   const ct  = (att.contentType || '').toLowerCase();
   const ext = path.extname(att.name || '').toLowerCase();
   return (
@@ -243,8 +246,79 @@ function isGemmaSupported(att) {
 }
 
 /**
+ * Check if an attachment is supported by Gemini.
+ * Gemini accepts: images, GIFs, video and audio under 5 MB.
+ * @param {object} att
+ * @returns {boolean}
+ */
+export function isGeminiSupported(att) {
+  const ct   = (att.contentType || '').toLowerCase();
+  const ext  = path.extname(att.name || '').toLowerCase();
+  const size = att.size || 0;
+
+  if (ct.startsWith('image/') || SUPPORTED_EXTENSIONS.IMAGE.includes(ext)) return true;
+
+  const isVideo = ct.startsWith('video/') || SUPPORTED_EXTENSIONS.VIDEO.includes(ext);
+  const isAudio = ct.startsWith('audio/') || SUPPORTED_EXTENSIONS.AUDIO.includes(ext);
+  if ((isVideo || isAudio) && size <= GEMINI_MAX_MEDIA_SIZE_BYTES) return true;
+
+  return false;
+}
+
+/**
+ * Classify attachments into supported/unsupported for the given model.
+ * Returns { supported, unsupported } where unsupported items include a `reason`.
+ * @param {object[]} attachments
+ * @param {string} modelName
+ * @returns {{ supported: object[], unsupported: { name: string, reason: string }[] }}
+ */
+export function classifyAttachments(attachments, modelName) {
+  const supported   = [];
+  const unsupported = [];
+  const gemma = isGemmaModel(modelName);
+
+  for (const att of attachments) {
+    const name = att.name || att.filename || 'file';
+    const ct   = (att.contentType || '').toLowerCase();
+    const ext  = path.extname(name).toLowerCase();
+    const size = att.size || 0;
+
+    if (gemma) {
+      if (isGemmaSupported(att)) {
+        supported.push(att);
+      } else {
+        const isVideo = ct.startsWith('video/') || SUPPORTED_EXTENSIONS.VIDEO.includes(ext);
+        const isAudio = ct.startsWith('audio/') || SUPPORTED_EXTENSIONS.AUDIO.includes(ext);
+        const isPdf   = ct === 'application/pdf' || ext === '.pdf';
+        let reason;
+        if (isVideo)      reason = 'videos are not supported by Gemma';
+        else if (isAudio) reason = 'audio files are not supported by Gemma';
+        else if (isPdf)   reason = 'PDFs are not supported by Gemma';
+        else              reason = 'this file type is not supported by Gemma';
+        unsupported.push({ name, reason });
+      }
+    } else {
+      if (isGeminiSupported(att)) {
+        supported.push(att);
+      } else {
+        const isVideo = ct.startsWith('video/') || SUPPORTED_EXTENSIONS.VIDEO.includes(ext);
+        const isAudio = ct.startsWith('audio/') || SUPPORTED_EXTENSIONS.AUDIO.includes(ext);
+        let reason;
+        if ((isVideo || isAudio) && size > GEMINI_MAX_MEDIA_SIZE_BYTES) {
+          reason = `file exceeds the 5 MB limit (${(size / 1024 / 1024).toFixed(1)} MB)`;
+        } else {
+          reason = 'this file type is not supported';
+        }
+        unsupported.push({ name, reason });
+      }
+    }
+  }
+
+  return { supported, unsupported };
+}
+
+/**
  * Build a Gemini-compatible `parts` array from a text prompt and message attachments.
- * For Gemma models, silently skips any attachment that isn't an image or GIF.
  *
  * @param {string} prompt
  * @param {import('discord.js').Message} message
@@ -253,11 +327,8 @@ function isGemmaSupported(att) {
  * @returns {Promise<object[]>}
  */
 export async function processPromptAndMediaAttachments(prompt, message, attachments = null, modelName = '') {
-  const gemma = isGemmaModel(modelName);
-
   const all = (attachments || Array.from(message.attachments.values()))
-    .slice(0, ATTACHMENT_LIMITS.MAX_ATTACHMENTS)
-    .filter(att => !gemma || isGemmaSupported(att)); // silently drop unsupported for Gemma
+    .slice(0, ATTACHMENT_LIMITS.MAX_ATTACHMENTS);
 
   const parts = [{ text: prompt }];
 
@@ -267,7 +338,7 @@ export async function processPromptAndMediaAttachments(prompt, message, attachme
     all.map(async (attachment) => {
       try {
         const { processAttachment } = await import('../attachments/FileUploader.js');
-        return await processAttachment(attachment, message.author.id, message.id);
+        return await processAttachment(attachment, message.author.id, message.id, modelName);
       } catch (error) {
         logger.error(`Error processing attachment ${attachment.name}`, error);
         return { text: `\n\n[Error processing file: ${attachment.name}]` };
