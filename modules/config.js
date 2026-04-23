@@ -1,29 +1,23 @@
 import { HarmBlockThreshold, HarmCategory } from '@google/genai';
 
-// ============================================================================
-// BOT IDENTITY
-// ============================================================================
+// ── BOT ──────────────────────────────────────────────────────────────────────
 
 export const BOT_CONFIG = Object.freeze({
   DEFAULT_RESPONSE_FORMAT: 'Normal',
-  HEX_COLOUR:  '#5B7C99', // Soft Nordic blue — global embed color fallback
+  HEX_COLOUR:  '#5B7C99', // embed color fallback everywhere
   WORK_IN_DMS: true
 });
 
-// ============================================================================
-// GEMMA / AI ROUTING
-// ENABLE_GEMMA routes ALL standard chat through GEMMA_DEFAULT_MODEL globally.
-// Slash commands needing incompatible tools (/search, /summary) bypass this.
-// ============================================================================
+// ── GEMMA / AI ROUTING ───────────────────────────────────────────────────────
+// ENABLE_GEMMA = true routes all standard chat through Gemma globally.
+// /search and /summary always use Gemini regardless — they need incompatible tools.
 
 export const ENABLE_GEMMA            = true;
-export const GEMMA_DEFAULT_MODEL     = 'gemma-4-26b';  // key in MODELS map below
-export const GEMMA_FALLBACK_MODEL    = 'gemma-4-31b';  // key in MODELS map below
-export const CYCLE_GEMMA_WITH_GEMINI = false;          // append Gemma to fallback chain after Gemini exhausted
+export const GEMMA_DEFAULT_MODEL     = 'gemma-4-26b';  // key in MODELS map
+export const GEMMA_FALLBACK_MODEL    = 'gemma-4-31b';  // key in MODELS map, used when CYCLE_GEMMA_WITH_GEMINI=true
+export const CYCLE_GEMMA_WITH_GEMINI = false;          // true = append Gemma to fallback chain after all Gemini keys exhaust
 
-// ============================================================================
-// MODELS
-// ============================================================================
+// ── MODELS ───────────────────────────────────────────────────────────────────
 
 export const DEFAULT_MODEL = 'gemini-3.1-flash-lite-preview';
 
@@ -54,59 +48,67 @@ export const GEMMA_DAILY_LIMIT_PER_KEY     = 1500;
 export const GEMMA_SUPPORTED_MIME_PREFIXES = ['image/'];
 export const GEMMA_SUPPORTED_EXTENSIONS    = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff'];
 
-/** @param {string} modelName @returns {boolean} */
 export function isGemmaModel(modelName) {
   return GEMMA_MODELS.includes(modelName) || /gemma/i.test(modelName);
 }
 
-// ============================================================================
-// MODEL FALLBACK & RATE LIMITS
-// ============================================================================
+// ── MODEL FALLBACK & RATE LIMITS ─────────────────────────────────────────────
 
-/** Models tried in order when rate limits are hit. */
+// Models tried in order when rate limits are hit.
 export const MODEL_FALLBACK_CHAIN = [
   'gemini-3.1-flash-lite-preview',
   'gemini-2.5-flash'
 ];
 
-/** Proactive call-count threshold per model before rotating to next. */
+// After this many successful calls on a model, proactively rotate to the next.
 export const MODEL_CALL_THRESHOLDS = {
   'gemini-3.1-flash-lite-preview': 500
 };
 
 export const RATE_LIMIT_ERRORS = [429, 'RESOURCE_EXHAUSTED', 'RATE_LIMIT_EXCEEDED', 'QUOTA_EXCEEDED'];
 
-// ============================================================================
-// GENERATION CONFIG
-// ============================================================================
+// ── GENERATION CONFIG ────────────────────────────────────────────────────────
 
-const GENERATION_CONFIG_DEFAULTS = { TEMPERATURE: 1.0, TOP_P: 0.95 };
+const GENERATION_DEFAULTS = { TEMPERATURE: 1.0, TOP_P: 0.95 };
 
-function isGemini3Model(modelName) { return GEMINI_3_MODELS.includes(modelName); }
+function isGemini3Model(m) { return GEMINI_3_MODELS.includes(m); }
 
+// Gemma thinking is on/off only (no levels). Currently off — pass thinking=true to enable.
 function getGemmaConfig(thinking = false) {
   return {
-    temperature: GENERATION_CONFIG_DEFAULTS.TEMPERATURE,
-    topP:        GENERATION_CONFIG_DEFAULTS.TOP_P,
+    temperature: GENERATION_DEFAULTS.TEMPERATURE,
+    topP:        GENERATION_DEFAULTS.TOP_P,
     ...(thinking ? { thinkingConfig: { thinkingLevel: 'high' } } : {})
   };
 }
 
-function getGeminiConfig() {
-  return { temperature: GENERATION_CONFIG_DEFAULTS.TEMPERATURE, topP: GENERATION_CONFIG_DEFAULTS.TOP_P };
+// Thinking disabled for Gemini 3 — allows tool use (thinking + tools conflict in preview).
+function getGemini3Config() {
+  return {
+    temperature: GENERATION_DEFAULTS.TEMPERATURE,
+    topP:        GENERATION_DEFAULTS.TOP_P,
+    // thinkingConfig: { thinkingLevel: 'low' } // uncomment to enable thinking (breaks tool use)
+  };
+}
+
+// Thinking disabled for Gemini 2 — same reason as above.
+function getGemini2Config() {
+  return {
+    temperature: GENERATION_DEFAULTS.TEMPERATURE,
+    topP:        GENERATION_DEFAULTS.TOP_P,
+    // thinkingConfig: { thinkingBudget: -1 } // uncomment to enable dynamic thinking (breaks tool use)
+  };
 }
 
 export function getGenerationConfig(modelName) {
   if (isGemmaModel(modelName))   return getGemmaConfig();
-  if (isGemini3Model(modelName)) return getGeminiConfig();
-  return getGeminiConfig();
+  if (isGemini3Model(modelName)) return getGemini3Config();
+  return getGemini2Config();
 }
 
 export const generationConfig = getGenerationConfig('gemini-3-flash-preview');
 
-// ============================================================================
-// SAFETY SETTINGS
-// ============================================================================
+// ── SAFETY SETTINGS ──────────────────────────────────────────────────────────
 
 export const safetySettings = [
   { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -116,47 +118,37 @@ export const safetySettings = [
   { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,   threshold: HarmBlockThreshold.BLOCK_NONE },
 ];
 
-// ============================================================================
-// QUEUE & MEDIA LIMITS
-// ============================================================================
+// ── QUEUE & MEDIA ────────────────────────────────────────────────────────────
 
-export const RAM_MEDIA_SUSPEND_THRESHOLD_MB = 380;   // suspend media above this RSS (MB)
-export const KEY_SWITCH_HOLD_MS             = 1500;  // delay (ms) after key rotation before next dispatch
-export const MAX_QUEUE_DEPTH_PER_USER       = 5;     // drop new messages beyond this queue depth per user
-export const PDF_ENABLED_FOR_GEMINI         = false; // PDFs are large; disable to save RAM/quota
-export const CACHE_ENABLED                  = false; // Redis L3 cache — in-memory L1/L2 always active
+export const RAM_MEDIA_SUSPEND_THRESHOLD_MB = 380;   // suspend all media above this RSS in MB
+export const KEY_SWITCH_HOLD_MS             = 1500;  // ms to wait after rotating API key
+export const MAX_QUEUE_DEPTH_PER_USER       = 5;     // messages beyond this are dropped with a warning
+export const PDF_ENABLED_FOR_GEMINI         = false; // disabled to save RAM and quota
+export const CACHE_ENABLED                  = false; // Redis L3 cache; in-memory L1/L2 always on
 
-// ============================================================================
-// BOT STATE
-// ============================================================================
+// ── BOT STATE ────────────────────────────────────────────────────────────────
 
 export const STATE_CONFIG = Object.freeze({
   MAX_MESSAGES:            50,
-  CONTEXT_BREAK_THRESHOLD: 1_800_000 // 30 min gap triggers a context break marker in history
+  CONTEXT_BREAK_THRESHOLD: 1_800_000  // 30 min gap inserts a context break into history
 });
 
-// ============================================================================
-// RESOURCE INTERVALS
-// ============================================================================
+// ── RESOURCE INTERVALS ───────────────────────────────────────────────────────
 
 export const RESOURCE_CONFIG = Object.freeze({
-  STATE_SAVE_INTERVAL: 300_000,  // 5 minutes — periodic state flush to DB
-  STATS_LOG_INTERVAL:  900_000   // 15 minutes — API key statistics log
+  STATE_SAVE_INTERVAL: 300_000,  // 5 min
+  STATS_LOG_INTERVAL:  900_000   // 15 min
 });
 
-// ============================================================================
-// MIGRATION
-// ============================================================================
+// ── MIGRATION ────────────────────────────────────────────────────────────────
 
 export const MIGRATION_CONFIG = {
-  ENABLE_MIGRATION: false, // set true to trigger one-shot migration on next startup; auto-clears
+  ENABLE_MIGRATION: false, // set true once to run; auto-disables after completion
   BATCH_SIZE:       50,
   BATCH_DELAY_MS:   100
 };
 
-// ============================================================================
-// POLL
-// ============================================================================
+// ── POLL ─────────────────────────────────────────────────────────────────────
 
 export const POLL_CONFIG = Object.freeze({
   maxPollsPerMinute:   3,
@@ -165,16 +157,14 @@ export const POLL_CONFIG = Object.freeze({
   minVotesForAnalysis: 1
 });
 
-// ============================================================================
-// DATABASE — CONNECTION
-// ============================================================================
+// ── DATABASE ─────────────────────────────────────────────────────────────────
 
 export const DB_CONNECTION_CONFIG = Object.freeze({
-  MAX_POOL_SIZE:               3,    // Render free tier — keep low
+  MAX_POOL_SIZE:               3,  // keep low on Render free tier
   MIN_POOL_SIZE:               1,
   SERVER_SELECTION_TIMEOUT_MS: 5_000,
   SOCKET_TIMEOUT_MS:           30_000,
-  MAX_IDLE_TIME_MS:            60_000, // aggressively close idle sockets
+  MAX_IDLE_TIME_MS:            60_000,
   RETRY_WRITES:                true,
   W:                           'majority'
 });
@@ -188,77 +178,66 @@ export const DB_RETRY_CONFIG = Object.freeze({
 export const DB_VECTOR_SEARCH_CONFIG = Object.freeze({
   INDEX_NAME:                'vector_index',
   PATH:                      'embedding',
-  NUM_CANDIDATES_MULTIPLIER: 10,   // halved from 20 for sub-3s latency on Render free tier
+  NUM_CANDIDATES_MULTIPLIER: 10,
   DEFAULT_LIMIT:             4,
-  SCORE_THRESHOLD:           0.72  // drop results below this similarity score
+  SCORE_THRESHOLD:           0.72
 });
 
-// ============================================================================
-// MEMORY — SYSTEM (RAG retrieval facade)
-// ============================================================================
+// ── MEMORY SYSTEM ────────────────────────────────────────────────────────────
 
-export const MEMORY_RECENT_WINDOW  = 10;       // recent messages kept in context (not vector-indexed)
-export const MEMORY_MAX_RAG_RESULTS = 3;        // max vector search hits injected into prompt
-export const MEMORY_SCORE_THRESHOLD = 0.72;    // aligned with DB_VECTOR_SEARCH_CONFIG.SCORE_THRESHOLD
-export const MEMORY_TIME_GAP_MS     = 30_000;  // gap triggering a TIME ELAPSED marker in history
-export const MEMORY_MAX_INLINE_CTX  = 1500;    // drop context blocks larger than this (chars)
+export const MEMORY_RECENT_WINDOW   = 10;    // messages kept in live context, not indexed
+export const MEMORY_MAX_RAG_RESULTS = 3;     // max vector hits injected per prompt
+export const MEMORY_SCORE_THRESHOLD = 0.72;  // min similarity to include a RAG result
+export const MEMORY_TIME_GAP_MS     = 30_000; // gap that inserts a TIME ELAPSED marker
+export const MEMORY_MAX_INLINE_CTX  = 1500;  // drop context blocks larger than this (chars)
 
-// ============================================================================
-// MEMORY — CACHE (L1 in-process query deduplication)
-// ============================================================================
+// ── MEMORY CACHE ─────────────────────────────────────────────────────────────
 
-export const MEMORY_CACHE_TTL_MS        = 2 * 60 * 1000; // 2 minutes
+export const MEMORY_CACHE_TTL_MS        = 2 * 60 * 1000;
 export const MEMORY_CACHE_MAX_SIZE      = 200;
 export const MEMORY_CACHE_MIN_QUERY_LEN = 10;
-/** Semantic similarity threshold for cache hits — tight enough to avoid false positives. */
-export const MEMORY_CACHE_SEMANTIC_SIM  = 0.92;
+export const MEMORY_CACHE_SEMANTIC_SIM  = 0.92; // min cosine similarity for a cache hit
 
-// ============================================================================
-// MEMORY — STORE (background chunking / indexing)
-// ============================================================================
+// ── MEMORY STORE ─────────────────────────────────────────────────────────────
 
 export const MEMORY_CHUNK_SIZE            = 8;
 export const MEMORY_CHUNK_OVERLAP         = 2;
-export const MEMORY_INDEX_BATCH_SIZE      = 3;             // parallel embedding requests per cycle
-export const MEMORY_PERSONAL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes — TTL for personal data cache
+export const MEMORY_INDEX_BATCH_SIZE      = 3;  // parallel embedding calls per indexing cycle
+export const MEMORY_PERSONAL_CACHE_TTL_MS = 5 * 60 * 1000;
 
-// ============================================================================
-// MEMORY — CLUSTER ENGINE (K-means++ hierarchical search)
-// RAM budget: each embedding ≈ 12 KB; 300 × 15 users ≈ 54 MB — safe for 512 MB deployments.
-// ============================================================================
+// ── CLUSTER ENGINE ───────────────────────────────────────────────────────────
+// RAM budget: 300 embeddings × 12 KB × 15 users ≈ 54 MB. Don't raise CLUSTER_SAMPLE without checking RAM.
 
-export const CLUSTER_MAX                 = 20;
-export const CLUSTER_NUM_BASELINE        = 5;
-export const CLUSTER_MIN_MEMORIES        = 150;    // start clustering after this many entries
-export const CLUSTER_TOP_TO_SEARCH       = 2;
-export const CLUSTER_MIN_SIMILARITY      = 0.45;
-export const CLUSTER_REINDEX_INTERVAL    = 150;    // rebuild clusters every N new memories
-export const CLUSTER_MAX_KMEANS_ITERS    = 10;
+export const CLUSTER_MAX                  = 20;
+export const CLUSTER_NUM_BASELINE         = 5;
+export const CLUSTER_MIN_MEMORIES         = 150;  // minimum entries before clustering starts
+export const CLUSTER_TOP_TO_SEARCH        = 2;
+export const CLUSTER_MIN_SIMILARITY       = 0.45;
+export const CLUSTER_REINDEX_INTERVAL     = 150;
+export const CLUSTER_MAX_KMEANS_ITERS     = 10;
 export const CLUSTER_CONVERGENCE_THRESHOLD = 0.001;
-export const CLUSTER_CACHE_TTL_MS        = 15 * 60 * 1000;
-export const CLUSTER_MAX_PER_CLUSTER     = 8;
-export const CLUSTER_EMBEDDINGS_TTL_MS   = 2 * 60 * 1000; // short TTL so new memories appear quickly
+export const CLUSTER_CACHE_TTL_MS         = 15 * 60 * 1000;
+export const CLUSTER_MAX_PER_CLUSTER      = 8;
+export const CLUSTER_EMBEDDINGS_TTL_MS    = 2 * 60 * 1000;
 
 export const CLUSTER_EMBEDDING_LIMITS = Object.freeze({
-  CLUSTER_SAMPLE:       300, // stratified time-bucket sample; do NOT raise without RAM analysis
+  CLUSTER_SAMPLE:       300,
   CLUSTER_TIME_BUCKETS: 6,
-  FALLBACK_SEARCH:      30   // emergency fallback when $vectorSearch index is down
+  FALLBACK_SEARCH:      30  // used when $vectorSearch index is unavailable
 });
 
-// ============================================================================
-// MEMORY — EMBEDDING SERVICE
-// ============================================================================
+// ── EMBEDDING SERVICE ────────────────────────────────────────────────────────
 
 export const EMBEDDING_MODEL            = 'gemini-embedding-2-preview';
-export const EMBEDDING_CACHE_MAX_SIZE   = 50;             // hot in-process LRU window
+export const EMBEDDING_CACHE_MAX_SIZE   = 50;
 export const EMBEDDING_MAX_CONCURRENT   = 3;
 export const EMBEDDING_DIM              = 768;
-export const EMBEDDING_MRL_SHORT_DIM    = 256;            // fast centroid search
-export const EMBEDDING_MRL_CENTROID_DIM = 64;             // K-means first-pass scoring
-export const EMBEDDING_REDIS_TTL        = 24 * 60 * 60;  // 24h — embeddings are deterministic
+export const EMBEDDING_MRL_SHORT_DIM    = 256;  // truncated dim for fast centroid search
+export const EMBEDDING_MRL_CENTROID_DIM = 64;   // truncated dim for K-means first pass
+export const EMBEDDING_REDIS_TTL        = 24 * 60 * 60; // 24h; embeddings are deterministic
 export const EMBEDDING_REDIS_PREFIX     = 'lumin:emb:';
 
-// Per-modality feature flags (gemini-embedding-2-preview model constraints)
+// PDF/video/audio embedding disabled — not needed and saves quota
 export const EMBEDDING_ENABLE_PDF   = false;
 export const EMBEDDING_ENABLE_VIDEO = false;
 export const EMBEDDING_ENABLE_AUDIO = false;
@@ -282,9 +261,7 @@ export const EMBEDDING_AUDIO_LIMIT = Object.freeze({
   MIME_TYPES: new Set(['audio/mpeg', 'audio/wav', 'audio/x-wav'])
 });
 
-// ============================================================================
-// UTILS
-// ============================================================================
+// ── UTILS ────────────────────────────────────────────────────────────────────
 
 export const UPLOAD_CONFIG = Object.freeze({
   SITE_URL:    'https://bin.mudfish.net',
@@ -298,9 +275,7 @@ export const MESSAGE_FETCH_CONFIG = Object.freeze({
   DEFAULT_COUNT:  1
 });
 
-// ============================================================================
-// DEFAULT EXPORT
-// ============================================================================
+// ── DEFAULT EXPORT ───────────────────────────────────────────────────────────
 
 export default {
   BOT_CONFIG,
