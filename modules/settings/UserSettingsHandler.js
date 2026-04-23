@@ -19,8 +19,8 @@ import * as db     from '../../database.js';
 import { Logger }  from '../../core/Logger.js';
 import { Embeds }  from '../shared/embedBuilder.js';
 
-const logger     = Logger.get('UserSettings');
-const DEFAULT_BLACK = 0x000000;
+const logger = Logger.get('UserSettings');
+// Embed color fallback uses BOT_CONFIG.HEX_COLOUR ('#5B7C99') for brand consistency.
 
 // ============================================================================
 // PERSIST HELPERS
@@ -52,9 +52,8 @@ async function persistChatHistory(id) {
 
 // ============================================================================
 // AUTO-DELETE HELPER
-// BUG FIX: original registered a new 5-min timer on every update() call too,
-// creating dozens of overlapping timers on the same interaction.
-// Now only registered on first reply (isUpdate === false).
+// Timer registered only on first reply (isUpdate === false) to avoid multiple
+// overlapping timers on the same interaction.
 // ============================================================================
 
 function scheduleAutoDelete(interaction, isUpdate) {
@@ -222,7 +221,7 @@ export async function showUserSettingsPage2(interaction, isUpdate = false) {
   const userId      = interaction.user.id;
   const userSettings = state.userSettings[userId] || {};
   const continuousReply   = userSettings.continuousReply ?? true;
-  const embedColor        = userSettings.embedColor || DEFAULT_BLACK;
+  const embedColor        = userSettings.embedColor || BOT_CONFIG.HEX_COLOUR;
   const hasPersonality    = !!userSettings.customPersonality;
 
   const continuousReplySelect = new StringSelectMenuBuilder()
@@ -280,7 +279,7 @@ export async function showUserSettingsPage2(interaction, isUpdate = false) {
 export async function showUserSettingsPage3(interaction, isUpdate = false) {
   const userId      = interaction.user.id;
   const userSettings = state.userSettings[userId] || {};
-  const embedColor   = userSettings.embedColor || DEFAULT_BLACK;
+  const embedColor   = userSettings.embedColor || BOT_CONFIG.HEX_COLOUR;
 
   const clearMemBtn = new ButtonBuilder()
     .setCustomId('clear_user_memory').setLabel('Clear Memory').setEmoji('🧹').setStyle(ButtonStyle.Danger);
@@ -339,7 +338,7 @@ export async function downloadUserConversation(interaction) {
     });
   }
 
-  // BUG FIX: original accessed `entry.parts` — history stores `entry.content`
+  // entry.content is the canonical field; entry.parts is the legacy shape — handle both.
   const conversationText = conversationHistory.map(entry => {
     const role    = entry.role === 'user' ? '[User]' : '[Model]';
     const content = (entry.content || entry.parts || [])

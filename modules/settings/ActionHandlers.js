@@ -232,9 +232,8 @@ export async function downloadMessage(interaction) {
 
 // ============================================================================
 // DELETE MESSAGE
-// BUG FIX: original `deleteMsg()` was declared at module scope with dangling
-// references to `interaction`, `channel`, `message` — all undefined outside a
-// function body. Replaced with a clean inline implementation.
+// Only the user who triggered the response may delete it — enforced via
+// userId encoded in the button custom ID.
 // ============================================================================
 
 /**

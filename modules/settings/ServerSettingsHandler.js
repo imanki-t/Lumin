@@ -22,8 +22,8 @@ import * as db    from '../../database.js';
 import { Logger } from '../../core/Logger.js';
 import { Embeds } from '../shared/embedBuilder.js';
 
-const logger      = Logger.get('ServerSettings');
-const DEFAULT_BLACK = 0x000000;
+const logger = Logger.get('ServerSettings');
+// Embed color fallback uses BOT_CONFIG.HEX_COLOUR ('#5B7C99') for brand consistency.
 
 // ============================================================================
 // HELPERS
@@ -147,7 +147,7 @@ export async function showServerSettingsPage2(interaction, isUpdate = false) {
 
   const guildId              = interaction.guild.id;
   const ss                   = state.serverSettings[guildId] || {};
-  const embedColor           = ss.embedColor            || DEFAULT_BLACK;
+  const embedColor           = ss.embedColor            || BOT_CONFIG.HEX_COLOUR;
   const overrideUserSettings = ss.overrideUserSettings  || false;
   const continuousReply      = ss.continuousReply       || false;
   const serverChatHistory    = ss.serverChatHistory     || false;
@@ -219,7 +219,7 @@ export async function showServerSettingsPage3(interaction, isUpdate = false) {
 
   const guildId      = interaction.guild.id;
   const ss           = state.serverSettings[guildId] || {};
-  const embedColor   = ss.embedColor        || DEFAULT_BLACK;
+  const embedColor   = ss.embedColor        || BOT_CONFIG.HEX_COLOUR;
   const hasPersonality = !!ss.customPersonality;
 
   const colorBtn = new ButtonBuilder()
@@ -266,7 +266,7 @@ export async function showServerSettingsPage4(interaction, isUpdate = false) {
 
   const guildId        = interaction.guild.id;
   const ss             = state.serverSettings[guildId] || {};
-  const embedColor     = ss.embedColor      || DEFAULT_BLACK;
+  const embedColor     = ss.embedColor      || BOT_CONFIG.HEX_COLOUR;
   const allowedChannels = ss.allowedChannels || [];
 
   const manageBtn = new ButtonBuilder()
@@ -315,7 +315,7 @@ export async function showServerSettingsPage5(interaction, isUpdate = false) {
 
   const guildId    = interaction.guild.id;
   const ss         = state.serverSettings[guildId] || {};
-  const embedColor = ss.embedColor || DEFAULT_BLACK;
+  const embedColor = ss.embedColor || BOT_CONFIG.HEX_COLOUR;
 
   const clearBtn = new ButtonBuilder()
     .setCustomId('clear_server_memory').setLabel('Clear Memory').setEmoji('🧹').setStyle(ButtonStyle.Danger);
@@ -359,7 +359,7 @@ export async function showChannelManagementMenu(interaction, isUpdate = false) {
   const guildId        = interaction.guild.id;
   const ss             = state.serverSettings[guildId] || {};
   const allowedChannels = ss.allowedChannels || [];
-  const embedColor     = ss.embedColor || DEFAULT_BLACK;
+  const embedColor     = ss.embedColor || BOT_CONFIG.HEX_COLOUR;
 
   const channelSelect = new ChannelSelectMenuBuilder()
     .setCustomId('channel_manage_select')
