@@ -10,7 +10,7 @@ import path from 'path';
 import {
   client,
   state,
-  requestQueues,          // BUG FIX: was state.requestQueues throughout original
+  requestQueues,
   BOT_CONFIG,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_USER_SETTINGS
@@ -474,7 +474,6 @@ export async function handleBatchedMessages(queuedMessages) {
  * @param {string} userId
  */
 export async function processUserQueue(userId) {
-  // BUG FIX: original used state.requestQueues — now uses direct import
   const userQueueData = requestQueues.get(userId);
   if (!userQueueData) return;
 
