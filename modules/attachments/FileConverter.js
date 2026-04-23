@@ -45,12 +45,8 @@ function ffmpegPromise(cmd) {
 // ============================================================================
 
 /**
- * Polls the Gemini Files API until a video file transitions out of PROCESSING
- * state. Throws if the file fails or if max polling attempts are exceeded.
- *
- * BUG FIX: original fell through silently when still PROCESSING after
- * MAX_ATTEMPTS — now throws a timeout error so the caller can handle it.
- *
+ * Polls the Gemini Files API until a video file transitions out of PROCESSING state.
+ * Throws on FAILED state or timeout — callers must handle both.
  * @param {string} fileName - Gemini file resource name (e.g. "files/abc123")
  * @returns {Promise<void>}
  * @throws {Error} on FAILED state or timeout
@@ -69,7 +65,7 @@ export async function waitForVideoProcessing(fileName) {
     throw new Error(ERROR_MESSAGES.VIDEO_PROCESSING_FAILED);
   }
 
-  // BUG FIX: cover the "still processing after timeout" case
+  // Any state other than SUCCESS after the loop means processing timed out.
   if (file.state !== FILE_STATES.SUCCESS) {
     throw new Error(ERROR_MESSAGES.VIDEO_PROCESSING_TIMEOUT);
   }

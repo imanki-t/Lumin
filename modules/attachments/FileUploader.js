@@ -14,8 +14,6 @@ import axios            from 'axios';
 import { genAI, TEMP_DIR, createPartFromUri } from '../../managers/BotManager.js';
 import { Logger }       from '../../core/Logger.js';
 
-// BUG FIX: was a dynamic import('./utils.js') inside processTextExtraction on
-// every call — now a static top-level import
 import { downloadAndReadFile } from '../../utils.js';
 
 import {
@@ -70,10 +68,7 @@ async function cleanupFiles(...filePaths) {
 /**
  * Handles animated GIF / sticker / emoji.
  * Primary path: convert to MP4 and upload. Fallback: extract first frame as PNG.
- *
- * BUG FIX: catch block now attempts to clean up any partial MP4 that
- * convertGifToVideo may have created before throwing.
- *
+ * Partial MP4 files created before a conversion error are cleaned up in the catch block.
  * @param {string} filePath
  * @param {string} sanitizedFileName
  * @param {object} attachment - Discord attachment / pseudo-attachment
@@ -113,7 +108,7 @@ async function processAnimatedContent(filePath, sanitizedFileName, attachment) {
   } catch (gifError) {
     logger.warn(`GIF-to-video failed, falling back to PNG frame: ${gifError.message}`);
 
-    // BUG FIX: clean up partial mp4 if it was created before the error
+    // Clean up partial mp4 that convertGifToVideo may have created before throwing.
     await cleanupFiles(expectedMp4).catch(() => {});
 
     const pngFilePath  = await convertGifToPng(filePath);
