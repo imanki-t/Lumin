@@ -372,48 +372,6 @@ export async function getAllRealiveConfigs() {
   }
 }
 
-
-// ============================================================================
-// BIRTHDAYS
-// ============================================================================
-
-/** @param {string} userId @param {Object} data */
-export async function saveBirthday(userId, data) {
-  try {
-    await getCollection(COLLECTIONS.BIRTHDAYS).updateOne(
-      { userId },
-      { $set: { userId, ...data, updatedAt: new Date() } },
-      { upsert: true }
-    );
-  } catch (error) {
-    logger.error('Error saving birthday', error);
-    throw error;
-  }
-}
-
-/** @returns {Promise<Object>} Map of userId → birthday data */
-export async function getAllBirthdays() {
-  try {
-    const docs = await getCollection(COLLECTIONS.BIRTHDAYS).find({}).toArray();
-    const result = {};
-    docs.forEach(({ userId, _id, updatedAt, ...rest }) => { result[userId] = rest; });
-    return result;
-  } catch (error) {
-    logger.error('Error getting birthdays', error);
-    return {};
-  }
-}
-
-/** @param {string} userId */
-export async function deleteBirthday(userId) {
-  try {
-    await getCollection(COLLECTIONS.BIRTHDAYS).deleteOne({ userId });
-  } catch (error) {
-    logger.error('Error deleting birthday', error);
-    throw error;
-  }
-}
-
 // ============================================================================
 // REMINDERS
 // ============================================================================
