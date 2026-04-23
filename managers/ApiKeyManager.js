@@ -23,6 +23,13 @@ import { Logger } from '../core/Logger.js';
 
 const logger = Logger.get('ApiKeyManager');
 
+// Strip any 39+ char alphanumeric sequences from error messages — these are the
+// shape of Google API keys. Prevents accidental key exposure in log sinks.
+function sanitizeErrorMessage(msg) {
+  if (typeof msg !== 'string') return String(msg);
+  return msg.replace(/[A-Za-z0-9_-]{39,}/g, '[REDACTED]');
+}
+
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
@@ -615,7 +622,7 @@ export async function withRetryPerModel(apiCall, initialModelName) {
       logger.warn(
         `Attempt ${totalAttempts}/${maxTotal} ` +
         `(Key ${currentKeyIdx + 1}, Try ${keyTries}/${RETRY_STRATEGY.MAX_ATTEMPTS_PER_KEY}) ` +
-        `failed: ${error.message}`
+        `failed: ${sanitizeErrorMessage(error.message)}`
       );
 
       const isRateLimit =
@@ -680,7 +687,7 @@ export async function withRetryPerModel(apiCall, initialModelName) {
 
       if (totalAttempts >= maxTotal) {
         throw new Error(
-          `All ${maxTotal} retry attempts exhausted. Last error: ${error.message}`
+          `All ${maxTotal} retry attempts exhausted. Last error: ${sanitizeErrorMessage(error.message)}`
         );
       }
 

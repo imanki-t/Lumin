@@ -29,7 +29,10 @@ import {
   resetSummaryUsage,
   resetDailyMessageUsage
 } from './QueueManager.js';
-import { DEFAULT_MODEL } from '../modules/config.js';
+import {
+  DEFAULT_MODEL, BOT_CONFIG, STATE_CONFIG,
+  MIGRATION_CONFIG, POLL_CONFIG
+} from './config.js';
 
 const logger = Logger.get('StateManager');
 
@@ -40,12 +43,7 @@ const __dirname  = path.dirname(__filename);
 // CONFIGURATION
 // ============================================================================
 
-/** @readonly */
-export const BOT_CONFIG = Object.freeze({
-  DEFAULT_RESPONSE_FORMAT: 'Normal',
-  HEX_COLOUR:  '#5B7C99', // Soft Nordic blue
-  WORK_IN_DMS: true
-});
+// BOT_CONFIG, STATE_CONFIG, MIGRATION_CONFIG, POLL_CONFIG imported from ./config.js
 
 /** Default settings applied to new servers. @readonly */
 export const DEFAULT_SERVER_SETTINGS = Object.freeze({
@@ -72,31 +70,7 @@ export const DEFAULT_USER_SETTINGS = Object.freeze({
   gemmaEnabled:      false
 });
 
-/** Poll feature configuration. @readonly */
-export const POLL_CONFIG = Object.freeze({
-  maxPollsPerMinute:   3,
-  maxResultsPerMinute: 5,
-  autoRespondToPolls:  true,
-  minVotesForAnalysis: 1
-});
-
-/**
- * Migration configuration.
- * Set `ENABLE_MIGRATION` to `true` to trigger a one-shot settings migration
- * on next startup.  The process auto-disables itself on completion.
- */
-const MIGRATION_CONFIG = {
-  ENABLE_MIGRATION: false,
-  BATCH_SIZE:       50,
-  BATCH_DELAY_MS:   100
-};
-
-export { MIGRATION_CONFIG };
-
-const STATE_CONFIG = Object.freeze({
-  MAX_MESSAGES:            50,
-  CONTEXT_BREAK_THRESHOLD: 1_800_000, // 30 minutes in ms
-});
+// POLL_CONFIG, MIGRATION_CONFIG, STATE_CONFIG imported from ./config.js — do not redefine here.
 
 // ============================================================================
 // BOT STATE

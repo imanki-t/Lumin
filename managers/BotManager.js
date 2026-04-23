@@ -67,6 +67,7 @@ import {
   POLL_CONFIG,
   MIGRATION_CONFIG
 } from './StateManager.js';
+import { RESOURCE_CONFIG } from './config.js';
 
 const logger = Logger.get('BotManager');
 
@@ -236,12 +237,7 @@ export function createPartFromUri(fileUri, mimeType) {
 // RESOURCE CONFIGURATION (intervals — kept here with initialize())
 // ============================================================================
 
-const RESOURCE_CONFIG = Object.freeze({
-  /** How often to auto-save state (ms). */
-  STATE_SAVE_INTERVAL:  300_000,  // 5 minutes
-  /** How often to log API key statistics (ms). */
-  STATS_LOG_INTERVAL:   900_000   // 15 minutes
-});
+// RESOURCE_CONFIG imported from ./config.js
 
 // ============================================================================
 // INITIALIZATION
@@ -306,17 +302,10 @@ export async function initialize() {
   // 6. Periodic API key statistics
   setInterval(() => {
     const stats = getApiKeyStats();
-    logger.info('API Key Statistics Report');
-    console.table(
-      stats.keys.map(k => ({
-        Key:      k.keyNumber,
-        Status:   k.status,
-        Requests: k.totalRequests,
-        Success:  k.successfulRequests,
-        Errors:   k.errors,
-        Current:  k.isCurrent ? '⭐' : ''
-      }))
-    );
+    const table = stats.keys
+      .map(k => `Key${k.keyNumber}[${k.status} req:${k.totalRequests} ok:${k.successfulRequests} err:${k.errors}${k.isCurrent ? ' *' : ''}]`)
+      .join(' | ');
+    logger.info(`API Key Stats: ${table}`);
   }, RESOURCE_CONFIG.STATS_LOG_INTERVAL);
 
   // 7. Compact startup log
@@ -373,9 +362,7 @@ async function gracefulShutdown(signal) {
   }
 }
 
-// NOTE: SIGINT/SIGTERM are intentionally NOT registered here.
-// They are registered in index.js, which also destroys the Discord client.
-// Registering in both places caused a double-shutdown race in the original code.
+// SIGINT/SIGTERM are registered only in index.js, which also destroys the Discord client.
 
 // ============================================================================
 // RE-EXPORT BARREL
