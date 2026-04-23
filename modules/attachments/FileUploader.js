@@ -13,6 +13,7 @@ import axios            from 'axios';
 
 import { genAI, TEMP_DIR, createPartFromUri } from '../../managers/BotManager.js';
 import { Logger }       from '../../core/Logger.js';
+import { isGemmaModel } from '../../modules/config.js';
 
 import { downloadAndReadFile } from '../../utils.js';
 
@@ -74,7 +75,28 @@ async function cleanupFiles(...filePaths) {
  * @param {object} attachment - Discord attachment / pseudo-attachment
  * @returns {Promise<Array>} Gemini parts array [text, fileData]
  */
-async function processAnimatedContent(filePath, sanitizedFileName, attachment) {
+async function processAnimatedContent(filePath, sanitizedFileName, attachment, gemma = false) {
+  // Gemma doesn't support video — skip MP4 conversion entirely, use PNG frame directly.
+  if (gemma) {
+    const pngFilePath  = await convertGifToPng(filePath);
+    const uploadResult = await genAI.files.upload({
+      file:   pngFilePath,
+      config: { mimeType: MIME_TYPES.PNG, displayName: sanitizedFileName.replace(/\.(gif|png|jpg|jpeg)$/i, '.png') }
+    });
+    await cleanupFiles(filePath, pngFilePath);
+
+    let metadata;
+    if (attachment.isSticker && attachment.isAnimated) {
+      metadata = `[${CONVERSION_MESSAGES.STICKER_TO_PNG}: ${attachment.name} (${MIME_TYPES.PNG})]`;
+    } else if (attachment.isEmoji && attachment.isAnimated) {
+      metadata = `[${CONVERSION_MESSAGES.EMOJI_TO_PNG}: :${attachment.emojiName}: (${MIME_TYPES.PNG})]`;
+    } else {
+      metadata = `[${CONVERSION_MESSAGES.GIF_TO_PNG}: ${sanitizedFileName} (${MIME_TYPES.PNG})]`;
+    }
+    return [{ text: metadata }, createPartFromUri(uploadResult.uri, uploadResult.mimeType)];
+  }
+
+  // Gemini — primary path: convert to MP4
   // Derive what the mp4 path will be (convertGifToVideo uses same pattern)
   const expectedMp4 = filePath.replace(/\.(gif|png|jpg|jpeg)$/i, '.mp4');
 
@@ -287,9 +309,10 @@ async function processTextExtraction(attachment, sanitizedFileName, fileExtensio
  * @param {string}  interactionId
  * @returns {Promise<object|Array>} Single text part on error, or [text, fileData] array on success
  */
-export async function processAttachment(attachment, userId, interactionId) {
+export async function processAttachment(attachment, userId, interactionId, modelName = '') {
   const contentType   = (attachment.contentType || '').toLowerCase();
   const fileExtension = path.extname(attachment.name).toLowerCase();
+  const gemma         = isGemmaModel(modelName);
 
   // Step 1 — reject unsupported types immediately (no download)
   if (isUnsupportedFile(fileExtension)) {
@@ -309,7 +332,7 @@ export async function processAttachment(attachment, userId, interactionId) {
       await downloadFile(attachment.url, filePath);
 
       if (isAnimatedContent(attachment, contentType, fileExtension)) {
-        return await processAnimatedContent(filePath, sanitizedFileName, attachment);
+        return await processAnimatedContent(filePath, sanitizedFileName, attachment, gemma);
       }
 
       return await processDirectUpload(filePath, sanitizedFileName, contentType, fileExtension);
