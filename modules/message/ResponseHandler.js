@@ -14,14 +14,15 @@ import {
   BOT_CONFIG,
   DEFAULT_USER_SETTINGS,
   TEMP_DIR,
-  switchToNextKey
+  switchToNextKey,
+  switchToNextKeyOrModel
 } from '../../managers/BotManager.js';
 import { Logger }  from '../../core/Logger.js';
 import { Embeds, addGroundingFields, addUrlContextFields, GOOGLE_AI_ICON } from '../shared/embedBuilder.js';
 import { executeFunctionCalls }         from '../functions/FunctionExecutor.js';
 import { getGenerationConfig, RATE_LIMIT_ERRORS, MODEL_FALLBACK_CHAIN, isGemmaModel } from '../../modules/config.js';
 import { extractFileText }              from './PromptBuilder.js';
-import { processPromptAndMediaAttachments } from './MediaHandler.js';
+import { processPromptAndMediaAttachments, classifyAttachments } from './MediaHandler.js';
 import { saveMessageHistory }           from './HistoryManager.js';
 import { addDownloadButton, addDeleteButton } from '../shared/buttonHandlers.js';
 
@@ -667,15 +668,16 @@ export async function handleModelResponse(
         }
 
         // ── API key rotation ─────────────────────────────────────────────
-        const rotated = switchToNextKey(error);
-        if (rotated && attempts > 0) {
+        const { keyRotated } = await switchToNextKeyOrModel(error, modelName);
+        if (keyRotated && attempts > 0) {
           typingManager.start(originalMessage.channel);
           try {
+            const { supported: filteredForModel } = classifyAttachments(allAttachments, modelName);
             const [cleanedHistory, reprocessedParts] = await Promise.all([
               Promise.resolve(cleanHistoryFiles(history)),
               (async () => {
                 const { finalPrompt, summaryParts } = await extractFileText(originalMessage, originalPrompt);
-                const updated = await processPromptAndMediaAttachments(finalPrompt, originalMessage, allAttachments, modelName);
+                const updated = await processPromptAndMediaAttachments(finalPrompt, originalMessage, filteredForModel, modelName);
                 if (summaryParts?.length) updated.push(...summaryParts);
                 return updated;
               })()
