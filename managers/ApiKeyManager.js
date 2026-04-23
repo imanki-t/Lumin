@@ -17,7 +17,7 @@ import {
   MODEL_FALLBACK_CHAIN, MODEL_CALL_THRESHOLDS, DEFAULT_MODEL,
   isGemmaModel, GEMMA_DAILY_LIMIT_PER_KEY,
   CYCLE_GEMMA_WITH_GEMINI, GEMMA_DEFAULT_MODEL, GEMMA_FALLBACK_MODEL, MODELS,
-  KEY_SWITCH_HOLD_MS
+  KEY_SWITCH_HOLD_MS, ENABLE_GEMMA
 } from '../modules/config.js';
 import { Logger } from '../core/Logger.js';
 
@@ -176,19 +176,31 @@ const keyCooldowns = new Map();
 const modelGlobalCallCounts = new Map();
 (MODEL_FALLBACK_CHAIN || []).forEach(m => modelGlobalCallCounts.set(m, 0));
 
-// ── Gemma cycle injection ─────────────────────────────────────────────────────
-// When CYCLE_GEMMA_WITH_GEMINI = true, append Gemma models to the end of the
-// fallback chain so the bot cycles into Gemma after all Gemini RPM is exhausted,
-// then back to Gemini. Gemma fallback is always appended last (lowest priority).
-if (CYCLE_GEMMA_WITH_GEMINI) {
+// ── Model chain setup ─────────────────────────────────────────────────────────
+// ENABLE_GEMMA=true  → Gemma-only; Gemini is never used.
+// CYCLE_GEMMA_WITH_GEMINI=true → Gemini first, Gemma appended as fallback.
+// Neither flag → Gemini-only (default chain from config).
+
+if (ENABLE_GEMMA) {
+  // Replace the chain entirely — only Gemma models allowed.
+  MODEL_FALLBACK_CHAIN.length = 0;
+  const gemmaModels = [
+    MODELS[GEMMA_DEFAULT_MODEL],
+    MODELS[GEMMA_FALLBACK_MODEL]
+  ].filter(Boolean);
+  MODEL_FALLBACK_CHAIN.push(...gemmaModels);
+  gemmaModels.forEach(m => modelGlobalCallCounts.set(m, 0));
+  logger.info(`ENABLE_GEMMA=true — Gemma-only chain: ${MODEL_FALLBACK_CHAIN.join(' → ')}`);
+
+} else if (CYCLE_GEMMA_WITH_GEMINI) {
+  // Gemini chain stays first; Gemma appended as last-resort fallback.
   const gemmaModels = [
     MODELS[GEMMA_DEFAULT_MODEL],
     MODELS[GEMMA_FALLBACK_MODEL]
   ].filter(m => m && !MODEL_FALLBACK_CHAIN.includes(m));
-
   MODEL_FALLBACK_CHAIN.push(...gemmaModels);
   gemmaModels.forEach(m => modelGlobalCallCounts.set(m, 0));
-  logger.info(`Gemma cycle enabled — fallback chain: ${MODEL_FALLBACK_CHAIN.join(' → ')}`);
+  logger.info(`CYCLE_GEMMA_WITH_GEMINI=true — chain: ${MODEL_FALLBACK_CHAIN.join(' → ')}`);
 }
 
 /**
