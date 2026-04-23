@@ -52,6 +52,7 @@ import {
   processMessageRoulette
 } from './commands/index.js';
 import { MAX_QUEUE_DEPTH_PER_USER, RAM_MEDIA_SUSPEND_THRESHOLD_MB } from './modules/config.js';
+import { scheduleWeeklySummaryJob } from './commands/summary/WeeklySummaryJob.js';
 
 const logger = Logger.get('Index');
 
@@ -129,10 +130,9 @@ mountDashboard(app, httpServer);
 // TEMP FILE CLEANUP
 // ============================================================================
 
-// BUG FIX: original had two identical functions (cleanupTempFiles + startupCleanup).
-// Both are replaced by the shared tempFileManager utility.
-cleanTemp().catch(() => {});                        // immediate startup clean
-startPeriodicCleanup(3_600_000, 3_600_000);         // hourly thereafter
+// Immediate startup clean + hourly periodic cleanup via shared tempFileManager.
+cleanTemp().catch(() => {});
+startPeriodicCleanup(3_600_000, 3_600_000);
 
 // ============================================================================
 // ACTIVITY ROTATION
@@ -262,7 +262,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // BUG FIX: original used state.requestQueues — now uses the direct import
     if (!requestQueues.has(userId)) {
       requestQueues.set(userId, { queue: [], isProcessing: false });
     }
@@ -330,11 +329,8 @@ client.on('interactionCreate', async (interaction) => {
 
 client.on('error', (error) => logger.error('Discord client error', error));
 client.on('warn',  (warn)  => logger.warn(`Discord client warning: ${warn}`));
-
-// BUG FIX: 'disconnect' and 'reconnecting' do NOT exist in Discord.js v14.
-// The v14 equivalents are handled internally by the library.
-// Removed:  client.on('disconnect', ...)
-// Removed:  client.on('reconnecting', ...)
+// Note: 'disconnect' and 'reconnecting' events do not exist in discord.js v14+.
+// Reconnection is handled internally by the library.
 
 // ============================================================================
 // COMMAND ROUTER
@@ -410,13 +406,8 @@ async function handleCommandInteraction(interaction) {
 // ============================================================================
 
 /**
- * BUG FIX: SIGINT/SIGTERM were registered in BOTH botManager.js AND here,
- * creating a double-shutdown race.  They are now registered ONLY here.
- * BotManager.js registers NONE (see managers/BotManager.js).
- *
- * This shutdown additionally destroys the Discord client, which the
- * BotManager version did not.
- *
+ * Graceful shutdown — saves state, destroys Discord client, exits cleanly.
+ * SIGINT/SIGTERM are registered only here (not in BotManager) to avoid double-shutdown.
  * @param {string} signal
  */
 async function gracefulShutdown(signal) {

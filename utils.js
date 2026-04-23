@@ -26,31 +26,52 @@ import { getTextExtractor }    from 'office-text-extractor';
 import { state, client, DEFAULT_SERVER_SETTINGS } from './managers/BotManager.js';
 import { replaceAllMentions }                      from './modules/shared/discordHelpers.js';
 import { Logger }                                  from './core/Logger.js';
+import {
+  UPLOAD_CONFIG,
+  MESSAGE_FETCH_CONFIG as MESSAGE_FETCH
+} from './modules/config.js';
 
 const logger = Logger.get('Utils');
 
 // ============================================================================
-// CONSTANTS
+// SECURITY: URL VALIDATION
+// Blocks SSRF by rejecting non-HTTP(S) protocols and private/loopback ranges.
+// Applied to all outbound fetch calls that accept caller-supplied URLs.
 // ============================================================================
 
-const UPLOAD_CONFIG = Object.freeze({
-  SITE_URL:    'https://bin.mudfish.net',
-  ENDPOINT:    '/api/text',
-  TTL_MINUTES: 10080,
-  TIMEOUT_MS:  3000
-});
+const SAFE_PROTOCOLS   = new Set(['http:', 'https:']);
+// Covers IPv4 loopback, private ranges (RFC1918), link-local, and IPv6 loopback.
+const BLOCKED_HOST_RE  = /^(localhost|127\.\d+\.\d+\.\d+|::1|0\.0\.0\.0|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+)$/i;
+const MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024; // 5 MB cap on plain-text downloads
+
+/**
+ * Validate a URL is safe for outbound requests.
+ * Throws on invalid URL, non-HTTP(S) protocol, or private/loopback hosts.
+ * @param {string} url
+ * @returns {URL} Parsed URL object
+ */
+function validateOutboundUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid URL: ${url}`);
+  }
+  if (!SAFE_PROTOCOLS.has(parsed.protocol)) {
+    throw new Error(`Disallowed protocol "${parsed.protocol}" in URL`);
+  }
+  if (BLOCKED_HOST_RE.test(parsed.hostname)) {
+    throw new Error(`Blocked hostname "${parsed.hostname}" — private/loopback addresses are not allowed`);
+  }
+  return parsed;
+}
 
 const DISCORD_LINK_REGEX =
   /https?:\/\/(?:www\.)?discord\.com\/channels\/(\d+)\/(\d+)\/(\d+)/;
 
-const MESSAGE_FETCH = Object.freeze({
-  MAX_ADDITIONAL: 99,
-  DEFAULT_COUNT:  1
-});
-
 const PERMISSIONS = Object.freeze({
-  VIEW_CHANNEL:  PermissionsBitField.Flags.ViewChannel,
-  READ_HISTORY:  PermissionsBitField.Flags.ReadMessageHistory
+  VIEW_CHANNEL: PermissionsBitField.Flags.ViewChannel,
+  READ_HISTORY: PermissionsBitField.Flags.ReadMessageHistory
 });
 
 const ERR = Object.freeze({
@@ -121,6 +142,13 @@ export function initializeBlacklistForGuild(guildId) {
  * @param {string} text
  * @returns {Promise<string>}
  */
+/**
+ * Upload `text` to bin.mudfish.net and return a `\n🔗 URL: …` suffix string.
+ * The paste site's response `tid` is validated to contain only safe characters
+ * before being embedded in a URL, preventing open-redirect via a malicious tid.
+ * @param {string} text
+ * @returns {Promise<string>}
+ */
 export async function uploadText(text) {
   try {
     const response = await axios.post(
@@ -128,8 +156,13 @@ export async function uploadText(text) {
       { text, ttl: UPLOAD_CONFIG.TTL_MINUTES },
       { timeout: UPLOAD_CONFIG.TIMEOUT_MS }
     );
-    const url = `${UPLOAD_CONFIG.SITE_URL}/t/${response.data.tid}`;
-    return `\n🔗 URL: ${url}`;
+    const tid = response.data?.tid;
+    // Validate tid is a safe alphanumeric token before using in URL construction.
+    if (!tid || !/^[\w-]{1,64}$/.test(String(tid))) {
+      logger.warn('uploadText: received unexpected tid format from paste service');
+      return `\n❌ ${ERR.UPLOAD_FAILED}`;
+    }
+    return `\n🔗 URL: ${UPLOAD_CONFIG.SITE_URL}/t/${tid}`;
   } catch (error) {
     logger.error('uploadText error', error);
     return `\n❌ ${ERR.UPLOAD_FAILED}`;
@@ -319,7 +352,18 @@ export async function fetchMessagesForSummary(_message, messageLink, count = MES
  * @param {string} fileType  - e.g. '.docx', '.txt'
  * @returns {Promise<string>}
  */
+/**
+ * Download a file from `url` and return its text content.
+ * Supports `.pptx`/`.docx` via office-text-extractor, plain text otherwise.
+ * FIX: `validateOutboundUrl` blocks private/loopback SSRF targets.
+ * FIX: plain-text downloads are capped at MAX_DOWNLOAD_BYTES to prevent OOM.
+ * @param {string} url
+ * @param {string} fileType — e.g. '.docx', '.txt'
+ * @returns {Promise<string>}
+ */
 export async function downloadAndReadFile(url, fileType) {
+  validateOutboundUrl(url); // throws on unsafe URLs
+
   if (OFFICE_EXTENSIONS.has(fileType)) {
     const extractor = getTextExtractor();
     return await extractor.extractText({ input: url, type: 'url' });
@@ -329,7 +373,18 @@ export async function downloadAndReadFile(url, fileType) {
   if (!response.ok) {
     throw new Error(`${ERR.DOWNLOAD_FAIL} ${response.statusText}`);
   }
-  return await response.text();
+
+  // Guard against oversized responses filling Node.js RAM.
+  const contentLength = Number(response.headers.get('content-length') ?? 0);
+  if (contentLength > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`${ERR.DOWNLOAD_FAIL}: response too large (${contentLength} bytes)`);
+  }
+
+  const text = await response.text();
+  if (text.length > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`${ERR.DOWNLOAD_FAIL}: decoded content exceeds size limit`);
+  }
+  return text;
 }
 
 // ============================================================================
