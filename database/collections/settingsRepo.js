@@ -1,12 +1,11 @@
 /**
- * @fileoverview Settings repository — user settings, server settings,
- *               custom instructions, blacklisted users, channel settings,
- *               active users in channels, and user response preferences.
+ * @fileoverview Settings repository — user/server settings, custom instructions,
+ *               blacklisted users, channel settings, active users, and response preferences.
  * @module database/collections/settingsRepo
  */
 
-import { Logger }              from '../../core/Logger.js';
-import { COLLECTIONS, getCollection } from '../connection.js';
+import { Logger }                                        from '../../core/Logger.js';
+import { COLLECTIONS, getCollection, isSafeFieldName }   from '../connection.js';
 
 const logger = Logger.get('SettingsRepo');
 
@@ -194,6 +193,11 @@ export async function getAllBlacklistedUsers() {
 
 /** @param {string} channelId @param {string} settingType @param {*} value */
 export async function saveChannelSetting(channelId, settingType, value) {
+  // Guard: reject field names that could be MongoDB operator keys or path traversals.
+  if (!isSafeFieldName(settingType)) {
+    logger.warn(`saveChannelSetting: rejected unsafe settingType "${settingType}"`);
+    return;
+  }
   try {
     await getCollection(COLLECTIONS.CHANNEL_SETTINGS).updateOne(
       { channelId },
