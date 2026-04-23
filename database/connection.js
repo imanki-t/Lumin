@@ -6,44 +6,52 @@
 
 import { MongoClient } from 'mongodb';
 import { Logger }      from '../core/Logger.js';
+import {
+  DB_CONNECTION_CONFIG as CONNECTION_CONFIG,
+  DB_RETRY_CONFIG      as RETRY_CONFIG,
+  DB_VECTOR_SEARCH_CONFIG as VECTOR_SEARCH_CONFIG
+} from './config.js';
+
+// Re-export so existing importers (vectorSearch.js etc.) keep working without changes.
+export { CONNECTION_CONFIG, RETRY_CONFIG, VECTOR_SEARCH_CONFIG };
 
 const logger = Logger.get('Database');
 
 // ============================================================================
-// CONFIGURATION
+// SECURITY HELPERS
 // ============================================================================
 
-/** MongoDB driver connection pool settings. */
-export const CONNECTION_CONFIG = Object.freeze({
-  MAX_POOL_SIZE:                3,   // Render free tier: keep low
-  MIN_POOL_SIZE:                1,
-  SERVER_SELECTION_TIMEOUT_MS:  5_000,
-  SOCKET_TIMEOUT_MS:            30_000,
-  MAX_IDLE_TIME_MS:             60_000,  // Aggressively close idle sockets
-  RETRY_WRITES:                 true,
-  W:                            'majority'
-});
-
-/** Retry config for initial connection attempts. */
-export const RETRY_CONFIG = Object.freeze({
-  MAX_ATTEMPTS:   3,
-  BASE_DELAY_MS:  1_000,
-  MAX_DELAY_MS:   5_000
-});
-
-/** Atlas Vector Search settings. */
-export const VECTOR_SEARCH_CONFIG = Object.freeze({
-  INDEX_NAME:                'vector_index',
-  PATH:                      'embedding',
-  NUM_CANDIDATES_MULTIPLIER: 10,  // Was 20 — halved for sub-3s on Render free tier
-  DEFAULT_LIMIT:             4,   // Was 5 — 4 results plenty, saves one doc parse
-  SCORE_THRESHOLD:           0.72 // Skip results below this similarity score
-});
-
-/** Canonical collection name registry.
- *  BUG FIX: added QUOTE_USAGE — saveQuoteUsage/getQuoteUsage previously used
- *  a raw 'quoteUsage' string literal instead of this constant.
+/**
+ * Strip any top-level keys beginning with '$' from a plain object before it
+ * reaches a MongoDB $set or insertOne call. Prevents NoSQL operator injection
+ * if a caller accidentally spreads user-controlled data into a write operation.
+ * Does NOT recurse into nested objects — shallow sanitisation is sufficient
+ * because MongoDB only evaluates top-level operator keys.
+ *
+ * @param {Object} obj
+ * @returns {Object} Safe copy with operator keys removed
  */
+export function sanitizeDoc(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj ?? {};
+  const safe = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (!k.startsWith('$')) safe[k] = v;
+  }
+  return safe;
+}
+
+/**
+ * Validate that a field name is safe to use as a dynamic MongoDB key.
+ * Rejects anything that starts with '$' or contains a dot (path injection).
+ *
+ * @param {string} fieldName
+ * @returns {boolean}
+ */
+export function isSafeFieldName(fieldName) {
+  return typeof fieldName === 'string' && !fieldName.startsWith('$') && !fieldName.includes('.');
+}
+
+/** Canonical collection name registry. All repository modules import from here. */
 export const COLLECTIONS = Object.freeze({
   USER_SETTINGS:        'userSettings',
   SERVER_SETTINGS:      'serverSettings',
@@ -65,7 +73,7 @@ export const COLLECTIONS = Object.freeze({
   USER_RESPONSE_PREF:   'userResponsePreference',
   REALIVE:              'realive',
   SUMMARY_USAGE:        'summaryUsage',
-  QUOTE_USAGE:          'quoteUsage',  // BUG FIX: was missing
+  QUOTE_USAGE:          'quoteUsage',
   USER_FACTS:           'userFacts',
   WEEKLY_SUMMARIES:     'weeklySummaries',
   DAILY_MSG_USAGE:      'dailyMsgUsage'
@@ -86,9 +94,7 @@ const collectionCache = new Map();
 
 /**
  * Tracks whether background index creation has been scheduled for the current
- * connection. Reset in closeDB so a reconnect will re-schedule it.
- * BUG FIX: original never reset this flag, so after a disconnect+reconnect
- * indexes were never re-registered.
+ * connection. Reset in closeDB so a reconnect re-schedules index creation.
  */
 export let indexesCreated = false;
 export function setIndexesCreated(v) { indexesCreated = v; }
@@ -99,10 +105,8 @@ export function setIndexesCreated(v) { indexesCreated = v; }
 
 /**
  * Connect to MongoDB. Returns the existing connection if healthy.
- * BUG FIX: original returned the stale `db` reference without checking whether
- * the underlying connection was still alive after a network drop. Now runs a
- * lightweight ping before returning the cached handle.
- *
+ * Pings the server before returning a cached handle — catches stale connections
+ * after network drops without waiting for the next operation to fail.
  * @returns {Promise<import('mongodb').Db>}
  * @throws {Error} If all retry attempts fail
  */
@@ -184,7 +188,7 @@ export async function closeDB() {
     await client.close();
     client         = null;
     db             = null;
-    indexesCreated = false;  // BUG FIX: allow re-registration on reconnect
+    indexesCreated = false; // reset so a subsequent connectDB re-registers indexes
     collectionCache.clear();
     logger.info('MongoDB connection closed');
   } catch (error) {
