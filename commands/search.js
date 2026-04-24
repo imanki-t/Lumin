@@ -127,21 +127,42 @@ function errorEmbed(color, title, description) {
 }
 
 /**
+ * googleSearch tool config that forces grounding on every request at the API level.
+ *
+ * dynamicRetrievalConfig.dynamicThreshold = 0 tells the Gemini API to always
+ * perform a Google Search regardless of whether the model thinks it's needed.
+ * Without this, the model can silently skip searching for queries it considers
+ * "known" — the system prompt instruction alone is not sufficient to prevent that.
+ *
+ * Gemma does not support dynamicRetrievalConfig, so it gets a plain googleSearch.
+ */
+const FORCED_GOOGLE_SEARCH = Object.freeze({
+  googleSearch: {
+    dynamicRetrievalConfig: {
+      mode:             'MODE_DYNAMIC',
+      dynamicThreshold: 0   // 0 = always search, 1 = never search, default ~0.3
+    }
+  }
+});
+
+const GEMMA_GOOGLE_SEARCH = Object.freeze({ googleSearch: {} });
+
+/**
  * Build tool config for a search request.
  * - googleSearch is ALWAYS included regardless of model — search command requires it.
- * - Gemma models: googleSearch only (no urlContext / codeExecution support).
- * - Gemini models: googleSearch + urlContext, plus codeExecution when no media attached.
+ * - Gemma models: plain googleSearch only (no dynamicRetrievalConfig, urlContext, or codeExecution).
+ * - Gemini models: forced googleSearch + urlContext, plus codeExecution when no media attached.
  * @param {boolean} hasMedia
  * @param {string}  [modelName='']
  * @returns {object[]}
  */
 function buildSearchTools(hasMedia, modelName = '') {
-  // Gemma only supports googleSearch — no urlContext or codeExecution
+  // Gemma only supports plain googleSearch — no dynamicRetrievalConfig, urlContext or codeExecution
   if (isGemmaModel(modelName)) {
-    return [{ googleSearch: {} }];
+    return [GEMMA_GOOGLE_SEARCH];
   }
-  // Gemini: always googleSearch + urlContext; codeExecution only when no media
-  const tools = [{ googleSearch: {} }, { urlContext: {} }];
+  // Gemini: forced googleSearch + urlContext; codeExecution only when no media
+  const tools = [FORCED_GOOGLE_SEARCH, { urlContext: {} }];
   if (!hasMedia) tools.push({ codeExecution: {} });
   return tools;
 }
