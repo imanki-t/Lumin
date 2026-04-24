@@ -487,3 +487,14 @@ code.ic{font-family:var(--fm);font-size:11px;background:var(--bg3);padding:1px 5
   .srv-search-i{width:100%;}
   .srv-search-wrap{flex:1;}
 }
+
+/* ── Config row layout (Migration + Bot config panels) ───────────────────── */
+.cfg-row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;}
+.cfg-panel-sm{flex:0 0 220px;min-width:0;}
+.cfg-panel-lg{flex:1 1 0;min-width:0;}
+.cfg-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:0 12px;}
+@media(max-width:900px){
+  .cfg-panel-sm{flex:1 1 100%;}
+  .cfg-panel-lg{flex:1 1 100%;}
+  .cfg-grid{grid-template-columns:1fr;}
+}
