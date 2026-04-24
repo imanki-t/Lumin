@@ -18,13 +18,13 @@ import { EmbedBuilder, MessageFlags } from 'discord.js';
 
 import {
   genAI,
-  getCurrentClient,
   sanitizeRequestForModel,
   state,
   requestQueues,          // FIX: direct import — avoids state.requestQueues stale-reference bug
   BOT_CONFIG,
   DEFAULT_USER_SETTINGS
 } from '../managers/BotManager.js';
+import { getCurrentClient } from '../managers/ApiKeyManager.js';
 import { Logger }            from '../core/Logger.js';
 import { Embeds, GOOGLE_AI_ICON } from '../modules/shared/embedBuilder.js';
 import { addDownloadButton, addDeleteButton } from '../modules/shared/buttonHandlers.js';
