@@ -125,6 +125,8 @@ export const KEY_SWITCH_HOLD_MS             = 1500;  // ms to wait after rotatin
 export const MAX_QUEUE_DEPTH_PER_USER       = 5;     // messages beyond this are dropped with a warning
 export const PDF_ENABLED_FOR_GEMINI         = false; // disabled to save RAM and quota
 export const CACHE_ENABLED                  = false; // Redis L3 cache; in-memory L1/L2 always on
+export const WEEKLY_SUMMARY_ENABLED         = true;  // set false to skip weekly context summary job entirely
+export const CROSS_CONTEXT_ENABLED          = false; // set true to allow RAG to pull context across all servers + DMs (future)
 
 // ── BOT STATE ────────────────────────────────────────────────────────────────
 
@@ -287,7 +289,7 @@ export default {
   getGenerationConfig, generationConfig,
   safetySettings,
   RAM_MEDIA_SUSPEND_THRESHOLD_MB, KEY_SWITCH_HOLD_MS, MAX_QUEUE_DEPTH_PER_USER,
-  PDF_ENABLED_FOR_GEMINI, CACHE_ENABLED,
+  PDF_ENABLED_FOR_GEMINI, CACHE_ENABLED, WEEKLY_SUMMARY_ENABLED, CROSS_CONTEXT_ENABLED,
   STATE_CONFIG, RESOURCE_CONFIG, MIGRATION_CONFIG, POLL_CONFIG,
   DB_CONNECTION_CONFIG, DB_RETRY_CONFIG, DB_VECTOR_SEARCH_CONFIG,
   MEMORY_RECENT_WINDOW, MEMORY_MAX_RAG_RESULTS, MEMORY_SCORE_THRESHOLD,
