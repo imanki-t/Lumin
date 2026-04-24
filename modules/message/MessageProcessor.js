@@ -17,6 +17,7 @@ import {
 } from '../../managers/BotManager.js';
 import { checkAndIncrementDailyMessages } from '../../managers/QueueManager.js';
 import { getWeeklySummary } from '../../commands/summary/WeeklySummaryJob.js';
+import { WEEKLY_SUMMARY_ENABLED } from '../../modules/config.js';
 import { memorySystem }  from '../../memory/MemorySystem.js';
 import { Logger }         from '../../core/Logger.js';
 import { Embeds }         from '../shared/embedBuilder.js';
@@ -178,12 +179,14 @@ async function buildSystemInstruction(message, effectiveSettings, serverSettings
   // ── Weekly summary injection (Redis L1 ~1ms — zero RAG cost) ───────────────
   // Gives Lumin persistent baseline knowledge about the user so it never needs
   // to run RAG just to recall basic facts. Falls through silently if not ready.
-  try {
-    const weeklySummary = await getWeeklySummary(message.author.id);
-    if (weeklySummary) {
-      instructions += `\n\n## User Background (Weekly Summary)\n${weeklySummary}`;
-    }
-  } catch { /* non-fatal */ }
+  if (WEEKLY_SUMMARY_ENABLED) {
+    try {
+      const weeklySummary = await getWeeklySummary(message.author.id);
+      if (weeklySummary) {
+        instructions += `\n\n## User Background (Weekly Summary)\n${weeklySummary}`;
+      }
+    } catch { /* non-fatal */ }
+  }
 
   if (extraSuffix) instructions += extraSuffix;
 
