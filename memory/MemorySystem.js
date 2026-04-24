@@ -12,7 +12,7 @@ import { clusterEngine }    from './ClusterEngine.js';
 import { memoryStore }      from './MemoryStore.js';
 import { redisCache }       from './RedisCache.js';
 import { formatDuration }   from '../modules/shared/messageFormatter.js';
-import { getFlag }          from '../modules/shared/runtimeFlags.js';
+import { state }            from '../managers/StateManager.js';
 import {
   CACHE_ENABLED,
   MEMORY_RECENT_WINDOW    as RECENT_MESSAGE_WINDOW,
@@ -242,14 +242,17 @@ class MemorySystem {
 
       // ── L4: ClusterEngine + Atlas full RAG ───────────────────────────────────
       const cutoffTimestamp     = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
-      const crossContextEnabled = getFlag('CROSS_CONTEXT_ENABLED');
+      const crossContextEnabled = userId
+        ? (state.userSettings[userId]?.crossContextEnabled ?? false)
+        : false;
 
       const searchPromises = [
         clusterEngine.clusterSearch(historyId, queryEmbedding, cutoffTimestamp)
       ];
 
       if (crossContextEnabled && userId) {
-        // Full user-wide cross-context: every server + DM, excluding current history
+        // Track X (cross-context ON): entire user footprint — all servers + DMs.
+        // Replaces Track 2 & 3 with a single broader query.
         searchPromises.push(
           db.findSimilarMemoriesByUser(userId, queryEmbedding, MAX_RAG_RESULTS, historyId)
             .then(results => (results || [])
@@ -262,6 +265,27 @@ class MemorySystem {
               }))
             ).catch(() => [])
         );
+      } else {
+        // Track 2 (default): in a DM — also search current server history for this user
+        if (userId && guildId && historyId !== guildId) {
+          searchPromises.push(
+            db.findSimilarMemoriesWithFilter(guildId, queryEmbedding, 1, { userId })
+              .then(results => (results || [])
+                .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
+                .map(e => ({ messages: e.messages, score: e.score * 0.85, source: 'server-context', timestamp: e.timestamp }))
+              ).catch(() => [])
+          );
+        }
+
+        // Track 3 (default): in a server — also search this user's DM history
+        if (guildId && historyId === guildId && userId) {
+          searchPromises.push(
+            clusterEngine.clusterSearch(userId, queryEmbedding, cutoffTimestamp)
+              .then(results => (results || []).map(e => ({
+                messages: e.messages.slice(-6), score: e.score * 0.75, source: 'user-context', timestamp: e.timestamp
+              }))).catch(() => [])
+          );
+        }
       }
 
       const allResults = (await Promise.all(searchPromises)).flat();
@@ -290,20 +314,22 @@ class MemorySystem {
    * flag (togglable live from the dashboard, no restart required):
    *
    *   OFF (default):
-   *     Track 1 only — searches the current historyId.
+   *     Track 1 — current historyId (main conversation)
+   *     Track 2 — DM→server bridge: if in a DM, also search current server history
+   *     Track 3 — server→DM bridge: if in a server, also search user's DM history
    *
    *   ON:
    *     Track 1 — current historyId (main conversation)
-   *     Track X — full user-wide search across every server and DM the user
-   *               has ever had with the bot, excluding the current historyId
-   *               to avoid double-counting. Results are scored at 0.80× to
-   *               signal they are cross-context, not the primary conversation.
+   *     Track X — full user-wide search: every server + DMs, all at once.
+   *               Replaces Track 2 & 3 with a single broader Atlas query.
    *
    * @private
    */
   async _directVectorSearch(historyId, currentQuery, recentMessageTimestamps, userId, guildId) {
     const cutoffTimestamp     = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
-    const crossContextEnabled = getFlag('CROSS_CONTEXT_ENABLED');
+    const crossContextEnabled = userId
+      ? (state.userSettings[userId]?.crossContextEnabled ?? false)
+      : false;
 
     const [queryEmbedding, personalData] = await Promise.all([
       embeddingService.generateEmbedding(currentQuery, 'RETRIEVAL_QUERY'),
@@ -322,8 +348,8 @@ class MemorySystem {
     ];
 
     if (crossContextEnabled && userId) {
-      // Track X: search the user's entire RAG footprint across all servers + DMs.
-      // excludeHistoryId prevents Track 1 results from appearing twice.
+      // Track X (cross-context ON): search entire user footprint — all servers + DMs.
+      // Replaces Track 2 & 3 with a single broader query.
       searchPromises.push(
         db.findSimilarMemoriesByUser(userId, queryEmbedding, MAX_RAG_RESULTS, historyId)
           .then(results => (results || [])
@@ -336,6 +362,28 @@ class MemorySystem {
             }))
           ).catch(() => [])
       );
+    } else {
+      // Track 2 (default): in a DM — also search the current server's history for this user
+      if (userId && guildId && historyId !== guildId) {
+        searchPromises.push(
+          db.findSimilarMemoriesWithFilter(guildId, queryEmbedding, 1, { userId })
+            .then(results => (results || [])
+              .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
+              .map(e => ({ messages: e.messages, score: e.score * 0.85, source: 'server-context', timestamp: e.timestamp }))
+            ).catch(() => [])
+        );
+      }
+
+      // Track 3 (default): in a server — also search this user's DM history
+      if (guildId && historyId === guildId && userId) {
+        searchPromises.push(
+          db.findSimilarMemories(userId, queryEmbedding, 2)
+            .then(results => (results || [])
+              .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
+              .map(e => ({ messages: e.messages.slice(-6), score: e.score * 0.75, source: 'user-context', timestamp: e.timestamp }))
+            ).catch(() => [])
+        );
+      }
     }
 
     const allResults = (await Promise.all(searchPromises)).flat();
