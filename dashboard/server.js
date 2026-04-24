@@ -983,7 +983,7 @@ router.post('/api/cmd/toggle-feature', authenticate, async (req, res) => {
   try {
     const { feature, enabled } = req.body;
     if (!feature) return res.status(400).json({ error: 'feature required.' });
-    const allowed = ['ENABLE_GEMMA','CACHE_ENABLED','PDF_ENABLED_FOR_GEMINI','CYCLE_GEMMA_WITH_GEMINI'];
+    const allowed = ['ENABLE_GEMMA','CACHE_ENABLED','PDF_ENABLED_FOR_GEMINI','CYCLE_GEMMA_WITH_GEMINI','WEEKLY_SUMMARY_ENABLED','CROSS_CONTEXT_ENABLED'];
     if (!allowed.includes(feature)) return res.status(400).json({ error: `Allowed: ${allowed.join(', ')}` });
     if (!runtimeConfig.featureFlags) runtimeConfig.featureFlags = {};
     runtimeConfig.featureFlags[feature] = Boolean(enabled);
@@ -1000,6 +1000,8 @@ router.get('/api/cmd/feature-flags', authenticate, async (req, res) => {
       CACHE_ENABLED:           cfg.CACHE_ENABLED           ?? false,
       PDF_ENABLED_FOR_GEMINI:  cfg.PDF_ENABLED_FOR_GEMINI  ?? false,
       CYCLE_GEMMA_WITH_GEMINI: cfg.CYCLE_GEMMA_WITH_GEMINI ?? false,
+      WEEKLY_SUMMARY_ENABLED:  cfg.WEEKLY_SUMMARY_ENABLED  ?? true,
+      CROSS_CONTEXT_ENABLED:   cfg.CROSS_CONTEXT_ENABLED   ?? false,
     };
     const flags = { ...configDefaults, ...(runtimeConfig.featureFlags || {}) };
     res.json({ success: true, data: flags });
