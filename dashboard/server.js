@@ -221,9 +221,15 @@ router.post('/api/cmd/clear-history', authenticate, async (req, res) => {
 
 router.get('/api/cmd/chat-history/:id', authenticate, (req, res) => {
   try {
-    const history = state.chatHistories[req.params.id];
-    if (!history) return res.status(404).json({ error: 'No history found.' });
-    res.json({ success: true, data: history });
+    // chatHistories[id] is { [messagesId]: [...entries] } — flatten into a single array.
+    // Works for both user IDs and guild/server IDs.
+    const historyObj = state.chatHistories[req.params.id];
+    if (!historyObj || typeof historyObj !== 'object' || Object.keys(historyObj).length === 0) {
+      return res.status(404).json({ success: false, error: 'No history found.' });
+    }
+    const flat = Object.values(historyObj).flat().filter(Boolean);
+    flat.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    res.json({ success: true, data: flat, channels: Object.keys(historyObj).length });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -468,13 +474,29 @@ router.post('/api/cmd/resolve-username', authenticate, async (req, res) => {
   try {
     const { username } = req.body;
     if (!username) return res.status(400).json({ error: 'username required.' });
+
+    // Pass 1: check in-memory cache (zero API calls, instant)
     for (const [, guild] of (client?.guilds?.cache ?? new Map())) {
       const member = guild.members.cache.find(m =>
-        m.user.username?.toLowerCase() === username.toLowerCase() || m.user.tag?.toLowerCase() === username.toLowerCase()
+        m.user.username?.toLowerCase() === username.toLowerCase() ||
+        m.user.tag?.toLowerCase()      === username.toLowerCase()
       );
       if (member) return res.json({ success: true, id: member.user.id, tag: member.user.tag });
     }
-    res.status(404).json({ success: false, error: 'User not found in any cached guild.' });
+
+    // Pass 2: query Discord's search API per guild (handles uncached members)
+    for (const [, guild] of (client?.guilds?.cache ?? new Map())) {
+      try {
+        const results = await guild.members.search({ query: username, limit: 5 });
+        const member = results.find(m =>
+          m.user.username?.toLowerCase() === username.toLowerCase() ||
+          m.user.tag?.toLowerCase()      === username.toLowerCase()
+        );
+        if (member) return res.json({ success: true, id: member.user.id, tag: member.user.tag });
+      } catch { /* guild may not support search – continue */ }
+    }
+
+    res.status(404).json({ success: false, error: 'User not found in any guild.' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -970,8 +992,83 @@ router.post('/api/cmd/toggle-feature', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/api/cmd/feature-flags', authenticate, (req, res) => {
-  res.json({ success: true, data: runtimeConfig.featureFlags || {} });
+router.get('/api/cmd/feature-flags', authenticate, async (req, res) => {
+  try {
+    const cfg = await import('../modules/config.js');
+    const configDefaults = {
+      ENABLE_GEMMA:            cfg.ENABLE_GEMMA            ?? false,
+      CACHE_ENABLED:           cfg.CACHE_ENABLED           ?? false,
+      PDF_ENABLED_FOR_GEMINI:  cfg.PDF_ENABLED_FOR_GEMINI  ?? false,
+      CYCLE_GEMMA_WITH_GEMINI: cfg.CYCLE_GEMMA_WITH_GEMINI ?? false,
+    };
+    const flags = { ...configDefaults, ...(runtimeConfig.featureFlags || {}) };
+    res.json({ success: true, data: flags });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Migration config ────────────────────────────────────────────────────────
+router.get('/api/cmd/migration-config', authenticate, async (req, res) => {
+  try {
+    const cfg = await import('../modules/config.js');
+    const defaults = {
+      ENABLE_MIGRATION: cfg.MIGRATION_CONFIG?.ENABLE_MIGRATION ?? false,
+      BATCH_SIZE:       cfg.MIGRATION_CONFIG?.BATCH_SIZE       ?? 50,
+      BATCH_DELAY_MS:   cfg.MIGRATION_CONFIG?.BATCH_DELAY_MS   ?? 100,
+    };
+    const overrides = runtimeConfig.migrationConfig || {};
+    res.json({ success: true, data: { ...defaults, ...overrides } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/api/cmd/migration-config', authenticate, (req, res) => {
+  try {
+    if (!runtimeConfig.migrationConfig) runtimeConfig.migrationConfig = {};
+    const { ENABLE_MIGRATION, BATCH_SIZE, BATCH_DELAY_MS } = req.body;
+    if (ENABLE_MIGRATION !== undefined) runtimeConfig.migrationConfig.ENABLE_MIGRATION = Boolean(ENABLE_MIGRATION);
+    if (BATCH_SIZE       !== undefined) runtimeConfig.migrationConfig.BATCH_SIZE       = Number(BATCH_SIZE);
+    if (BATCH_DELAY_MS   !== undefined) runtimeConfig.migrationConfig.BATCH_DELAY_MS   = Number(BATCH_DELAY_MS);
+    saveRuntimeConfig();
+    res.json({ success: true, data: runtimeConfig.migrationConfig, message: 'Migration config saved. Restart to apply.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Bot / State / Queue config ───────────────────────────────────────────────
+router.get('/api/cmd/bot-config', authenticate, async (req, res) => {
+  try {
+    const cfg = await import('../modules/config.js');
+    const defaults = {
+      DEFAULT_RESPONSE_FORMAT:        cfg.BOT_CONFIG?.DEFAULT_RESPONSE_FORMAT        ?? 'Normal',
+      WORK_IN_DMS:                    cfg.BOT_CONFIG?.WORK_IN_DMS                    ?? true,
+      DEFAULT_MODEL:                  cfg.DEFAULT_MODEL                               ?? '',
+      MAX_QUEUE_DEPTH_PER_USER:       cfg.MAX_QUEUE_DEPTH_PER_USER                   ?? 5,
+      KEY_SWITCH_HOLD_MS:             cfg.KEY_SWITCH_HOLD_MS                         ?? 1500,
+      RAM_MEDIA_SUSPEND_THRESHOLD_MB: cfg.RAM_MEDIA_SUSPEND_THRESHOLD_MB              ?? 380,
+      STATE_MAX_MESSAGES:             cfg.STATE_CONFIG?.MAX_MESSAGES                 ?? 50,
+      CONTEXT_BREAK_THRESHOLD_MIN:    Math.round((cfg.STATE_CONFIG?.CONTEXT_BREAK_THRESHOLD ?? 1_800_000) / 60_000),
+      GEMMA_DAILY_LIMIT_PER_KEY:      cfg.GEMMA_DAILY_LIMIT_PER_KEY                  ?? 1500,
+      GEMMA_DEFAULT_MODEL:            cfg.GEMMA_DEFAULT_MODEL                        ?? '',
+      GEMMA_FALLBACK_MODEL:           cfg.GEMMA_FALLBACK_MODEL                       ?? '',
+    };
+    const overrides = runtimeConfig.botConfig || {};
+    res.json({ success: true, data: { ...defaults, ...overrides } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/api/cmd/bot-config', authenticate, (req, res) => {
+  try {
+    if (!runtimeConfig.botConfig) runtimeConfig.botConfig = {};
+    const allowed = [
+      'DEFAULT_RESPONSE_FORMAT','WORK_IN_DMS','MAX_QUEUE_DEPTH_PER_USER',
+      'KEY_SWITCH_HOLD_MS','RAM_MEDIA_SUSPEND_THRESHOLD_MB',
+      'STATE_MAX_MESSAGES','CONTEXT_BREAK_THRESHOLD_MIN',
+      'GEMMA_DAILY_LIMIT_PER_KEY','GEMMA_DEFAULT_MODEL','GEMMA_FALLBACK_MODEL'
+    ];
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) runtimeConfig.botConfig[key] = req.body[key];
+    }
+    saveRuntimeConfig();
+    res.json({ success: true, data: runtimeConfig.botConfig, message: 'Bot config saved. Restart to apply.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.post('/api/cmd/set-embed-color', authenticate, async (req, res) => {
