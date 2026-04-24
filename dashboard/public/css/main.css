@@ -446,3 +446,44 @@ code.ic{font-family:var(--fm);font-size:11px;background:var(--bg3);padding:1px 5
   .search-i{width:100%;}
   .mdl-grid{grid-template-columns:1fr 1fr;}
 }
+
+/* ── Servers page — search & refresh ──────────────────────────────────────── */
+.srv-search-wrap{position:relative;display:flex;align-items:center;}
+.srv-search-icon{position:absolute;left:12px;width:13px;height:13px;color:var(--text3);pointer-events:none;flex-shrink:0;}
+.srv-search-i{
+  padding:8px 16px 8px 34px;
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:999px;
+  color:var(--text1);
+  font-family:var(--fb);
+  font-size:12px;
+  outline:none;
+  width:230px;
+  transition:border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.srv-search-i:focus{
+  border-color:var(--accent);
+  background:var(--bg3);
+  box-shadow:0 0 0 3px var(--accent-d);
+}
+.srv-search-i::placeholder{color:var(--text3);}
+.srv-refresh-btn{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:7px 14px;
+  background:transparent;
+  border:1px solid var(--border);
+  border-radius:999px;
+  color:var(--text2);
+  font-family:var(--fb);font-size:12px;font-weight:500;
+  cursor:pointer;
+  transition:all 0.13s;
+  white-space:nowrap;
+}
+.srv-refresh-btn svg{width:12px;height:12px;flex-shrink:0;transition:transform 0.4s ease;}
+.srv-refresh-btn:hover{background:var(--bg3);color:var(--text1);border-color:var(--border-s);}
+.srv-refresh-btn:hover svg{transform:rotate(180deg);}
+@media(max-width:640px){
+  .srv-search-i{width:100%;}
+  .srv-search-wrap{flex:1;}
+}
