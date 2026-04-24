@@ -135,7 +135,7 @@ export const client = new Client({
  * @param {object} request - Mutated in place.
  * @param {string} modelName - The model ApiKeyManager is about to call.
  */
-function sanitizeRequestForModel(request, modelName) {
+export function sanitizeRequestForModel(request, modelName) {
   const isGemini3 = /gemini-3/i.test(modelName);
   const isGemma   = /gemma/i.test(modelName);
 
