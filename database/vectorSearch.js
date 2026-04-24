@@ -184,6 +184,62 @@ export async function getComplimentCount(userId) {
 }
 
 /**
+ * Find similar memories across ALL histories belonging to a user.
+ * Used by cross-context RAG to search the user's entire memory footprint —
+ * every server they've talked in plus their DMs — in a single Atlas query.
+ *
+ * Excludes a specific historyId (the current one) to avoid double-counting
+ * results already returned by Track 1's per-history search.
+ *
+ * @param {string}   userId              - The user whose memories to search
+ * @param {number[]} queryEmbedding      - Dense vector from the embedding model
+ * @param {number}   [limit=6]           - Maximum results to return
+ * @param {string}   [excludeHistoryId]  - historyId to exclude (current context)
+ * @returns {Promise<Array|null>}
+ */
+export async function findSimilarMemoriesByUser(
+  userId,
+  queryEmbedding,
+  limit = 6,
+  excludeHistoryId = null
+) {
+  try {
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index:         VECTOR_SEARCH_CONFIG.INDEX_NAME,
+          path:          VECTOR_SEARCH_CONFIG.PATH,
+          queryVector:   queryEmbedding,
+          numCandidates: limit * VECTOR_SEARCH_CONFIG.NUM_CANDIDATES_MULTIPLIER,
+          limit:         limit * 2, // fetch extra; we filter below
+          filter:        { 'metadata.userId': { $eq: userId } }
+        }
+      },
+      { $addFields: { score: { $meta: 'vectorSearchScore' } } },
+      { $match: { score: { $gte: VECTOR_SEARCH_CONFIG.SCORE_THRESHOLD } } },
+      { $project: { _id: 0, messages: 1, timestamp: 1, text: 1, metadata: 1, score: 1 } }
+    ];
+
+    const results = await getCollection(COLLECTIONS.MEMORY_ENTRIES).aggregate(pipeline).toArray();
+
+    // Filter out the current historyId in-process (Atlas pre-filter only supports $eq/$in)
+    const filtered = excludeHistoryId
+      ? results.filter(e => e.metadata?.historyId !== excludeHistoryId)
+      : results;
+
+    return filtered.slice(0, limit);
+
+  } catch (error) {
+    if (error.codeName === 'IndexNotFound' || error.message?.includes('$vectorSearch')) {
+      logger.info('Vector search index not available for cross-context search');
+      return null;
+    }
+    logger.error('Cross-context vector search error', error);
+    return null;
+  }
+}
+
+/**
  * Get a user's daily quote configuration for context injection.
  * @param {string} userId
  * @returns {Promise<{ active: boolean, category: string, time: string }|null>}
