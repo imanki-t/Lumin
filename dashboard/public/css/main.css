@@ -422,8 +422,8 @@ code.ic{font-family:var(--fm);font-size:11px;background:var(--bg3);padding:1px 5
 /* ── RESPONSIVE ──────────────────────────────────────────────────────── */
 @media(max-width:900px){
   .tb-menu{display:flex;}
-  #sidebar{position:fixed;top:0;bottom:0;left:0;transform:translateX(-100%);z-index:200;}
-  #sidebar.open{transform:translateX(0);box-shadow:4px 0 30px rgba(0,0,0,0.6);}
+  #sidebar{display:none;position:fixed;top:0;bottom:0;left:0;transform:translateX(-100%);z-index:200;}
+  #sidebar.open{display:flex;transform:translateX(0);box-shadow:4px 0 30px rgba(0,0,0,0.6);}
   #bnav{display:block;}
   #content{padding:16px 14px calc(var(--bn)+16px) 14px;}
   #toast-r{bottom:calc(var(--bn)+8px);right:10px;}
