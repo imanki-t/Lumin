@@ -155,8 +155,14 @@
             <div class="sh-desc">All guilds the bot is in, sorted by member count.</div>
           </div>
           <div class="sh-r">
-            <input class="search-i" id="server-search" placeholder="Search name or ID…" oninput="window._filterServers(this.value)"/>
-            <button class="btn btn-ghost btn-sm" onclick="window._loadServers()">Refresh</button>
+            <div class="srv-search-wrap">
+              <svg class="srv-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input class="srv-search-i" id="server-search" placeholder="Search servers…" oninput="window._filterServers(this.value)"/>
+            </div>
+            <button class="srv-refresh-btn" onclick="window._loadServers()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+              Refresh
+            </button>
           </div>
         </div>
         <div id="servers-grid" class="sv-grid"><div class="loading">Loading servers…</div></div>
@@ -243,6 +249,67 @@
                 <option value="false">Disabled</option><option value="true">Enabled</option>
               </select>
             </div>
+          </div>
+        </div>
+        <div class="g3" style="margin-bottom:14px">
+          <!-- Migration Config -->
+          <div class="panel">
+            <div class="panel-h">Migration Config</div>
+            <div class="form-g"><label class="form-l">Enable Migration</label>
+              <select class="form-sel" id="mc-enable">
+                <option value="false">Disabled</option><option value="true">Enabled</option>
+              </select>
+            </div>
+            <div class="form-g"><label class="form-l">Batch Size</label>
+              <input class="form-inp" type="number" id="mc-batch-size" min="1" max="500" placeholder="50"/>
+            </div>
+            <div class="form-g"><label class="form-l">Batch Delay (ms)</label>
+              <input class="form-inp" type="number" id="mc-batch-delay" min="0" max="5000" placeholder="100"/>
+            </div>
+            <button class="btn btn-accent" style="margin-top:8px;width:100%" onclick="window._saveMigrationConfig()">Save Migration Config</button>
+            <div id="mc-result" class="result-box hidden"></div>
+          </div>
+          <!-- Bot / State / Queue Config -->
+          <div class="panel" style="grid-column:2/4">
+            <div class="panel-h">Bot &amp; State Config</div>
+            <div class="g3">
+              <div class="form-g"><label class="form-l">Response Format</label>
+                <select class="form-sel" id="bc-resp-format">
+                  <option value="Normal">Normal</option><option value="Markdown">Markdown</option><option value="Plain">Plain</option>
+                </select>
+              </div>
+              <div class="form-g"><label class="form-l">Work in DMs</label>
+                <select class="form-sel" id="bc-dms">
+                  <option value="true">Enabled</option><option value="false">Disabled</option>
+                </select>
+              </div>
+              <div class="form-g"><label class="form-l">Max Queue / User</label>
+                <input class="form-inp" type="number" id="bc-queue" min="1" max="50" placeholder="5"/>
+              </div>
+              <div class="form-g"><label class="form-l">Key Switch Hold (ms)</label>
+                <input class="form-inp" type="number" id="bc-key-hold" min="0" max="10000" placeholder="1500"/>
+              </div>
+              <div class="form-g"><label class="form-l">RAM Suspend Threshold (MB)</label>
+                <input class="form-inp" type="number" id="bc-ram" min="50" max="2000" placeholder="380"/>
+              </div>
+              <div class="form-g"><label class="form-l">Max History Messages</label>
+                <input class="form-inp" type="number" id="bc-max-msg" min="10" max="500" placeholder="50"/>
+              </div>
+              <div class="form-g"><label class="form-l">Context Break (min)</label>
+                <input class="form-inp" type="number" id="bc-ctx-break" min="1" max="1440" placeholder="30"/>
+              </div>
+              <div class="form-g"><label class="form-l">Gemma Daily Limit/Key</label>
+                <input class="form-inp" type="number" id="bc-gemma-limit" min="100" max="10000" placeholder="1500"/>
+              </div>
+              <div class="form-g"><label class="form-l">Gemma Default Model</label>
+                <input class="form-inp" type="text" id="bc-gemma-default" placeholder="e.g. gemma-4-26b"/>
+              </div>
+              <div class="form-g"><label class="form-l">Gemma Fallback Model</label>
+                <input class="form-inp" type="text" id="bc-gemma-fallback" placeholder="e.g. gemma-4-31b"/>
+              </div>
+            </div>
+            <button class="btn btn-accent" style="margin-top:10px;width:100%" onclick="window._saveBotConfig()">Save Bot Config</button>
+            <div id="bc-result" class="result-box hidden"></div>
           </div>
         </div>
         <div class="panel">
