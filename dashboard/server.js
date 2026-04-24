@@ -13,6 +13,7 @@ import {
   state,
   getApiKeyStats,
   switchToNextKey,
+  rotateToNextKey,
   saveStateToFile,
 } from '../managers/BotManager.js';
 import { DEFAULT_SERVER_SETTINGS, DEFAULT_USER_SETTINGS } from '../managers/StateManager.js';
@@ -270,7 +271,7 @@ router.get('/api/cmd/blacklisted-users', authenticate, (req, res) => {
 
 router.post('/api/cmd/switch-api-key', authenticate, (req, res) => {
   try {
-    switchToNextKey();
+    rotateToNextKey();
     const stats = getApiKeyStats();
     res.json({ success: true, message: `Switched to Key ${stats.currentKey}.`, stats });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -285,7 +286,7 @@ router.post('/api/cmd/switch-to-key/:index', authenticate, (req, res) => {
     const needed = idx - stats.currentKey;
     if (needed !== 0) {
       const times = ((needed % stats.totalKeys) + stats.totalKeys) % stats.totalKeys;
-      for (let i = 0; i < times; i++) switchToNextKey();
+      for (let i = 0; i < times; i++) rotateToNextKey();
     }
     res.json({ success: true, message: `Switched to Key ${idx}.`, stats: getApiKeyStats() });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -495,6 +496,19 @@ router.get('/api/cmd/user-profile/:userId', authenticate, async (req, res) => {
         blacklistedGuilds: Object.entries(state.blacklistedUsers || {}).filter(([,v]) => v.includes(userId)).map(([k]) => k),
       }
     });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/api/config/activities', authenticate, (req, res) => {
+  try {
+    const content = fs.readFileSync(BASE_CONFIG_PATH, 'utf8');
+    const match = content.match(/activities\s*:\s*\[([\s\S]*?)\]/);
+    const activities = [];
+    if (match) {
+      const entries = match[1].matchAll(/\{\s*name\s*:\s*["'`]([^"'`]+)["'`]\s*,\s*type\s*:\s*["'`]([^"'`]+)["'`]\s*\}/g);
+      for (const e of entries) activities.push({ name: e[1], type: e[2] });
+    }
+    res.json({ success: true, data: activities });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -712,8 +726,12 @@ router.post('/api/cmd/clear-all-usage', authenticate, async (req, res) => {
 router.get('/api/cmd/models', authenticate, async (req, res) => {
   try {
     const cfg = await import('../modules/config.js');
+    const effectiveDefault = cfg.ENABLE_GEMMA
+      ? (cfg.MODELS?.[cfg.GEMMA_DEFAULT_MODEL] || cfg.GEMMA_DEFAULT_MODEL || cfg.DEFAULT_MODEL)
+      : cfg.DEFAULT_MODEL;
     res.json({
       success: true, models: cfg.MODELS || {}, defaultModel: cfg.DEFAULT_MODEL,
+      effectiveDefault,
       fallbackChain: cfg.MODEL_FALLBACK_CHAIN, enableGemma: cfg.ENABLE_GEMMA,
       gemmaDefault: cfg.GEMMA_DEFAULT_MODEL, runtimeOverride: runtimeConfig.activeModel || null,
     });
@@ -804,11 +822,11 @@ router.post('/api/config/base/reset', authenticate, (req, res) => {
 router.get('/api/db/collections', authenticate, async (req, res) => {
   try {
     await db.connectDB();
-    const conn = db.getConnection ? db.getConnection() : null;
-    if (!conn) return res.status(503).json({ error: 'DB connection not available via getConnection().' });
-    const collections = await conn.db().listCollections().toArray();
+    let conn; try { conn = db.getDB ? db.getDB() : null; } catch { conn = null; }
+    if (!conn) return res.status(503).json({ error: 'DB not connected.' });
+    const collections = await conn.listCollections().toArray();
     const result = await Promise.all(collections.map(async c => {
-      const count = await conn.db().collection(c.name).countDocuments().catch(() => 0);
+      const count = await conn.collection(c.name).countDocuments().catch(() => 0);
       return { name: c.name, count };
     }));
     res.json({ success: true, data: result });
@@ -818,12 +836,12 @@ router.get('/api/db/collections', authenticate, async (req, res) => {
 router.get('/api/db/collection/:name', authenticate, async (req, res) => {
   try {
     await db.connectDB();
-    const conn = db.getConnection ? db.getConnection() : null;
+    let conn; try { conn = db.getDB ? db.getDB() : null; } catch { conn = null; }
     if (!conn) return res.status(503).json({ error: 'DB not available.' });
     const { page = 1, limit = 50 } = req.query;
     const skip  = (parseInt(page) - 1) * parseInt(limit);
-    const total = await conn.db().collection(req.params.name).countDocuments();
-    const docs  = await conn.db().collection(req.params.name).find({}).skip(skip).limit(parseInt(limit)).toArray();
+    const total = await conn.collection(req.params.name).countDocuments();
+    const docs  = await conn.collection(req.params.name).find({}).skip(skip).limit(parseInt(limit)).toArray();
     res.json({ success: true, data: docs, total, page: parseInt(page), limit: parseInt(limit) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -831,11 +849,11 @@ router.get('/api/db/collection/:name', authenticate, async (req, res) => {
 router.put('/api/db/collection/:name/:id', authenticate, async (req, res) => {
   try {
     await db.connectDB();
-    const conn = db.getConnection ? db.getConnection() : null;
+    let conn; try { conn = db.getDB ? db.getDB() : null; } catch { conn = null; }
     if (!conn) return res.status(503).json({ error: 'DB not available.' });
     const { ObjectId } = await import('mongodb');
     const filter = ObjectId.isValid(req.params.id) ? { _id: new ObjectId(req.params.id) } : { _id: req.params.id };
-    const result = await conn.db().collection(req.params.name).replaceOne(filter, req.body, { upsert: false });
+    const result = await conn.collection(req.params.name).replaceOne(filter, req.body, { upsert: false });
     res.json({ success: true, modified: result.modifiedCount });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -843,11 +861,11 @@ router.put('/api/db/collection/:name/:id', authenticate, async (req, res) => {
 router.delete('/api/db/collection/:name/:id', authenticate, async (req, res) => {
   try {
     await db.connectDB();
-    const conn = db.getConnection ? db.getConnection() : null;
+    let conn; try { conn = db.getDB ? db.getDB() : null; } catch { conn = null; }
     if (!conn) return res.status(503).json({ error: 'DB not available.' });
     const { ObjectId } = await import('mongodb');
     const filter = ObjectId.isValid(req.params.id) ? { _id: new ObjectId(req.params.id) } : { _id: req.params.id };
-    const result = await conn.db().collection(req.params.name).deleteOne(filter);
+    const result = await conn.collection(req.params.name).deleteOne(filter);
     res.json({ success: true, deleted: result.deletedCount });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -903,9 +921,9 @@ router.get('/api/cmd/memory/:userId', authenticate, async (req, res) => {
     const { userId } = req.params;
     const { page = 1, limit = 50 } = req.query;
     let data = [], total = 0;
-    if (db.getUserMemories) {
-      const result = await db.getUserMemories(userId);
-      data  = Array.isArray(result) ? result : result?.memories || [];
+    if (db.getMemoryEntries) {
+      const result = await db.getMemoryEntries(userId, 500);
+      data  = Array.isArray(result) ? result : [];
       total = data.length;
     }
     const skip  = (parseInt(page) - 1) * parseInt(limit);
@@ -916,8 +934,13 @@ router.get('/api/cmd/memory/:userId', authenticate, async (req, res) => {
 
 router.delete('/api/cmd/memory/:userId', authenticate, async (req, res) => {
   try {
-    if (db.deleteUserMemories) await db.deleteUserMemories(req.params.userId);
-    res.json({ success: true, message: `Memories cleared for ${req.params.userId}.` });
+    const uid = req.params.userId;
+    await db.connectDB();
+    let conn; try { conn = db.getDB ? db.getDB() : null; } catch { conn = null; }
+    if (conn) {
+      await conn.collection('memoryEntries').deleteMany({ historyId: uid });
+    }
+    res.json({ success: true, message: `Memories cleared for ${uid}.` });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
