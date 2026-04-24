@@ -249,11 +249,21 @@
                 <option value="false">Disabled</option><option value="true">Enabled</option>
               </select>
             </div>
+            <div class="form-g"><label class="form-l">Weekly Summary</label>
+              <select class="form-sel" id="ff-weekly" onchange="window._toggleFlag('WEEKLY_SUMMARY_ENABLED',this.value==='true')">
+                <option value="true">Enabled</option><option value="false">Disabled</option>
+              </select>
+            </div>
+            <div class="form-g"><label class="form-l">Cross-Context RAG</label>
+              <select class="form-sel" id="ff-cross" onchange="window._toggleFlag('CROSS_CONTEXT_ENABLED',this.value==='true')">
+                <option value="false">Disabled</option><option value="true">Enabled</option>
+              </select>
+            </div>
           </div>
         </div>
-        <div class="g3" style="margin-bottom:14px">
+        <div class="cfg-row" style="margin-bottom:14px">
           <!-- Migration Config -->
-          <div class="panel">
+          <div class="panel cfg-panel-sm">
             <div class="panel-h">Migration Config</div>
             <div class="form-g"><label class="form-l">Enable Migration</label>
               <select class="form-sel" id="mc-enable">
@@ -266,13 +276,14 @@
             <div class="form-g"><label class="form-l">Batch Delay (ms)</label>
               <input class="form-inp" type="number" id="mc-batch-delay" min="0" max="5000" placeholder="100"/>
             </div>
+            <div class="form-g" style="margin-top:4px"><label class="form-l" style="color:var(--text3);font-size:10px">Enable once to migrate, auto-disables after.</label></div>
             <button class="btn btn-accent" style="margin-top:8px;width:100%" onclick="window._saveMigrationConfig()">Save Migration Config</button>
             <div id="mc-result" class="result-box hidden"></div>
           </div>
           <!-- Bot / State / Queue Config -->
-          <div class="panel" style="grid-column:2/4">
+          <div class="panel cfg-panel-lg">
             <div class="panel-h">Bot &amp; State Config</div>
-            <div class="g3">
+            <div class="cfg-grid">
               <div class="form-g"><label class="form-l">Response Format</label>
                 <select class="form-sel" id="bc-resp-format">
                   <option value="Normal">Normal</option><option value="Markdown">Markdown</option><option value="Plain">Plain</option>
@@ -298,7 +309,7 @@
               <div class="form-g"><label class="form-l">Context Break (min)</label>
                 <input class="form-inp" type="number" id="bc-ctx-break" min="1" max="1440" placeholder="30"/>
               </div>
-              <div class="form-g"><label class="form-l">Gemma Daily Limit/Key</label>
+              <div class="form-g"><label class="form-l">Gemma Daily Limit / Key</label>
                 <input class="form-inp" type="number" id="bc-gemma-limit" min="100" max="10000" placeholder="1500"/>
               </div>
               <div class="form-g"><label class="form-l">Gemma Default Model</label>
