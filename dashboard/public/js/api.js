@@ -77,6 +77,7 @@ export const api = {
   getMemory:           (userId,page)   => get(`/api/cmd/memory/${userId}?page=${page||1}&limit=50`),
   deleteMemory:        (userId)        => del(`/api/cmd/memory/${userId}`),
   usageStats:          ()              => get('/api/cmd/usage-stats'),
+  getActivities:       ()              => get('/api/config/activities'),
   getRuntimeConfig:    ()              => get('/api/config/runtime'),
   setRuntimeConfig:    (data)          => put('/api/config/runtime', data),
   clearRuntimeConfig:  ()              => del('/api/config/runtime'),

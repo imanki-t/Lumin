@@ -129,7 +129,6 @@ async function initAuth() {
   setText('sb-ue',me.user?.email||'');
 
   buildSidebarNav(el('sb-nav'));
-  buildBottomNav(el('bnav-i'));
   renderCommands();
   startClock();
   startStatsStream();
@@ -366,7 +365,7 @@ async function loadModels() {
   if(!r?.success){el('mdl-grid').innerHTML='<div class="empty">Error loading models</div>';return;}
   modelsData=r;
   const models=r.models||{};
-  const active=r.runtimeOverride||r.defaultModel||'';
+  const active=r.runtimeOverride||r.effectiveDefault||r.defaultModel||'';
   el('mdl-grid').innerHTML=Object.entries(models).map(([key,val])=>`
     <div class="mdl-card ${val===active||key===active?'active':''}" onclick="window._setModel('${val}',this)">
       <div class="mdl-name">${key}</div>
@@ -402,7 +401,21 @@ window._toggleFlag=async(feature,enabled)=>{
 function initModelsPage(){}
 
 // ── Presence ──────────────────────────────────────────────────────────────
-function initPresencePage() { loadCurrentPresence(); }
+function initPresencePage() { loadCurrentPresence(); loadConfigActivities(); }
+async function loadConfigActivities() {
+  const r=await api.getActivities().catch(()=>null);
+  if(!r?.success||!r.data?.length) return;
+  const TYPE_MAP={'Playing':0,'Streaming':1,'Listening':2,'Watching':3,'Competing':5,'Listening to':2};
+  const container=document.querySelector('.p-pb'); if(!container) return;
+  // Append config activities as additional preset buttons
+  const existing=container.innerHTML;
+  const extras=r.data.map(a=>{
+    const t=TYPE_MAP[a.type]??0;
+    const icon={'Playing':'🎮','Watching':'📺','Listening':'🎧','Listening to':'🎧','Streaming':'📡','Competing':'🏆'}[a.type]||'⚡';
+    return `<button class="p-p" onclick="window._preset('online','${a.name.replace(/'/g,"\\'")}','${t}')">${icon} ${a.name}</button>`;
+  }).join('');
+  container.innerHTML=existing+extras;
+}
 window._setPresence=async()=>{
   const r=await api.setPresence({status:v('pres-status'),activity:v('pres-activity'),activityType:parseInt(v('pres-type')||'0')}).catch(()=>null);
   const re=el('pres-result'); if(!re) return;

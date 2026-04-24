@@ -74,7 +74,18 @@ function connect(key, path) {
     s.addon?.fit();
     s.term?.focus();
     if (s.dispose) { s.dispose.dispose(); s.dispose = null; }
-    s.dispose = s.term?.onData(data => { if (ws.readyState===WebSocket.OPEN) ws.send(data); });
+    s.dispose = s.term?.onData(data => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(data);
+      // Local echo: spawn() uses pipes, not a PTY, so the child process never
+      // echoes characters back. We echo locally so input is visible while typing.
+      if (data === '\r') {
+        s.term?.write('\r\n');
+      } else if (data === '\x7f' || data === '\b') {
+        s.term?.write('\b \b');
+      } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        s.term?.write(data);
+      }
+    });
   };
 
   ws.onmessage = e => {
