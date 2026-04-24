@@ -31,7 +31,7 @@ import { writeTempFile, safeUnlink } from '../modules/shared/tempFileManager.js'
 import { initializeBlacklistForGuild } from '../utils.js';
 import { processAttachment } from '../modules/attachments/FileUploader.js';
 import { processUserQueue }  from '../modules/message/MessageProcessor.js';
-import { MODELS, safetySettings, getGenerationConfig, RATE_LIMIT_ERRORS, DEFAULT_MODEL, ENABLE_GEMMA, GEMMA_DEFAULT_MODEL, isGemmaModel } from '../modules/config.js';
+import { MODELS, safetySettings, getGenerationConfig, RATE_LIMIT_ERRORS, DEFAULT_MODEL, ENABLE_GEMMA, GEMMA_DEFAULT_MODEL, GEMMA_FALLBACK_MODEL, GEMMA_SUPPORTED_MIME_PREFIXES, GEMMA_SUPPORTED_EXTENSIONS, isGemmaModel } from '../modules/config.js';
 import config                from '../config.js';
 
 const logger = Logger.get('SearchCommand');
@@ -69,11 +69,20 @@ const SEARCH_SYSTEM_PROMPT = `${config.coreSystemRules}
 You are performing a web search to find current information.
 
 SEARCH INSTRUCTIONS:
-- You MUST use the googleSearch tool for every query
-- Provide accurate, well-sourced information from search results
-- Cite your sources when relevant
-- Be concise and informative
-- Current date: ${getCurrentDate()}`;
+- You MUST use the googleSearch tool for EVERY query without exception
+- Always perform a Google search before answering — never answer from memory alone
+- Provide accurate, well-sourced information strictly from search results
+- Current date: ${getCurrentDate()}
+
+RESPONSE FORMAT (follow exactly):
+1. Start with a brief, direct answer to the query (1–3 sentences)
+2. Follow with clearly structured details using markdown headings/bullets where helpful
+3. End with a "## Sources" section listing each source as:
+   - [Title](URL) — one-line description of what that source contributed
+4. Do NOT ask follow-up questions
+5. Do NOT add phrases like "Let me know if you need more info" or any similar closing prompt
+6. Do NOT add disclaimers about information currency — just state the date if relevant
+7. Every factual claim must be traceable to a cited source in the Sources section`;
 
 const ERR = Object.freeze({
   NO_INPUT:          'Please provide either a text prompt or a file attachment.',
@@ -91,7 +100,9 @@ const ERR = Object.freeze({
   QUEUE_FULL_MSG:    'You have too many requests processing. Please wait.',
   REQUEST_ERROR:     'An error occurred while processing your search request.',
   INVALID_REQUEST:   'Could not process your request. Please try again.',
-  FILE_SEND_FAILED:  'Failed to send search results file.'
+  FILE_SEND_FAILED:  'Failed to send search results file.',
+  GEMMA_MEDIA:       'Unsupported Attachment',
+  GEMMA_MEDIA_MSG:   'Only images (JPG, PNG, WEBP, GIF, BMP, TIFF) are supported when Gemma mode is active. Please remove the attachment or use an image instead.'
 });
 
 // ============================================================================
@@ -105,16 +116,19 @@ function errorEmbed(color, title, description) {
 
 /**
  * Build tool config for a search request.
- * - Gemma models: only googleSearch (no urlContext / codeExecution support).
+ * - googleSearch is ALWAYS included regardless of model — search command requires it.
+ * - Gemma models: googleSearch only (no urlContext / codeExecution support).
  * - Gemini models: googleSearch + urlContext, plus codeExecution when no media attached.
  * @param {boolean} hasMedia
  * @param {string}  [modelName='']
  * @returns {object[]}
  */
 function buildSearchTools(hasMedia, modelName = '') {
+  // Gemma only supports googleSearch — no urlContext or codeExecution
   if (isGemmaModel(modelName)) {
     return [{ googleSearch: {} }];
   }
+  // Gemini: always googleSearch + urlContext; codeExecution only when no media
   const tools = [{ googleSearch: {} }, { urlContext: {} }];
   if (!hasMedia) tools.push({ codeExecution: {} });
   return tools;
@@ -413,6 +427,25 @@ export async function executeSearchInteraction(interaction) {
       }
     }
 
+    // ── Search attachment restriction (all models) ────────────────────────
+    // /search only accepts images. Video, audio, PDFs, and plain-text files
+    // are disabled for all models — Gemini and Gemma alike.
+    // GEMMA_SUPPORTED_MIME_PREFIXES ('image/') and GEMMA_SUPPORTED_EXTENSIONS
+    // already define exactly the image set we want, so we reuse them here.
+    if (attachment) {
+      const mimeType = attachment.contentType || '';
+      const fileName = attachment.name || '';
+      const ext      = fileName.slice(fileName.lastIndexOf('.')).toLowerCase();
+      const isSupportedMime = GEMMA_SUPPORTED_MIME_PREFIXES.some(prefix => mimeType.startsWith(prefix));
+      const isSupportedExt  = GEMMA_SUPPORTED_EXTENSIONS.includes(ext);
+      if (!isSupportedMime && !isSupportedExt) {
+        return interaction.editReply({
+          embeds: [errorEmbed(EMBED_COLORS.WARNING, ERR.GEMMA_MEDIA,
+            'Only images (JPG, PNG, WEBP, GIF, BMP, TIFF) can be attached to a search query. Video, audio, PDFs, and text files are not supported.')]
+        });
+      }
+    }
+
     // ── Build content parts ────────────────────────────────────────────────
     const parts    = [];
     let   hasMedia = false;
@@ -459,13 +492,27 @@ export async function executeSearchInteraction(interaction) {
     const embedColor        = effective.embedColor     || BOT_CONFIG.HEX_COLOUR;
 
     // ── Search fallback chain ──────────────────────────────────────────────
-    // Always: flash-lite (primary) → 2.5-flash (secondary) → gemma (tertiary, only when ENABLE_GEMMA).
-    // User's selectedModel setting is intentionally ignored here — search needs
-    // googleSearch tooling that Gemma partially supports and other custom models may not.
+    // Order (regardless of ENABLE_GEMMA global mode):
+    //   1. gemini-3.1-flash-lite-preview  (primary Gemini)
+    //   2. gemini-2.5-flash               (Gemini fallback)
+    //   3. GEMMA_DEFAULT_MODEL            (Gemma primary, only when ENABLE_GEMMA)
+    //   4. GEMMA_FALLBACK_MODEL           (Gemma fallback, only when ENABLE_GEMMA)
+    //
+    // Gemini models always come first — even when ENABLE_GEMMA is true.
+    // Gemma is appended as a last-resort tier, not as a primary route.
+    // User's selectedModel setting is intentionally ignored here — search always
+    // needs googleSearch tooling; Gemma only partially supports it.
+    const gemmaModels = ENABLE_GEMMA
+      ? [
+          MODELS[GEMMA_DEFAULT_MODEL]  ?? 'gemma-4-26b-a4b-it',
+          MODELS[GEMMA_FALLBACK_MODEL] ?? 'gemma-4-31b-it'
+        ]
+      : [];
+
     const searchFallbackChain = [
       'gemini-3.1-flash-lite-preview',
       'gemini-2.5-flash',
-      ...(ENABLE_GEMMA ? [MODELS[GEMMA_DEFAULT_MODEL] ?? 'gemma-4-26b-a4b-it'] : [])
+      ...gemmaModels
     ];
 
     // ── Search with per-model retry + chain fallback ───────────────────────
