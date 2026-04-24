@@ -149,7 +149,8 @@ router.get('/auth/google/callback', async (req, res) => {
     const secure    = req.headers['x-forwarded-proto'] === 'https';
     const cookieVal = `lumin_session=${sessionToken}; Path=/dashboard; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL/1000}${secure?'; Secure':''}`;
     res.setHeader('Set-Cookie', cookieVal);
-    res.redirect(`/dashboard/?token=${encodeURIComponent(sessionToken)}`);
+    const dest = `/dashboard/?token=${encodeURIComponent(sessionToken)}`;
+    res.send(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,viewport-fit=cover"><script>location.replace(${JSON.stringify(dest)})</script></head></html>`);
   } catch (err) { logger.error('OAuth callback error', err); res.redirect('/dashboard/?auth=error'); }
 });
 
