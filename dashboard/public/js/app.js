@@ -380,8 +380,8 @@ async function loadModels() {
   const ff=await api.getFeatureFlags().catch(()=>null);
   if(ff?.success){
     const flags=ff.data||{};
-    ['ENABLE_GEMMA','CACHE_ENABLED','PDF_ENABLED_FOR_GEMINI','CYCLE_GEMMA_WITH_GEMINI','WEEKLY_SUMMARY_ENABLED','CROSS_CONTEXT_ENABLED'].forEach((f,i)=>{
-      const sel=el(['ff-gemma','ff-cache','ff-pdf','ff-cycle','ff-weekly','ff-cross'][i]);
+    ['ENABLE_GEMMA','CACHE_ENABLED','PDF_ENABLED_FOR_GEMINI','CYCLE_GEMMA_WITH_GEMINI','WEEKLY_SUMMARY_ENABLED'].forEach((f,i)=>{
+      const sel=el(['ff-gemma','ff-cache','ff-pdf','ff-cycle','ff-weekly'][i]);
       if(sel) sel.value=String(flags[f]??(f==='WEEKLY_SUMMARY_ENABLED'?true:false));
     });
   }
