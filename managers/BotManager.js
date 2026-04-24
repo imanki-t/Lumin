@@ -36,7 +36,8 @@ import {
   getApiKeyStats,
   getApiKeyCount,
   switchToNextKey,
-  switchToNextKeyOrModel
+  switchToNextKeyOrModel,
+  rotateToNextKey
 } from './ApiKeyManager.js';
 
 import {
@@ -372,6 +373,7 @@ export {
   getApiKeyStats,
   switchToNextKey,
   switchToNextKeyOrModel,
+  rotateToNextKey,
 
   // QueueManager
   chatHistoryLock,

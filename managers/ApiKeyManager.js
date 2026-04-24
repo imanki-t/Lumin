@@ -477,19 +477,39 @@ export async function switchToNextKeyOrModel(error, currentModelName) {
     tracking.lastError = { message: error?.message || 'Unknown', timestamp: new Date().toISOString() };
   }
 
-  logger.warn(`Non-rate-limit error on Key ${oldKeyIdx + 1} / Model ${currentModelName}: ${error?.message}`);
+  logger.warn(`Non-rate-limit error on Key ${oldKeyIdx + 1} / Model ${currentModelName}: ${error?.message || String(error) || 'Unknown'}`);
   return { keyRotated: false, modelChanged: false, newModel: null };
 }
 
 /**
  * Backward-compatible wrapper around `switchToNextKeyOrModel`.
  * @deprecated Use `switchToNextKeyOrModel` directly.
- * @param {Error} error
- * @returns {boolean}
+ * @param {Error} [error]
+ * @returns {Promise<boolean>}
  */
-export function switchToNextKey(error) {
-  const result = switchToNextKeyOrModel(error, DEFAULT_MODEL);
+export async function switchToNextKey(error) {
+  const result = await switchToNextKeyOrModel(error || new Error('Manual switch'), DEFAULT_MODEL);
   return result.keyRotated || result.modelChanged;
+}
+
+/**
+ * Force-rotate to the next available API key regardless of rate-limit state.
+ * Used by the dashboard's manual "Rotate Key" action.
+ * @returns {boolean} true if rotated, false if only one key or all on cooldown
+ */
+export function rotateToNextKey() {
+  const nextIdx = findAvailableKey();
+  const targetIdx = (nextIdx !== null && nextIdx !== currentKeyIdx)
+    ? nextIdx
+    : (currentKeyIdx + 1) % apiKeys.length;
+  if (targetIdx === currentKeyIdx && apiKeys.length === 1) {
+    logger.warn('Only one API key configured — cannot rotate');
+    return false;
+  }
+  currentKeyIdx = targetIdx;
+  currentClient = new GoogleGenAI({ apiKey: apiKeys[currentKeyIdx] });
+  logger.info(`Dashboard: manually rotated to Key ${currentKeyIdx + 1}`);
+  return true;
 }
 
 // ============================================================================
