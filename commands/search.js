@@ -18,13 +18,15 @@ import { EmbedBuilder, MessageFlags } from 'discord.js';
 
 import {
   genAI,
+  getCurrentClient,
+  sanitizeRequestForModel,
   state,
   requestQueues,          // FIX: direct import — avoids state.requestQueues stale-reference bug
   BOT_CONFIG,
   DEFAULT_USER_SETTINGS
 } from '../managers/BotManager.js';
 import { Logger }            from '../core/Logger.js';
-import { Embeds, addGroundingFields, addUrlContextFields, GOOGLE_AI_ICON } from '../modules/shared/embedBuilder.js';
+import { Embeds, GOOGLE_AI_ICON } from '../modules/shared/embedBuilder.js';
 import { addDownloadButton, addDeleteButton } from '../modules/shared/buttonHandlers.js';
 import { executeWithRetry }  from '../modules/shared/retryUtils.js';
 import { writeTempFile, safeUnlink } from '../modules/shared/tempFileManager.js';
@@ -43,8 +45,8 @@ const logger = Logger.get('SearchCommand');
 const MAX_QUEUE_SIZE = 5;
 
 const CHARACTER_LIMITS = Object.freeze({
-  EMBEDDED:    3900,
-  NORMAL:      1900,
+  EMBEDDED:    4096,   // Discord embed description hard limit
+  NORMAL:      2000,   // Discord message hard limit
   DISCORD_MAX: 2000,
   EMBED_DESC:  4096
 });
@@ -74,15 +76,25 @@ SEARCH INSTRUCTIONS:
 - Provide accurate, well-sourced information strictly from search results
 - Current date: ${getCurrentDate()}
 
-RESPONSE FORMAT (follow exactly):
-1. Start with a brief, direct answer to the query (1–3 sentences)
-2. Follow with clearly structured details using markdown headings/bullets where helpful
-3. End with a "## Sources" section listing each source as:
-   - [Title](URL) — one-line description of what that source contributed
-4. Do NOT ask follow-up questions
-5. Do NOT add phrases like "Let me know if you need more info" or any similar closing prompt
-6. Do NOT add disclaimers about information currency — just state the date if relevant
-7. Every factual claim must be traceable to a cited source in the Sources section`;
+RESPONSE FORMAT (follow this structure exactly, using these exact headings):
+
+## 🔍 Search Query
+State the exact search query or queries you used.
+
+## Answer
+Write in clear prose paragraphs. Only use bullet points or numbered lists when the content is inherently list-like (steps, comparisons, ranked items). Do not bullet-point explanations, facts, or narrative answers.
+
+## TL;DR
+One to two sentences summarising the key finding.
+
+## Sources
+List each source as: - [Title](URL) — one-line description of what it contributed.
+
+RULES:
+- Do NOT ask follow-up questions
+- Do NOT add phrases like "Let me know if you need more info" or any similar closing prompt
+- Do NOT add disclaimers about information currency — just state the date if relevant
+- Every factual claim must be traceable to a cited source in the Sources section`;
 
 const ERR = Object.freeze({
   NO_INPUT:          'Please provide either a text prompt or a file attachment.',
@@ -173,18 +185,19 @@ async function sendSearchAsFile(interaction, text) {
 }
 
 /**
- * Build a full search-result embed with grounding and URL-context metadata.
- * Delegates field rendering to shared `addGroundingFields` / `addUrlContextFields`
- * — no more duplicated formatters.
+ * Build a search-result embed.
  *
- * @param {string}  responseText
- * @param {object|null} groundingMetadata
- * @param {object|null} urlContextMetadata
+ * NOTE: addGroundingFields / addUrlContextFields are intentionally NOT called here.
+ * The model's response already contains structured ## Search Query / ## Answer /
+ * ## TL;DR / ## Sources sections in the description — appending Gemini's raw
+ * grounding metadata fields on top would duplicate the sources and clutter the embed.
+ *
+ * @param {string}        responseText
  * @param {string|number} embedColor
  * @param {import('discord.js').Interaction} interaction
  * @returns {EmbedBuilder}
  */
-function createSearchEmbed(responseText, groundingMetadata, urlContextMetadata, embedColor, interaction) {
+function createSearchEmbed(responseText, embedColor, interaction) {
   const embed = new EmbedBuilder()
     .setColor(embedColor)
     .setDescription(responseText.slice(0, CHARACTER_LIMITS.EMBED_DESC))
@@ -193,9 +206,6 @@ function createSearchEmbed(responseText, groundingMetadata, urlContextMetadata, 
       name:    `Search Results for ${interaction.user.displayName}`,
       iconURL: interaction.user.displayAvatarURL()
     });
-
-  addGroundingFields(embed, groundingMetadata);
-  addUrlContextFields(embed, urlContextMetadata);
 
   if (interaction.guild) {
     embed.setFooter({
@@ -209,14 +219,16 @@ function createSearchEmbed(responseText, groundingMetadata, urlContextMetadata, 
 
 /**
  * Send the final search response in the appropriate format:
- *   - text file  → response too long
+ *   - text file  → response too long (exceeds Discord hard limits)
  *   - embed      → responseFormat === 'Embedded'
  *   - plain text → everything else
  *
+ * Grounding/URL-context metadata is no longer forwarded here — the model's
+ * structured response (## Search Query / ## Answer / ## TL;DR / ## Sources)
+ * already contains all citation information in the text itself.
+ *
  * @param {import('discord.js').Interaction} interaction
  * @param {string}      responseText
- * @param {object|null} groundingMetadata
- * @param {object|null} urlContextMetadata
  * @param {string}      responseFormat
  * @param {string|number} embedColor
  * @param {boolean}     showActionButtons
@@ -225,8 +237,6 @@ function createSearchEmbed(responseText, groundingMetadata, urlContextMetadata, 
 async function sendSearchResponse(
   interaction,
   responseText,
-  groundingMetadata,
-  urlContextMetadata,
   responseFormat,
   embedColor,
   showActionButtons
@@ -239,7 +249,7 @@ async function sendSearchResponse(
   }
 
   if (responseFormat === 'Embedded') {
-    const embed   = createSearchEmbed(responseText, groundingMetadata, urlContextMetadata, embedColor, interaction);
+    const embed   = createSearchEmbed(responseText, embedColor, interaction);
     const payload = { embeds: [embed] };
 
     if (showActionButtons) {
@@ -275,12 +285,28 @@ async function sendSearchResponse(
 }
 
 // ============================================================================
-// GEMINI CALL (via executeWithRetry)
+// GEMINI CALL (direct — bypasses genAI proxy / withRetryPerModel)
 // ============================================================================
 
 /**
- * Run a single streaming Gemini search generation, returning the full response
- * and any grounding/URL-context metadata.
+ * Run a single streaming search generation against the raw Gemini client,
+ * deliberately bypassing the genAI proxy.
+ *
+ * WHY bypass the proxy:
+ *   The genAI proxy wraps every call in ApiKeyManager.withRetryPerModel, which
+ *   uses the global MODEL_FALLBACK_CHAIN for internal model switching.  When
+ *   ENABLE_GEMMA=true that chain is replaced with Gemma-only models, so a rate
+ *   limit on gemini-3.1-flash-lite-preview causes withRetryPerModel to jump
+ *   straight to Gemma — silently skipping gemini-2.5-flash — before the
+ *   searchFallbackChain loop in executeSearchInteraction ever sees the error.
+ *
+ *   By calling getCurrentClient() directly, rate-limit errors propagate as real
+ *   throws.  executeWithRetry re-throws them to the outer for-loop, which then
+ *   steps correctly through:
+ *     gemini-3.1-flash-lite-preview → gemini-2.5-flash → gemma (if ENABLE_GEMMA)
+ *
+ *   sanitizeRequestForModel is called explicitly here to strip tools that the
+ *   target model doesn't support (e.g. urlContext / codeExecution for Gemma).
  *
  * @param {string}   modelName
  * @param {object}   generationConfig
@@ -300,7 +326,13 @@ async function runSearchGeneration(modelName, generationConfig, tools, parts) {
     safetySettings
   };
 
-  const result = await genAI.models.generateContentStream(request);
+  // Strip tools incompatible with this specific model (e.g. urlContext + codeExecution for Gemma)
+  // before sending — mirrors what the genAI proxy does inside withRetryPerModel.
+  sanitizeRequestForModel(request, modelName);
+
+  // Use the raw client — do NOT go through genAI proxy, which would re-wrap
+  // this in withRetryPerModel and hijack model switching away from our chain.
+  const result = await getCurrentClient().models.generateContentStream(request);
 
   for await (const chunk of result) {
     const chunkText = chunk.text || '';
@@ -554,8 +586,6 @@ export async function executeSearchInteraction(interaction) {
     await sendSearchResponse(
       interaction,
       searchResult.response,
-      searchResult.groundingMetadata,
-      searchResult.urlContextMetadata,
       responseFormat,
       embedColor,
       showActionButtons
