@@ -1,142 +1,120 @@
 import { getToken } from './config.js';
 
 const THEME = {
-  background:          '#070709',
-  foreground:          '#E4E4F0',
-  cursor:              '#6D5AE6',
-  cursorAccent:        '#070709',
-  selectionBackground: 'rgba(109,90,230,0.3)',
-  black:   '#1A1A25', red:     '#FF6B6B', green:   '#4ADE80',
-  yellow:  '#FCD34D', blue:    '#818CF8', magenta: '#C084FC',
-  cyan:    '#67E8F9', white:   '#E4E4F0',
-  brightBlack:   '#555570', brightRed:     '#FF8585', brightGreen:   '#6BEE96',
-  brightYellow:  '#FDDF75', brightBlue:    '#A5B4FC', brightMagenta: '#D8B4FE',
-  brightCyan:    '#93F0FF', brightWhite:   '#FFFFFF',
+  background:'#050508', foreground:'#E4E4F0', cursor:'#8B77FF', cursorAccent:'#050508',
+  selectionBackground:'rgba(139,119,255,0.25)',
+  black:'#1A1A25',  red:'#FF6B6B',    green:'#4ADE80',  yellow:'#FCD34D',
+  blue:'#818CF8',   magenta:'#C084FC', cyan:'#67E8F9',   white:'#E4E4F0',
+  brightBlack:'#555570',   brightRed:'#FF8585',    brightGreen:'#6BEE96',
+  brightYellow:'#FDDF75',  brightBlue:'#A5B4FC',   brightMagenta:'#D8B4FE',
+  brightCyan:'#93F0FF',    brightWhite:'#FFFFFF',
 };
 
 const OPTS = {
-  theme: THEME, cursorBlink: true, cursorStyle: 'bar',
-  fontSize: 13, fontFamily: "'IBM Plex Mono','Cascadia Code','Fira Code',monospace",
-  lineHeight: 1.45, letterSpacing: 0.2, scrollback: 5000,
-  allowTransparency: true,
-  disableStdin: false,
-  convertEol: true,
+  theme:THEME, cursorBlink:true, cursorStyle:'bar',
+  fontSize:13, fontFamily:"'JetBrains Mono','Fira Code','Cascadia Code',monospace",
+  lineHeight:1.4, scrollback:5000, allowTransparency:true,
+  disableStdin:false, convertEol:true,
 };
 
 const T = {
-  node:  { term:null, ws:null, addon:null, ready:false, inputDispose:null },
-  mongo: { term:null, ws:null, addon:null, ready:false, inputDispose:null },
+  node:  {term:null,ws:null,addon:null,ready:false,dispose:null},
+  mongo: {term:null,ws:null,addon:null,ready:false,dispose:null},
+  shell: {term:null,ws:null,addon:null,ready:false,dispose:null},
 };
 
-function wsUrl(path) {
-  return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/dashboard${path}?token=${encodeURIComponent(getToken())}`;
-}
+const wsUrl = path => `${location.protocol==='https:'?'wss':'ws'}://${location.host}/dashboard${path}?token=${encodeURIComponent(getToken())}`;
 
 function setConn(key, state) {
-  // state: 'connected' | 'disconnected' | 'reconnecting'
   const badge = document.getElementById(`${key}-badge`);
   if (badge) {
-    badge.className = `conn-badge ${state === 'connected' ? 'connected' : state === 'reconnecting' ? 'reconnecting' : ''}`;
-    const lbl = badge.querySelector('.conn-lbl');
-    if (lbl) lbl.textContent = state === 'connected' ? 'Connected' : state === 'reconnecting' ? 'Reconnecting…' : 'Disconnected';
+    badge.className = `conn-pill${state==='ok'?' ok':state==='warn'?' warn':''}`;
+    const lbl = badge.querySelector('.conn-pill-lbl');
+    if (lbl) lbl.textContent = state==='ok'?'Connected':state==='warn'?'Reconnecting…':'Disconnected';
+    const dot = badge.querySelector('.conn-pill-dot');
+    if (dot) dot.style.background = state==='ok'?'var(--ok)':state==='warn'?'var(--warn)':'var(--text3)';
   }
-  const discBtn = document.getElementById(`${key}-disconnect`);
-  const reconBtn = document.getElementById(`${key}-reconnect`);
-  if (discBtn) discBtn.classList.toggle('hidden', state !== 'connected');
-  if (reconBtn) reconBtn.classList.toggle('hidden', state !== 'disconnected');
+  const disc  = document.getElementById(`${key}-disconnect`);
+  const recon = document.getElementById(`${key}-reconnect`);
+  if (disc)  disc.classList.toggle('hidden',  state!=='ok');
+  if (recon) recon.classList.toggle('hidden', state!=='disconnected');
 }
+
+const ro = new ResizeObserver(() => {
+  for (const [,s] of Object.entries(T)) { if (s.ready) s.addon?.fit(); }
+});
 
 function initTerm(key, containerId) {
   const s = T[key];
   if (s.ready) return;
-  const el = document.getElementById(containerId);
-  if (!el) return;
+  const container = document.getElementById(containerId);
+  if (!container) return;
   s.term  = new Terminal(OPTS);
   s.addon = new FitAddon.FitAddon();
   s.term.loadAddon(s.addon);
-  s.term.open(el);
-  // Force focus so typing is captured immediately
+  s.term.open(container);
   s.term.focus();
   requestAnimationFrame(() => { s.addon?.fit(); s.term?.focus(); });
+  ro.observe(container);
+  container.addEventListener('click', () => s.term?.focus());
   s.ready = true;
 }
 
 function connect(key, path) {
   const s = T[key];
   if (s.ws && s.ws.readyState < 2) return;
-
-  setConn(key, 'reconnecting');
+  setConn(key, 'warn');
   const ws = new WebSocket(wsUrl(path));
   ws.binaryType = 'arraybuffer';
   s.ws = ws;
 
   ws.onopen = () => {
-    setConn(key, 'connected');
-    s.term?.writeln('\x1b[32m[Session started — click here and type your commands]\x1b[0m\r\n');
+    setConn(key, 'ok');
+    s.term?.writeln('\x1b[32m[Connected — start typing]\x1b[0m\r');
     s.addon?.fit();
     s.term?.focus();
-    // Bind input: every keypress → send raw to server
-    if (s.inputDispose) { s.inputDispose.dispose(); s.inputDispose = null; }
-    s.inputDispose = s.term?.onData(data => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(data);
-    });
+    if (s.dispose) { s.dispose.dispose(); s.dispose = null; }
+    s.dispose = s.term?.onData(data => { if (ws.readyState===WebSocket.OPEN) ws.send(data); });
   };
 
   ws.onmessage = e => {
-    const text = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data);
+    const text = typeof e.data==='string' ? e.data : new TextDecoder().decode(e.data);
     s.term?.write(text);
   };
 
   ws.onclose = () => {
     setConn(key, 'disconnected');
-    s.term?.writeln('\r\n\x1b[33m[Session closed — click Reconnect to start a new session]\x1b[0m\r\n');
-    // Dispose input binding so we don't send to dead socket
-    if (s.inputDispose) { s.inputDispose.dispose(); s.inputDispose = null; }
+    s.term?.writeln('\r\n\x1b[33m[Session closed — click Reconnect]\x1b[0m\r');
+    if (s.dispose) { s.dispose.dispose(); s.dispose = null; }
     s.ws = null;
   };
 
   ws.onerror = () => {
     setConn(key, 'disconnected');
-    s.term?.writeln('\r\n\x1b[31m[Connection error]\x1b[0m\r\n');
-    if (s.inputDispose) { s.inputDispose.dispose(); s.inputDispose = null; }
+    s.term?.writeln('\r\n\x1b[31m[Connection error]\x1b[0m\r');
+    if (s.dispose) { s.dispose.dispose(); s.dispose = null; }
     s.ws = null;
   };
 }
 
 function disconnect(key) {
-  if (T[key].inputDispose) { T[key].inputDispose.dispose(); T[key].inputDispose = null; }
-  T[key].ws?.close();
-  T[key].ws = null;
+  if (T[key].dispose) { T[key].dispose.dispose(); T[key].dispose = null; }
+  T[key].ws?.close(); T[key].ws = null;
   setConn(key, 'disconnected');
 }
 
-const ro = new ResizeObserver(() => {
-  if (T.node.ready)  T.node.addon?.fit();
-  if (T.mongo.ready) T.mongo.addon?.fit();
-});
-
-export function initNodeTerminal() {
-  initTerm('node', 'node-body');
-  const el = document.getElementById('node-body');
-  if (el) ro.observe(el);
-  // Click on terminal body → focus the terminal
-  el?.addEventListener('click', () => T.node.term?.focus());
-  if (!T.node.ws || T.node.ws.readyState > 1) connect('node', '/ws/node');
-}
-
-export function initMongoTerminal() {
-  initTerm('mongo', 'mongo-body');
-  const el = document.getElementById('mongo-body');
-  if (el) ro.observe(el);
-  el?.addEventListener('click', () => T.mongo.term?.focus());
-  if (!T.mongo.ws || T.mongo.ws.readyState > 1) connect('mongo', '/ws/mongo');
-}
+export function initNodeTerminal()  { initTerm('node',  'node-body');  if (!T.node.ws  || T.node.ws.readyState  > 1) connect('node',  '/ws/node'); }
+export function initMongoTerminal() { initTerm('mongo', 'mongo-body'); if (!T.mongo.ws || T.mongo.ws.readyState > 1) connect('mongo', '/ws/mongo'); }
+export function initShellTerminal() { initTerm('shell', 'shell-body'); if (!T.shell.ws || T.shell.ws.readyState > 1) connect('shell', '/ws/shell'); }
 
 window.TERM = {
-  disconnectNode:  () => disconnect('node'),
-  reconnectNode:   () => { T.node.term?.writeln('\x1b[36m[Reconnecting…]\x1b[0m\r\n'); connect('node', '/ws/node'); },
-  clearNode:       () => T.node.term?.clear(),
-  disconnectMongo: () => disconnect('mongo'),
-  reconnectMongo:  () => { T.mongo.term?.writeln('\x1b[36m[Reconnecting…]\x1b[0m\r\n'); connect('mongo', '/ws/mongo'); },
-  clearMongo:      () => T.mongo.term?.clear(),
+  disconnectNode:  ()=>disconnect('node'),
+  reconnectNode:   ()=>{ T.node.term?.writeln('\x1b[36m[Reconnecting…]\x1b[0m\r'); connect('node','/ws/node'); },
+  clearNode:       ()=>T.node.term?.clear(),
+  disconnectMongo: ()=>disconnect('mongo'),
+  reconnectMongo:  ()=>{ T.mongo.term?.writeln('\x1b[36m[Reconnecting…]\x1b[0m\r'); connect('mongo','/ws/mongo'); },
+  clearMongo:      ()=>T.mongo.term?.clear(),
+  disconnectShell: ()=>disconnect('shell'),
+  reconnectShell:  ()=>{ T.shell.term?.writeln('\x1b[36m[Reconnecting…]\x1b[0m\r'); connect('shell','/ws/shell'); },
+  clearShell:      ()=>T.shell.term?.clear(),
 };

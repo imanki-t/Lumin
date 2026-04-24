@@ -1,398 +1,663 @@
 import { getToken, setToken, clearToken, hasToken, BASE_URL } from './config.js';
 import { buildSidebarNav, buildBottomNav, navigate, onNavigate, setLockdownIndicator } from './router.js';
-import { loadServers, filterServers, leaveServer, resetServer, svPage, refreshSingleServer } from './servers.js';
 import { renderCommands, renderApiKeysPanel } from './commands.js';
-import { initAnnounce, sendAnnouncement } from './announce.js';
-import { loadLockdownState, toggleLockdown } from './lockdown.js';
-import { initNodeTerminal, initMongoTerminal } from './terminals.js';
-import { toastOk, toastErr, toastWarn } from './toast.js';
+import { initNodeTerminal, initMongoTerminal, initShellTerminal } from './terminals.js';
+import { toastOk, toastErr, toastInfo, toastWarn } from './toast.js';
 import { api } from './api.js';
 
-// Formatters
 const fmtBytes=(b,d=1)=>!b||b<0?'—':b<1024?`${b}B`:b<1048576?`${(b/1024).toFixed(d)}KB`:b<1073741824?`${(b/1048576).toFixed(d)}MB`:`${(b/1073741824).toFixed(d)}GB`;
-const fmtUptime=s=>{s=Math.floor(s||0);const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60),sec=s%60;return d>0?`${d}d ${h}h ${m}m`:h>0?`${h}h ${m}m`:`${m}m ${sec}s`;};
-const fmtNum=n=>(n==null)?'—':Number(n).toLocaleString();
-const setText=(id,v)=>{const el=document.getElementById(id);if(el&&el.textContent!==String(v))el.textContent=String(v);};
+const fmtUp=s=>{s=Math.floor(s||0);const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60),sec=s%60;return d>0?`${d}d ${h}h ${m}m`:h>0?`${h}h ${m}m`:`${m}m ${sec}s`;};
+const fmtN=n=>(n==null)?'—':Number(n).toLocaleString();
+const setText=(id,v)=>{const e=document.getElementById(id);if(e&&e.textContent!==String(v))e.textContent=String(v);};
+const el=id=>document.getElementById(id);
+const show=(id,cls='')=>{const e=el(id);if(e){e.className=cls;e.classList.remove('hidden');}};
+const hide=id=>el(id)?.classList.add('hidden');
+const v=id=>(el(id)?.value||'').trim();
 
-// Clock
+// ── Clock ─────────────────────────────────────────────────────────────────
 function startClock() {
-  const tick=()=>{const now=new Date();const t=now.toLocaleTimeString('en-US',{hour12:false});const d=now.toLocaleDateString('en-US',{month:'short',day:'numeric'});setText('tb-clock',`${d} · ${t}`);};
-  tick(); setInterval(tick,1000);
+  const tick=()=>{const n=new Date();setText('tb-clk',`${n.toLocaleDateString('en-US',{month:'short',day:'numeric'})} · ${n.toLocaleTimeString('en-US',{hour12:false})}`);}; tick(); setInterval(tick,1000);
 }
 
-// Stats WebSocket
+// ── Stats WebSocket stream ────────────────────────────────────────────────
 let statsWs=null;
 function startStatsStream() {
-  if(statsWs&&statsWs.readyState<2)return;
+  if (statsWs && statsWs.readyState < 2) return;
   const proto=location.protocol==='https:'?'wss':'ws';
   statsWs=new WebSocket(`${proto}://${location.host}/dashboard/ws/stats?token=${encodeURIComponent(getToken())}`);
-  statsWs.onmessage=e=>{try{updateStats(JSON.parse(e.data));}catch{}};
-  statsWs.onclose=()=>{setTimeout(startStatsStream,3000);};
-  statsWs.onerror=()=>{statsWs?.close();};
+  statsWs.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.type==='stats')updateStats(d.data);}catch{}};
+  statsWs.onclose=()=>setTimeout(startStatsStream,3000);
+  statsWs.onerror=()=>statsWs?.close();
 }
 
 function updateStats(d) {
-  setText('hc-servers',fmtNum(d.serverCount));
-  setText('hc-members',fmtNum(d.totalUsers));
+  setText('hc-servers',fmtN(d.serverCount));
+  setText('hc-members',fmtN(d.totalUsers));
   setText('hc-ping',d.ping>=0?`${d.ping}ms`:'—');
-  setText('hc-uptime',fmtUptime(d.uptime));
+  setText('hc-uptime',fmtUp(d.uptime));
   setText('tb-ping',d.ping>=0?`${d.ping}ms`:'—');
-  const sub=document.getElementById('hc-ping-sub');
-  if(sub)sub.textContent=d.ping<0?'Offline':d.ping<150?'Excellent':d.ping<300?'Good':'High';
-  const dot=document.getElementById('sb-dot');
-  if(dot)dot.style.background=d.ping<0?'var(--err)':d.ping<300?'var(--ok)':'var(--warn)';
+  const q=el('hc-ping-q'); if(q)q.textContent=d.ping<0?'Offline':d.ping<150?'Excellent':d.ping<300?'Good':'High latency';
+  const dot=el('sb-dot');
+  if(dot){dot.className='sb-dot'+(d.ping<0?' err':d.ping>400?' warn':'');}
   setText('sb-ping',d.ping>=0?`${d.ping}ms`:'—');
-  setText('sb-status',d.ping<0?'Offline':'Online');
+  setText('sb-status',d.wsStatus||'Unknown');
   buildStatGrid(d);
-  if(d.globalLockdown!==undefined)setLockdownIndicator(!!d.globalLockdown);
+  if(d.globalLockdown!==undefined) setLockdownIndicator(!!d.globalLockdown);
 }
 
 function buildStatGrid(d) {
-  const grid=document.getElementById('stat-grid');
-  if(!grid)return;
-  const heapUsed=d.ram?.heapUsed||d.heapUsed||0;
-  const heapTotal=d.ram?.heapTotal||d.heapTotal||0;
-  const rss=d.ram?.rss||d.rss||0;
-  const sysFree=d.ram?.sysFree||d.sysFree||0;
-  const sysTotal=d.ram?.sysTotal||d.sysTotal||0;
-  const heapPct=heapTotal?Math.round((heapUsed/heapTotal)*100):0;
-  const ramPct=sysTotal?Math.round(((sysTotal-sysFree)/sysTotal)*100):0;
+  const grid=el('stat-grid'); if(!grid) return;
+  const hU=d.heapUsed||0,hT=d.heapTotal||0,rss=d.rss||0,sF=d.sysFree||0,sT=d.sysTotal||0;
+  const hPct=hT?Math.round((hU/hT)*100):0,rPct=sT?Math.round(((sT-sF)/sT)*100):0;
   const stats=[
-    {label:'Heap Used',    value:fmtBytes(heapUsed),        sub:`${heapPct}% of ${fmtBytes(heapTotal)}`,   bar:heapPct,  barColor:heapPct>80?'err':heapPct>60?'warn':'ok'},
-    {label:'RSS Memory',   value:fmtBytes(rss),             sub:'Resident set size'},
-    {label:'System RAM',   value:fmtBytes(sysTotal-sysFree),sub:`${ramPct}% of ${fmtBytes(sysTotal)} used`, bar:ramPct,   barColor:ramPct>85?'err':ramPct>70?'warn':'ok'},
-    {label:'Disk Used',    value:d.disk?.used||'—',         sub:`${d.disk?.percent||'—'} · ${d.disk?.available||'—'} free`},
-    {label:'Node.js',      value:d.nodeVersion||'—',        sub:d.platform||'—'},
-    {label:'CPU Cores',    value:String(d.cpuCores||'—'),   sub:d.cpuModel?.split(' ').slice(-2).join(' ')||'Available cores'},
-    {label:'WS Status',    value:d.wsStatus||'—',           sub:'Discord socket',badge:d.wsStatus==='READY'?'ok':d.wsStatus==='CONNECTING'?'warn':'err',badgeLbl:d.wsStatus||'—'},
-    {label:'Lockdown',     value:d.globalLockdown?'ACTIVE':'Off', sub:'Global state',badge:d.globalLockdown?'err':null,badgeLbl:'LOCKDOWN'},
-    {label:'Debug Mode',   value:d.debugMode?'ON':'Off',    sub:'Verbose logging'},
-    {label:'Chat Sessions',value:fmtNum(d.totalChatHistories||d.historyCount),sub:'Active sessions'},
-    {label:'Blacklisted',  value:fmtNum(d.totalBlacklisted||d.blacklistCount),sub:'Users blocked'},
-    {label:'Uptime',       value:fmtUptime(d.uptime),       sub:'Since last restart'},
+    {l:'Heap Used',   v:fmtBytes(hU),  s:`${hPct}% of ${fmtBytes(hT)}`,bar:hPct,  bc:hPct>80?'err':hPct>60?'warn':'ok'},
+    {l:'RSS Memory',  v:fmtBytes(rss), s:'Resident set size'},
+    {l:'System RAM',  v:fmtBytes(sT-sF),s:`${rPct}% used`,              bar:rPct,  bc:rPct>85?'err':rPct>70?'warn':'ok'},
+    {l:'Disk',        v:d.disk?.used||'—',s:`${d.disk?.percent||'—'} · ${d.disk?.available||'—'} free`},
+    {l:'Node.js',     v:d.nodeVersion||'—',s:'Runtime version'},
+    {l:'WS Status',   v:d.wsStatus||'—',s:'Discord gateway',tag:d.wsStatus==='READY'?'ok':d.wsStatus==='CONNECTING'?'warn':'err',tl:d.wsStatus||'?'},
+    {l:'Lockdown',    v:d.globalLockdown?'ACTIVE':'Off',s:'Global state',tag:d.globalLockdown?'err':null,tl:'ON'},
+    {l:'Debug Mode',  v:d.debugMode?'ON':'Off',s:'Verbose logging'},
+    {l:'Chat Sessions',v:fmtN(d.totalHistories),s:'In memory'},
+    {l:'Histories',   v:fmtN(d.totalHistories),s:'Active'},
+    {l:'User Settings',v:fmtN(d.totalUsers_s),s:'Stored'},
+    {l:'Uptime',      v:fmtUp(d.uptime),s:'Process uptime'},
   ];
-  grid.innerHTML=stats.map(s=>`
-    <div class="stat-card">
-      <div class="stat-label">${s.label}</div>
-      <div class="stat-value">${s.value}</div>
-      <div class="stat-sub">${s.sub}</div>
-      ${s.bar!=null?`<div class="stat-bar"><div class="stat-bar-fill ${s.barColor||'ok'}" style="width:${Math.min(s.bar,100)}%"></div></div>`:''}
-      ${s.badge&&s.badgeLbl?`<span class="stat-badge ${s.badge}">${s.badgeLbl}</span>`:''}
-    </div>`).join('');
+  grid.innerHTML=stats.map(s=>`<div class="sc"><div class="sc-lbl">${s.l}</div><div class="sc-val">${s.v}</div><div class="sc-sub">${s.s}</div>${s.bar!=null?`<div class="sc-bar"><div class="sc-fill ${s.bc||'ok'}" style="width:${Math.min(s.bar,100)}%"></div></div>`:''}${s.tag&&s.tl?`<span class="tag tag-${s.tag}" style="margin-top:4px">${s.tl}</span>`:''}</div>`).join('');
 }
 
 async function loadFullStats() {
-  const r=await api.getStats().catch(()=>null);
-  if(!r)return;
-  if(r.username)setText('bot-name',r.username);
-  if(r.id)setText('bot-id',`ID: ${r.id}`);
-  if(r.tag)setText('bot-tag',r.tag);
-  const av=document.getElementById('bot-av');
-  if(av&&r.avatarURL){av.src=r.avatarURL;av.style.display='block';}
-  const dbDot=document.getElementById('db-dot');
-  const dbText=document.getElementById('db-status-text');
-  const dbOk=r.mongoStatus==='Connected'||r.dbStatus==='connected'||r.dbStatus==='ok';
-  if(dbDot)dbDot.className=`status-dot ${dbOk?'ok':'err'}`;
-  if(dbText)dbText.textContent=dbOk?'Connected':(r.mongoStatus||r.dbStatus||'Unknown');
-  const keyRes=await api.getApiKeyStats().catch(()=>null);
-  if(keyRes?.success)renderApiKeysPanel(keyRes.data);
-  // Load current presence
+  const r=await api.getStats().catch(()=>null); if(!r) return;
+  if(r.username) setText('bot-name',r.username);
+  if(r.id)       setText('bot-id',`ID: ${r.id}`);
+  if(r.tag)      setText('bot-tag',r.tag);
+  const av=el('bot-av'); if(av&&r.avatarURL){av.src=r.avatarURL;av.style.display='block';}
+  const dbOk=r.mongoStatus==='Connected';
+  const dbD=el('db-dot'); if(dbD) dbD.className=`db-dot ${dbOk?'ok':'err'}`;
+  setText('db-status-text',r.mongoStatus||'Unknown');
+  const kr=await api.getApiKeyStats().catch(()=>null);
+  if(kr?.success) renderApiKeysPanel(kr.data);
   loadCurrentPresence();
 }
 
-// ── Presence ─────────────────────────────────────────────────────────────────
+// ── Presence ─────────────────────────────────────────────────────────────
 async function loadCurrentPresence() {
-  const r = await api.getPresence().catch(()=>null);
-  if (!r?.success) return;
-  const p = r.presence;
-  const el = document.getElementById('presence-current-display');
-  if (el && p) {
-    const typeMap = {0:'Playing',1:'Streaming',2:'Listening to',3:'Watching',5:'Competing in'};
-    const status = p.status || 'online';
-    const statusDot = {online:'🟢',idle:'🟡',dnd:'🔴',invisible:'⚫'}[status]||'⚪';
-    const actType = p.activities?.[0] ? (typeMap[p.activities[0].type]||'') : '';
-    const actName = p.activities?.[0]?.name || '';
-    el.innerHTML = `
-      <div class="presence-live-row">
-        <span class="plr-dot">${statusDot}</span>
-        <span class="plr-status">${status.charAt(0).toUpperCase()+status.slice(1)}</span>
-        ${actName?`<span class="plr-sep">·</span><span class="plr-act">${actType} ${actName}</span>`:''}
-      </div>`;
-  }
-  // Pre-fill form with current values
-  if (p?.status) {
-    const sel = document.getElementById('presence-status');
-    if (sel) sel.value = p.status;
-  }
-  if (p?.activities?.[0]) {
-    const act = p.activities[0];
-    const inp = document.getElementById('presence-activity');
-    if (inp) inp.value = act.name || '';
-    const typ = document.getElementById('presence-type');
-    if (typ) typ.value = String(act.type ?? 0);
-  }
+  const r=await api.getPresence().catch(()=>null); if(!r?.success) return;
+  const p=r.presence; const e=el('presence-cur'); if(!e) return;
+  if(!p){e.innerHTML='<span style="color:var(--text3);font-size:12px">No presence data</span>';return;}
+  const TM={0:'Playing',1:'Streaming',2:'Listening to',3:'Watching',5:'Competing in'};
+  const SD={online:'🟢',idle:'🟡',dnd:'🔴',invisible:'⚫'};
+  const act=p.activities?.[0];
+  e.innerHTML=`<span style="font-size:15px">${SD[p.status]||'⚪'}</span><span style="font-weight:600">${(p.status||'').replace(/^\w/,c=>c.toUpperCase())}</span>${act?`<span style="color:var(--text3)">·</span><span style="color:var(--text2)">${TM[act.type]||''} ${act.name||''}</span>`:''}`;
 }
 
-function applyPreset(status, activity, type) {
-  const s=document.getElementById('presence-status');
-  const a=document.getElementById('presence-activity');
-  const t=document.getElementById('presence-type');
-  if(s)s.value=status;if(a)a.value=activity;if(t)t.value=type;
+// ── Login flow ────────────────────────────────────────────────────────────
+window._initiateLogin = () => { location.href = `${BASE_URL}/auth/google`; };
+
+function showLogin(msg, type='err') {
+  const a=el('login-alert'); if(!a) return;
+  a.textContent=msg; a.className=type==='err'?'':'';
+  a.classList.remove('hidden');
 }
 
-async function setPresence(){
-  const status=document.getElementById('presence-status')?.value||'online';
-  const activity=(document.getElementById('presence-activity')?.value||'').trim();
-  const type=parseInt(document.getElementById('presence-type')?.value||'0');
-  const result=document.getElementById('presence-result');
-  const r=await api.setPresence({status,activity,activityType:type}).catch(e=>({error:e.message}));
-  if(result){result.className=`cmd-result ${r?.success?'ok':'err'}`;result.textContent=r?.message||r?.error||'';result.classList.remove('hidden');}
-  if(r?.success){ toastOk(r.message||'Presence updated'); loadCurrentPresence(); }
-  else toastErr(r?.error||'Failed');
-}
-
-// ── Users ─────────────────────────────────────────────────────────────────────
-let _usersPage = 1;
-const USERS_PER_PAGE = 10;
-let _blacklistData = [];
-
-async function lookupUser(){
-  const raw=(document.getElementById('user-lookup-id')?.value||'').trim();
-  if(!raw){toastErr('Enter a User ID or username');return;}
-
-  const el=document.getElementById('user-lookup-result');
-  if(el){el.classList.remove('hidden');el.textContent='Looking up…';}
-
-  // Try to resolve username if not numeric
-  let userId = raw;
-  if(!/^\d{17,20}$/.test(raw)){
-    const rv = await api.resolveUsername(raw).catch(()=>null);
-    if(rv?.success && rv.id) userId = rv.id;
-  }
-
-  // Fetch full profile
-  const r = await api.fetchUserProfile(userId).catch(e=>({error:e.message}));
-  if(!el)return;
-  if(r?.success && r.user){
-    const u = r.user;
-    const createdDate = new Date(u.createdAt||0).toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'});
-    el.innerHTML = `
-      <div class="user-profile-card">
-        <div class="upc-header">
-          <img class="upc-avatar" src="${u.avatarURL||''}" onerror="this.src=''" alt=""/>
-          <div class="upc-identity">
-            <div class="upc-display">${esc(u.displayName||u.username||'Unknown')}</div>
-            <div class="upc-tag mono">${esc(u.tag||u.username||'—')}</div>
-            <div class="upc-id mono">${u.id}</div>
-          </div>
-          <div class="upc-badges">
-            ${u.bot?'<span class="upc-badge bot">BOT</span>':''}
-            ${u.system?'<span class="upc-badge sys">SYSTEM</span>':''}
-          </div>
-        </div>
-        <div class="upc-grid">
-          <div class="upc-field"><div class="upc-flbl">Account Created</div><div class="upc-fval">${createdDate}</div></div>
-          <div class="upc-field"><div class="upc-flbl">Mutual Servers</div><div class="upc-fval">${u.mutualGuilds??'—'}</div></div>
-          <div class="upc-field"><div class="upc-flbl">Custom Settings</div><div class="upc-fval">${u.hasSettings?'Yes':'No'}</div></div>
-          <div class="upc-field"><div class="upc-flbl">Chat History</div><div class="upc-fval">${u.hasHistory?'Yes':'No'}</div></div>
-        </div>
-        ${u.hasSettings?`<button class="upc-action" onclick="window._viewUserSettings('${u.id}')">View Settings</button>`:''}
-      </div>`;
-    el.classList.remove('hidden');
-  } else {
-    // Fallback to settings lookup
-    const sr=await api.getUserSettings(userId).catch(e=>({error:e.message}));
-    if(sr?.success){
-      el.innerHTML = `<div class="upc-fallback"><div class="mono" style="font-size:11px;color:var(--ts)">User ID: ${userId}</div><pre style="margin-top:8px;font-size:11px;color:var(--ts);overflow:auto">${sr.found?JSON.stringify(sr.data,null,2):`No settings for user ${userId}`}</pre></div>`;
-    } else {
-      el.textContent = r?.error||sr?.error||'User not found';
-    }
-  }
-}
-
-async function viewUserSettings(userId){
-  const r=await api.getUserSettings(userId).catch(e=>({error:e.message}));
-  const el=document.getElementById('user-lookup-result');
-  if(!el)return;
-  const data = r?.success ? (r.found ? JSON.stringify(r.data,null,2) : 'No custom settings') : (r?.error||'Error');
-  el.innerHTML += `<pre class="upc-settings-pre">${data}</pre>`;
-}
-
-async function sendDm(){
-  const raw=(document.getElementById('dm-user-id')?.value||'').trim();
-  const message=(document.getElementById('dm-message')?.value||'').trim();
-  const result=document.getElementById('dm-result');
-  if(!raw||!message){toastErr('User and message required');return;}
-
-  let userId = raw;
-  if(!/^\d{17,20}$/.test(raw)){
-    const rv = await api.resolveUsername(raw).catch(()=>null);
-    if(rv?.success && rv.id) userId = rv.id;
-    else { toastErr(`Could not resolve "${raw}"`); return; }
-  }
-  const r=await api.sendDm(userId,message).catch(e=>({error:e.message}));
-  if(result){result.className=`cmd-result ${r?.success?'ok':'err'}`;result.textContent=r?.message||r?.error||'';result.classList.remove('hidden');}
-  r?.success?toastOk(r.message||'DM sent'):toastErr(r?.error||'Failed');
-}
-
-async function blacklistUser(){
-  const userId=(document.getElementById('bl-user-id')?.value||'').trim();
-  const guildId=(document.getElementById('bl-guild-id')?.value||'').trim();
-  const result=document.getElementById('bl-result');
-  if(!userId||!guildId){toastErr('User ID and Guild ID required');return;}
-  const r=await api.blacklistUser(userId,guildId).catch(e=>({error:e.message}));
-  if(result){result.className=`cmd-result ${r?.success?'ok':'err'}`;result.textContent=r?.message||r?.error||'';result.classList.remove('hidden');}
-  r?.success?toastOk(r.message||'Blacklisted'):toastErr(r?.error||'Failed');
-}
-
-async function unblacklistUser(){
-  const userId=(document.getElementById('bl-user-id')?.value||'').trim();
-  const guildId=(document.getElementById('bl-guild-id')?.value||'').trim();
-  const result=document.getElementById('bl-result');
-  if(!userId||!guildId){toastErr('User ID and Guild ID required');return;}
-  const r=await api.unblacklistUser(userId,guildId).catch(e=>({error:e.message}));
-  if(result){result.className=`cmd-result ${r?.success?'ok':'err'}`;result.textContent=r?.message||r?.error||'';result.classList.remove('hidden');}
-  r?.success?toastOk(r.message||'Unblacklisted'):toastErr(r?.error||'Failed');
-}
-
-async function loadBlacklist(){
-  const el=document.getElementById('blacklist-content');
-  if(el)el.textContent='Loading...';
-  const r=await api.getBlacklisted().catch(()=>null);
-  if(!el)return;
-  if(!r?.success||!r.data){el.textContent='Failed to load blacklist';return;}
-  const guilds=Object.entries(r.data);
-  if(!guilds.length){el.textContent='No blacklisted users.';return;}
-
-  _blacklistData = guilds;
-  _usersPage = 1;
-  renderBlacklistPage();
-}
-
-function renderBlacklistPage(){
-  const el=document.getElementById('blacklist-content');
-  if(!el)return;
-  const allEntries = _blacklistData.flatMap(([gid,users])=>users.map(u=>({gid,u})));
-  const total = allEntries.length;
-  const totalPages = Math.ceil(total/USERS_PER_PAGE)||1;
-  const start = (_usersPage-1)*USERS_PER_PAGE;
-  const slice = allEntries.slice(start, start+USERS_PER_PAGE);
-
-  let html = slice.map(({gid,u})=>`
-    <div class="bl-entry">
-      <span class="bl-user mono">${u}</span>
-      <span class="bl-guild-tag">Guild: ${gid.slice(-6)}</span>
-    </div>`).join('');
-
-  html += `<div class="bl-pagination">
-    <button class="pg-btn sm" onclick="window._usersPage(${_usersPage-1})" ${_usersPage===1?'disabled':''}>‹</button>
-    <span style="font-size:11px;color:var(--ts)">Page ${_usersPage}/${totalPages} · ${total} entries</span>
-    <button class="pg-btn sm" onclick="window._usersPage(${_usersPage+1})" ${_usersPage>=totalPages?'disabled':''}>›</button>
-  </div>`;
-  el.innerHTML = html;
-}
-
-function usersPage(p){
-  const allEntries = _blacklistData.flatMap(([gid,users])=>users.map(u=>({gid,u})));
-  const totalPages = Math.ceil(allEntries.length/USERS_PER_PAGE)||1;
-  if(p<1||p>totalPages)return;
-  _usersPage=p;
-  renderBlacklistPage();
-}
-
-// ── Auth ──────────────────────────────────────────────────────────────────────
-async function checkSession(){
-  const r=await api.authMe().catch(()=>null);
-  const user = r?.user || r;
-  if(!user?.email) return false;
-  setText('sb-user-name', user.name || user.email.split('@')[0]);
-  setText('sb-user-email', user.email);
-  const av=document.getElementById('sb-avatar');
-  if(av&&user.picture){av.src=user.picture;av.onerror=()=>{av.style.display='none';};}
-  return true;
-}
-
-function handleOAuthCallback(){
+async function initAuth() {
   const params=new URLSearchParams(location.search);
-  const token=params.get('token'),error=params.get('error');
-  if(token){setToken(token);history.replaceState({},'',location.pathname);return true;}
-  if(error){const el=document.getElementById('login-alert');if(el){el.textContent=decodeURIComponent(error);el.classList.remove('hidden');}history.replaceState({},'',location.pathname);}
-  return false;
-}
+  const authErr=params.get('auth');
+  if(authErr==='denied'){showLogin('Access denied. Only the authorized account may log in.');return;}
+  if(authErr==='error'){showLogin('Authentication error. Please try again.');return;}
+  if(authErr==='invalid_state'){showLogin('Session expired during login. Please try again.');return;}
 
-// ── Overview quick-buttons ────────────────────────────────────────────────────
-window.CMD=window.CMD||{};
-Object.assign(window.CMD,{
-  saveState:   async()=>{const r=await api.saveState().catch(e=>({error:e.message}));r?.success?toastOk(r.message||'State saved'):toastErr(r?.error||'Failed');},
-  toggleDebug: async()=>{const r=await api.toggleDebug().catch(e=>({error:e.message}));r?.success?toastOk(r.message||'Debug toggled'):toastErr(r?.error||'Failed');},
-  restart:     async()=>{if(!confirm('Restart the bot process?'))return;const r=await api.restart().catch(e=>({error:e.message}));r?.success?toastWarn(r.message||'Restarting...'):toastErr(r?.error||'Failed');},
-  switchApiKey:async()=>{const r=await api.switchApiKey().catch(e=>({error:e.message}));if(r?.success){toastOk(r.message||'Key rotated');if(r.stats)renderApiKeysPanel(r.stats);}else toastErr(r?.error||'Failed');},
-});
+  const urlToken=params.get('token');
+  if(urlToken){ setToken(urlToken); history.replaceState({},document.title,location.pathname); }
 
-function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  if(!hasToken()){el('login-page')?.classList.remove('hidden');el('app')?.classList.add('hidden');return;}
 
-// ── Global refs ───────────────────────────────────────────────────────────────
-window._navigate=navigate;
-window._initiateLogin=()=>{window.location.href=`${BASE_URL}/auth/google`;};
-window._logout=()=>{api.authLogout().catch(()=>{});clearToken();location.reload();};
-window._toggleSidebar=()=>{const sb=document.getElementById('sidebar');const ov=document.getElementById('sb-overlay');if(!sb)return;const open=sb.classList.toggle('open');ov?.classList.toggle('hidden',!open);};
-window._closeSidebar=()=>{document.getElementById('sidebar')?.classList.remove('open');document.getElementById('sb-overlay')?.classList.add('hidden');};
-window._loadServers=loadServers;
-window._filterServers=filterServers;
-window._leaveServer=leaveServer;
-window._resetServer=resetServer;
-window._svPage=svPage;
-window._refreshServer=refreshSingleServer;
-window._sendAnnounce=sendAnnouncement;
-window._toggleLockdown=toggleLockdown;
-window._lookupUser=lookupUser;
-window._viewUserSettings=viewUserSettings;
-window._sendDm=sendDm;
-window._blacklistUser=blacklistUser;
-window._unblacklistUser=unblacklistUser;
-window._loadBlacklist=loadBlacklist;
-window._usersPage=usersPage;
-window._setPresence=setPresence;
-window._applyPreset=applyPreset;
-
-// ── Page navigation ───────────────────────────────────────────────────────────
-onNavigate(id=>{
-  switch(id){
-    case 'servers':       loadServers();       break;
-    case 'commands':      renderCommands();    break;
-    case 'announce':      initAnnounce();      break;
-    case 'lockdown':      loadLockdownState(); break;
-    case 'node-console':  initNodeTerminal();  break;
-    case 'mongo-console': initMongoTerminal(); break;
-    case 'users':         loadBlacklist();     break;
-    case 'presence':      loadCurrentPresence();break;
-  }
-});
-
-// ── Boot ──────────────────────────────────────────────────────────────────────
-async function boot(){
-  const hadToken=handleOAuthCallback();
-  buildSidebarNav(document.getElementById('sb-nav'));
-  buildBottomNav(document.getElementById('bnav-inner'));
-  startClock();
-  if(!hasToken()&&!hadToken){
-    document.getElementById('login-page')?.classList.remove('hidden');
-    document.getElementById('app')?.classList.add('hidden');
-    return;
-  }
-  const valid=await checkSession();
-  if(!valid){
+  const me=await api.authMe().catch(()=>null);
+  if(!me?.success){
     clearToken();
-    document.getElementById('login-page')?.classList.remove('hidden');
-    document.getElementById('app')?.classList.add('hidden');
+    el('login-page')?.classList.remove('hidden');
+    el('app')?.classList.add('hidden');
     return;
   }
-  document.getElementById('login-page')?.classList.add('hidden');
-  document.getElementById('app')?.classList.remove('hidden');
-  navigate('overview');
+
+  el('login-page')?.classList.add('hidden');
+  el('app')?.classList.remove('hidden');
+
+  const av=el('sb-av');
+  if(av&&me.user?.picture){av.src=me.user.picture;av.style.display='block';}
+  setText('sb-un',me.user?.name||'Admin');
+  setText('sb-ue',me.user?.email||'');
+
+  buildSidebarNav(el('sb-nav'));
+  buildBottomNav(el('bnav-i'));
+  renderCommands();
+  startClock();
   startStatsStream();
   loadFullStats();
-  loadLockdownState();
+  initPresencePage();
+  initAnnouncePage();
+  initLockdownPage();
+  initConfigPage();
+  initModelsPage();
 }
 
-boot();
+window._logout = async () => {
+  await api.authLogout().catch(()=>{});
+  clearToken();
+  location.reload();
+};
+
+// ── Sidebar / nav ─────────────────────────────────────────────────────────
+window._navigate = id => {
+  navigate(id);
+  if(id==='node-console')  { setTimeout(initNodeTerminal,  50); }
+  if(id==='mongo-console') { setTimeout(initMongoTerminal, 50); }
+  if(id==='shell-console') { setTimeout(initShellTerminal, 50); }
+  if(id==='servers')       loadServers();
+  if(id==='models')        loadModels();
+  if(id==='database')      loadCollections();
+  if(id==='files')         fbNav('');
+  if(id==='users')         { }
+};
+window._toggleSidebar = () => { el('sidebar')?.classList.toggle('open'); el('sb-ov')?.classList.toggle('hidden'); };
+window._closeSidebar  = () => { el('sidebar')?.classList.remove('open'); el('sb-ov')?.classList.add('hidden'); };
+
+// ── Servers ───────────────────────────────────────────────────────────────
+let allServers=[], serverPage=1, serversPerPage=12;
+async function loadServers() {
+  el('servers-grid').innerHTML='<div class="loading">Loading servers…</div>';
+  const r=await api.getServers().catch(()=>null);
+  if(!r?.success){el('servers-grid').innerHTML='<div class="empty">Failed to load</div>';return;}
+  allServers=r.data||[];
+  setText('servers-cnt',fmtN(allServers.length));
+  serverPage=1;
+  renderServers(allServers);
+}
+
+function renderServers(list) {
+  const start=(serverPage-1)*serversPerPage, page=list.slice(start,start+serversPerPage);
+  if(!page.length){el('servers-grid').innerHTML='<div class="empty">No servers found</div>';el('servers-pg').innerHTML='';return;}
+  el('servers-grid').innerHTML=page.map(g=>{
+    const ic=g.iconURL?`<img src="${g.iconURL}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"/><div class="sv-ico-fb" style="display:none">${(g.name||'?')[0]}</div>`:`<div class="sv-ico-fb">${(g.name||'?')[0]}</div>`;
+    return `<div class="sv-card">
+      <div class="sv-top">
+        <div class="sv-ico">${ic}</div>
+        <div><div class="sv-name">${g.name}</div><div class="sv-id">${g.id}</div></div>
+      </div>
+      <div class="sv-stats">
+        <div class="sv-st"><div class="sv-st-l">Members</div><div class="sv-st-v">${fmtN(g.memberCount)}</div></div>
+        <div class="sv-st"><div class="sv-st-l">Blacklisted</div><div class="sv-st-v">${g.blacklisted||0}</div></div>
+        <div class="sv-st"><div class="sv-st-l">Owner</div><div class="sv-st-v" style="font-size:9px">${g.ownerId}</div></div>
+        <div class="sv-st"><div class="sv-st-l">Settings</div><div class="sv-st-v">${Object.keys(g.settings||{}).length} custom</div></div>
+      </div>
+      <div class="sv-acts">
+        <button class="sv-btn" onclick="window._viewServerSettings('${g.id}')">⚙ Settings</button>
+        <button class="sv-btn" onclick="window._sendToServer('${g.id}')">💬 Send Message</button>
+        <button class="sv-btn d" onclick="window._leaveServer('${g.id}','${g.name.replace(/'/g,"\\'")}')">✕ Leave Server</button>
+      </div>
+    </div>`;
+  }).join('');
+  const pages=Math.ceil(list.length/serversPerPage);
+  if(pages<=1){el('servers-pg').innerHTML='';return;}
+  let pgHtml=`<div class="pg">`;
+  pgHtml+=`<button class="pg-btn" onclick="window._svPg(${serverPage-1})" ${serverPage<=1?'disabled':''}>‹</button>`;
+  for(let i=1;i<=pages;i++) pgHtml+=`<button class="pg-btn${i===serverPage?' active':''}" onclick="window._svPg(${i})">${i}</button>`;
+  pgHtml+=`<button class="pg-btn" onclick="window._svPg(${serverPage+1})" ${serverPage>=pages?'disabled':''}>›</button>`;
+  pgHtml+=`<span class="pg-info">${allServers.length} total</span></div>`;
+  el('servers-pg').innerHTML=pgHtml;
+}
+
+window._svPg          = p=>{ serverPage=p; renderServers(window._filteredServers||allServers); };
+window._filterServers = q=>{ const f=allServers.filter(g=>!q||g.name?.toLowerCase().includes(q.toLowerCase())||g.id?.includes(q)); window._filteredServers=f; serverPage=1; renderServers(f); };
+window._loadServers   = loadServers;
+window._leaveServer   = async(id,name)=>{ if(!confirm(`Leave ${name}?`)) return; const r=await api.leaveServer(id); r?.success?toastOk(`Left ${name}`):(toastErr(r?.error||'Error'),null); loadServers(); };
+window._viewServerSettings = async(gid)=>{
+  const r=await api.getServerSettings(gid).catch(()=>null);
+  if(!r?.success){toastErr('Could not load settings');return;}
+  const s=r.data; const editable=['embedColor','maxHistoryLength','customPersonality','responseMode'];
+  const fields=editable.map(k=>`<div class="form-g"><label class="form-l">${k}</label><input class="form-i" id="svset-${k}" value="${s[k]!==undefined?s[k]:''}"/></div>`).join('');
+  const modal=document.createElement('div');
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r12);padding:24px;width:100%;max-width:440px;max-height:80vh;overflow-y:auto"><div style="font-family:var(--fd);font-size:15px;font-weight:700;margin-bottom:14px">Server Settings: ${gid}</div>${fields}<div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-accent" style="flex:1" onclick="window._saveServerSettings('${gid}')">Save</button><button class="btn btn-ghost" style="flex:1" onclick="this.closest('div[style*=fixed]').remove()">Cancel</button></div></div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
+};
+window._saveServerSettings = async(gid)=>{
+  const keys=['embedColor','maxHistoryLength','customPersonality','responseMode'];
+  const data={}; keys.forEach(k=>{const val=v(`svset-${k}`);if(val)data[k]=val;});
+  const r=await api.setServerSettings(gid,data).catch(()=>null);
+  if(r?.success){toastOk('Settings saved');document.querySelector('div[style*="position:fixed"]')?.remove();}
+  else toastErr(r?.error||'Error');
+};
+window._sendToServer = async(gid)=>{
+  const r=await api.getChannels(gid).catch(()=>null);
+  if(!r?.success){toastErr('Could not load channels');return;}
+  const channels=r.data||[];
+  const modal=document.createElement('div');
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r12);padding:24px;width:100%;max-width:400px"><div style="font-family:var(--fd);font-size:14px;font-weight:700;margin-bottom:12px">Send Message</div><div class="form-g"><label class="form-l">Channel</label><select class="form-sel" id="sm-ch">${channels.map(c=>`<option value="${c.id}">#${c.name}</option>`).join('')}</select></div><div class="form-g"><label class="form-l">Message</label><textarea class="form-ta" id="sm-msg" rows="3" placeholder="Message text"></textarea></div><div style="display:flex;gap:8px"><button class="btn btn-accent" style="flex:1" onclick="window._doSendChannel()">Send</button><button class="btn btn-ghost" style="flex:1" onclick="this.closest('div[style*=fixed]').remove()">Cancel</button></div></div>`;
+  document.body.appendChild(modal);
+};
+window._doSendChannel = async()=>{
+  const ch=v('sm-ch'),msg=v('sm-msg'); if(!ch||!msg){toastErr('Channel and message required');return;}
+  const r=await api.sendChannel(ch,msg).catch(()=>null);
+  if(r?.success){toastOk(r.message);document.querySelector('div[style*="position:fixed"]')?.remove();}
+  else toastErr(r?.error||'Error');
+};
+
+// ── Users ─────────────────────────────────────────────────────────────────
+async function resolveUser(raw) {
+  if(!raw) return null;
+  if(/^\d{17,20}$/.test(raw)) return raw;
+  const r=await api.resolveUsername(raw).catch(()=>null);
+  if(r?.success&&r.id) return r.id;
+  toastErr(`Cannot resolve "${raw}" to a user ID`);
+  return null;
+}
+
+window._lookupUser = async()=>{
+  const raw=v('user-lookup-id'); if(!raw){toastErr('Enter a User ID or username');return;}
+  const uid=await resolveUser(raw); if(!uid) return;
+  const r=await api.fetchUserProfile(uid).catch(()=>null);
+  const resEl=el('user-lookup-result');
+  if(!resEl) return;
+  if(!r?.success){resEl.innerHTML=`<div class="result-box err">${r?.error||'User not found'}</div>`;resEl.classList.remove('hidden');return;}
+  const u=r.user;
+  resEl.innerHTML=`<div class="upc">
+    <div class="upc-h"><img class="upc-av" src="${u.avatarURL||''}" alt=""/><div class="upc-id"><div class="upc-dn">${u.displayName||u.username}</div><div class="upc-tag">${u.tag||''}</div><div class="upc-uid mono">${u.id}</div></div></div>
+    <div class="upc-g">
+      <div class="upc-f"><div class="upc-fl">Bot</div><div class="upc-fv">${u.bot?'Yes':'No'}</div></div>
+      <div class="upc-f"><div class="upc-fl">Mutual</div><div class="upc-fv">${u.mutualGuilds} guilds</div></div>
+      <div class="upc-f"><div class="upc-fl">History</div><div class="upc-fv">${u.hasHistory?'Yes':'No'}</div></div>
+      <div class="upc-f"><div class="upc-fl">Settings</div><div class="upc-fv">${u.hasSettings?'Custom':'Default'}</div></div>
+      <div class="upc-f" style="grid-column:1/-1"><div class="upc-fl">Created</div><div class="upc-fv">${u.createdAt?.slice(0,10)||'—'}</div></div>
+    </div>
+    <div style="display:flex;gap:5px;padding:10px">
+      <button class="btn btn-accent btn-sm" style="flex:1" onclick="window._viewUserSettings('${u.id}')">Settings</button>
+      <button class="btn btn-danger btn-sm" style="flex:1" onclick="window._clearUserHist('${u.id}')">Clear History</button>
+      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="window._viewMemory('${u.id}')">Memory</button>
+    </div>
+  </div>`;
+  resEl.classList.remove('hidden');
+};
+window._viewUserSettings = async(uid)=>{
+  const r=await api.getUserSettings(uid).catch(()=>null);
+  if(!r?.success){toastErr('Error');return;}
+  const modal=document.createElement('div');
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r12);padding:24px;width:100%;max-width:480px;max-height:80vh;overflow-y:auto"><div style="font-family:var(--fd);font-size:14px;font-weight:700;margin-bottom:12px">User Settings: ${uid}</div><textarea class="cfg-ed" id="us-edit" style="min-height:300px">${JSON.stringify(r.data,null,2)}</textarea><div style="display:flex;gap:8px;margin-top:10px"><button class="btn btn-accent" style="flex:1" onclick="window._saveUSettings('${uid}')">Save</button><button class="btn btn-danger" style="flex:1" onclick="window._resetUSett('${uid}')">Reset</button><button class="btn btn-ghost" style="flex:1" onclick="this.closest('div[style*=fixed]').remove()">Close</button></div></div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
+};
+window._saveUSettings=async(uid)=>{try{const data=JSON.parse(v('us-edit'));const r=await api.setUserSettings(uid,data);r?.success?toastOk('Saved'):toastErr(r?.error||'Error');}catch(e){toastErr('Invalid JSON');}};
+window._resetUSett=async(uid)=>{if(!confirm('Reset user settings?'))return;const r=await api.resetUserSettings(uid);r?.success?toastOk('Reset'):toastErr(r?.error||'Error');};
+window._clearUserHist=async(uid)=>{if(!confirm('Clear history?'))return;const r=await api.clearHistory(uid);r?.success?toastOk('Cleared'):toastErr(r?.error||'Error');};
+window._viewMemory=async(uid)=>{
+  const r=await api.getMemory(uid).catch(()=>null);
+  const modal=document.createElement('div');
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px';
+  const items=(r?.data||[]).map(m=>`<div class="mem-entry"><div><div class="mem-text">${m.content||m.text||JSON.stringify(m).slice(0,100)}</div><div class="mem-meta">${m.timestamp||m.createdAt||''}</div></div></div>`).join('') || '<div class="empty">No memories found</div>';
+  modal.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r12);padding:24px;width:100%;max-width:520px;max-height:80vh;overflow-y:auto"><div style="font-family:var(--fd);font-size:14px;font-weight:700;margin-bottom:12px">Memory: ${uid}</div>${items}<div style="margin-top:12px;display:flex;gap:8px"><button class="btn btn-danger" style="flex:1" onclick="window._delMemory('${uid}',this)">Delete All</button><button class="btn btn-ghost" style="flex:1" onclick="this.closest('div[style*=fixed]').remove()">Close</button></div></div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
+};
+window._delMemory=async(uid,btn)=>{if(!confirm('Delete all memories?'))return;const r=await api.deleteMemory(uid);r?.success?(toastOk('Deleted'),btn.closest('div[style*=fixed]').remove()):toastErr(r?.error||'Error');};
+window._sendDm=async()=>{
+  const raw=v('dm-user-id'),msg=v('dm-message'); if(!raw||!msg){toastErr('User and message required');return;}
+  const uid=await resolveUser(raw); if(!uid) return;
+  const r=await api.sendDm(uid,msg).catch(()=>null);
+  const re=el('dm-result'); if(!re) return;
+  re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
+  if(r?.success) toastOk(r.message);
+};
+window._blacklistUser=async()=>{
+  const raw=v('bl-user-id'),g=v('bl-guild-id'); if(!raw||!g){toastErr('User and Guild required');return;}
+  const uid=await resolveUser(raw); if(!uid) return;
+  const r=await api.blacklistUser(uid,g).catch(()=>null);
+  const re=el('bl-result'); if(!re) return;
+  re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
+  if(r?.success) toastOk(r.message);
+};
+window._unblacklistUser=async()=>{
+  const raw=v('bl-user-id'),g=v('bl-guild-id'); if(!raw||!g){toastErr('User and Guild required');return;}
+  const uid=await resolveUser(raw); if(!uid) return;
+  const r=await api.unblacklistUser(uid,g).catch(()=>null);
+  const re=el('bl-result'); if(!re) return;
+  re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
+  if(r?.success) toastOk(r.message);
+};
+window._loadBlacklist=async()=>{
+  const r=await api.getBlacklisted().catch(()=>null);
+  const c=el('blacklist-content'); if(!c) return;
+  if(!r?.success){c.innerHTML='<div class="empty">Error loading</div>';return;}
+  const entries=[]; for(const[guild,users]of Object.entries(r.data||{})) users.forEach(uid=>entries.push({guild,uid}));
+  if(!entries.length){c.innerHTML='<div class="empty">No blacklisted users</div>';return;}
+  c.innerHTML=entries.map(e=>`<div class="bl-e"><span class="bl-u">${e.uid}</span><span class="bl-g">${e.guild}</span><button class="btn btn-danger btn-sm" onclick="window._quickUnbl('${e.uid}','${e.guild}')">Remove</button></div>`).join('');
+};
+window._quickUnbl=async(uid,gid)=>{const r=await api.unblacklistUser(uid,gid).catch(()=>null);if(r?.success){toastOk('Removed');window._loadBlacklist();}else toastErr(r?.error||'Error');};
+window._purgeBlacklist=async()=>{if(!confirm('PURGE entire blacklist?'))return;const r=await api.purgeBlacklist().catch(()=>null);r?.success?(toastOk(r.message),window._loadBlacklist()):toastErr(r?.error||'Error');};
+window._viewHistory=async()=>{
+  const uid=v('hist-user-id'); if(!uid){toastErr('Enter an ID');return;}
+  const r=await api.getChatHistory(uid).catch(()=>null);
+  const re=el('hist-result'); if(!re) return;
+  if(!r?.success){re.className='result-box err';re.textContent=r?.error||'Not found';re.classList.remove('hidden');return;}
+  const msgs=Array.isArray(r.data)?r.data:[];
+  re.className='result-box ok'; re.textContent=msgs.length?msgs.map(m=>`[${m.role||'?'}]: ${String(m.content||m.parts?.[0]?.text||'').slice(0,120)}`).join('\n'):`No history for ${uid}`; re.classList.remove('hidden');
+};
+window._clearHistory=async()=>{
+  const uid=v('hist-user-id'); if(!uid){toastErr('Enter an ID');return;} if(!confirm('Clear history?')) return;
+  const r=await api.clearHistory(uid).catch(()=>null);
+  const re=el('hist-result'); if(!re) return;
+  re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
+};
+window._loadHistories=async()=>{
+  const r=await api.allHistories().catch(()=>null);
+  const c=el('hist-all'); if(!c) return;
+  if(!r?.success){c.innerHTML='<div class="result-box err">Error</div>';c.classList.remove('hidden');return;}
+  const items=r.data||[];
+  c.innerHTML=`<div class="result-box ok" style="max-height:300px;overflow-y:auto">${items.length?items.map(h=>`${h.id} — ${h.messageCount} messages`).join('\n'):'No histories'}</div>`;
+  c.classList.remove('hidden');
+};
+
+// ── Models ────────────────────────────────────────────────────────────────
+let modelsData=null;
+async function loadModels() {
+  const r=await api.getModels().catch(()=>null);
+  if(!r?.success){el('mdl-grid').innerHTML='<div class="empty">Error loading models</div>';return;}
+  modelsData=r;
+  const models=r.models||{};
+  const active=r.runtimeOverride||r.defaultModel||'';
+  el('mdl-grid').innerHTML=Object.entries(models).map(([key,val])=>`
+    <div class="mdl-card ${val===active||key===active?'active':''}" onclick="window._setModel('${val}',this)">
+      <div class="mdl-name">${key}</div>
+      <div class="mdl-id">${val}</div>
+      <div class="mdl-tag"><span class="tag ${val===r.defaultModel?'tag-info':'tag-accent'}">${val===r.defaultModel?'DEFAULT':'ALIAS'}</span></div>
+    </div>`).join('');
+  setText('mdl-active-info',active?`Active: ${active}`:'Using default model');
+  const kr=await api.getApiKeyStats().catch(()=>null);
+  if(kr?.success) renderApiKeysPanel(kr.data);
+  const ff=await api.getFeatureFlags().catch(()=>null);
+  if(ff?.success){
+    const flags=ff.data||{};
+    ['ENABLE_GEMMA','CACHE_ENABLED','PDF_ENABLED_FOR_GEMINI','CYCLE_GEMMA_WITH_GEMINI'].forEach((f,i)=>{
+      const sel=el(['ff-gemma','ff-cache','ff-pdf','ff-cycle'][i]);
+      if(sel) sel.value=String(flags[f]??false);
+    });
+  }
+}
+window._loadModels=loadModels;
+window._setModel=async(model,cardEl)=>{
+  const r=await api.setModel(model).catch(()=>null);
+  if(r?.success){
+    toastOk(r.message);
+    document.querySelectorAll('.mdl-card').forEach(c=>c.classList.remove('active'));
+    cardEl?.classList.add('active');
+    setText('mdl-active-info',`Active: ${model}`);
+  } else toastErr(r?.error||'Error');
+};
+window._toggleFlag=async(feature,enabled)=>{
+  const r=await api.toggleFeature(feature,enabled).catch(()=>null);
+  r?.success?toastOk(r.message):toastErr(r?.error||'Error');
+};
+function initModelsPage(){}
+
+// ── Presence ──────────────────────────────────────────────────────────────
+function initPresencePage() { loadCurrentPresence(); }
+window._setPresence=async()=>{
+  const r=await api.setPresence({status:v('pres-status'),activity:v('pres-activity'),activityType:parseInt(v('pres-type')||'0')}).catch(()=>null);
+  const re=el('pres-result'); if(!re) return;
+  re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
+  if(r?.success){toastOk(r.message);loadCurrentPresence();}
+};
+window._preset=(status,act,type)=>{
+  const ss=el('pres-status'),sa=el('pres-activity'),st=el('pres-type');
+  if(ss)ss.value=status; if(sa)sa.value=act; if(st)st.value=type;
+  window._setPresence();
+};
+
+// ── Announce ──────────────────────────────────────────────────────────────
+let annTarget='both';
+function initAnnouncePage() {
+  const updatePreview=()=>{
+    const title=v('ann-title')||'Announcement', msg=v('ann-msg')||'Your message…', color=v('ann-color')||'#6D5AE6';
+    const pt=el('ann-pt'),pm=el('ann-pm'),pb=el('ann-pb');
+    if(pt)pt.textContent=title; if(pm)pm.textContent=msg; if(pb)pb.style.background=color;
+  };
+  ['ann-title','ann-msg','ann-color'].forEach(id=>el(id)?.addEventListener('input',updatePreview));
+}
+window._updateAnnPreview=()=>{
+  const title=v('ann-title')||'Announcement',msg=v('ann-msg')||'',color=v('ann-color')||'#6D5AE6';
+  const pt=el('ann-pt'),pm=el('ann-pm'),pb=el('ann-pb');
+  if(pt)pt.textContent=title; if(pm)pm.textContent=msg; if(pb)pb.style.background=color;
+};
+window._setAnnTarget=btn=>{
+  annTarget=btn.dataset.target;
+  document.querySelectorAll('.ann-t').forEach(b=>b.classList.toggle('active',b===btn));
+};
+window._sendAnnounce=async()=>{
+  const msg=v('ann-msg'); if(!msg){toastErr('Enter a message');return;}
+  const payload={message:msg,title:v('ann-title')||'Announcement',embedColor:v('ann-color')||'#6D5AE6',useEmbed:v('ann-fmt')==='true'};
+  const re=el('ann-result'); if(re){re.textContent='Sending…';re.className='result-box';re.classList.remove('hidden');}
+  try{
+    if(annTarget==='servers'||annTarget==='both'){const r=await api.announce(payload);if(re){re.className=`result-box ${r?.success?'ok':'err'}`;re.textContent=r?.message||r?.error||'Error';}}
+    if(annTarget==='users'||annTarget==='both'){const r2=await api.announceUsers(payload);if(annTarget==='users'&&re){re.className=`result-box ${r2?.success?'ok':'err'}`;re.textContent=r2?.message||r2?.error||'Error';}}
+    toastOk('Announcement sent');
+  } catch(e){if(re){re.className='result-box err';re.textContent=e.message;}toastErr(e.message);}
+};
+window._dmAllOwners=async()=>{
+  const msg=v('ann-owners-msg'); if(!msg){toastErr('Enter a message');return;} if(!confirm('DM all server owners?'))return;
+  const r=await api.dmAllOwners(msg).catch(()=>null);
+  const re=el('ann-owners-result'); if(!re) return;
+  re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
+  if(r?.success) toastOk(r.message);
+};
+
+// ── Lockdown ──────────────────────────────────────────────────────────────
+function initLockdownPage() {
+  api.getStats().then(r=>{if(r?.globalLockdown!==undefined)setLockdownIndicator(r.globalLockdown);}).catch(()=>{});
+}
+window._toggleLockdown=async(enabled)=>{
+  const r=await api.setLockdown(enabled).catch(()=>null);
+  const re=el('lkd-result'); if(!re) return;
+  re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
+  if(r?.success){toastOk(r.message);setLockdownIndicator(enabled);}
+  else{toastErr(r?.error||'Error');const t=el('lkd-toggle');if(t)t.checked=!enabled;}
+};
+
+// ── Config Editor ─────────────────────────────────────────────────────────
+function initConfigPage() { loadRuntimeConfig(); }
+async function loadRuntimeConfig() {
+  const r=await api.getRuntimeConfig().catch(()=>null);
+  if(!r?.success) return;
+  const d=r.data||{};
+  const im=el('rt-model'),ic=el('rt-color'),rr=el('rt-raw');
+  if(im)im.value=d.activeModel||'';
+  if(ic)ic.value=d.globalEmbedColor||'';
+  if(rr)rr.value=JSON.stringify(d,null,2);
+}
+window._loadRuntimeConfig=loadRuntimeConfig;
+window._saveRuntimeConfig=async()=>{
+  const data={};
+  const m=v('rt-model'),c=v('rt-color');
+  if(m)data.activeModel=m; if(c)data.globalEmbedColor=c;
+  const r=await api.setRuntimeConfig(data).catch(()=>null);
+  const re=el('rt-result'); if(!re) return;
+  re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.success?'Saved':r?.error||'Error'; re.classList.remove('hidden');
+  if(r?.success){toastOk('Saved');loadRuntimeConfig();}
+};
+window._saveRuntimeRaw=async()=>{
+  try{
+    const data=JSON.parse(v('rt-raw'));
+    const r=await api.setRuntimeConfig(data).catch(()=>null);
+    const re=el('rt-result'); if(!re) return;
+    re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.success?'Saved':r?.error||'Error'; re.classList.remove('hidden');
+    if(r?.success) toastOk('Saved');
+  } catch(e){toastErr('Invalid JSON: '+e.message);}
+};
+window._clearRuntimeConfig=async()=>{
+  if(!confirm('Clear all runtime config?')) return;
+  const r=await api.clearRuntimeConfig().catch(()=>null);
+  r?.success?(toastOk('Cleared'),loadRuntimeConfig()):toastErr(r?.error||'Error');
+};
+window._cfgTab=tabEl=>{
+  const tab=tabEl.dataset.tab;
+  document.querySelectorAll('.cfg-tab').forEach(t=>t.classList.toggle('active',t===tabEl));
+  document.getElementById('cfg-runtime-pane')?.classList.toggle('hidden',tab!=='runtime');
+  document.getElementById('cfg-modules-pane')?.classList.toggle('hidden',tab!=='modules');
+  document.getElementById('cfg-base-pane')?.classList.toggle('hidden',tab!=='base');
+  if(tab==='modules'&&!el('cfg-modules-ta')?.value) window._loadCfg('modules');
+  if(tab==='base'&&!el('cfg-base-ta')?.value) window._loadCfg('base');
+};
+window._loadCfg=async(which)=>{
+  const r=await (which==='modules'?api.getModulesConfig():api.getBaseConfig()).catch(()=>null);
+  const ta=el(`cfg-${which}-ta`); if(!ta) return;
+  if(r?.success){ta.value=r.content;const info=el(`cfg-${which}-info`);if(info)info.textContent=`Path: ${r.path}`;}
+  else toastErr(r?.error||'Error');
+};
+window._saveCfg=async(which)=>{
+  const ta=el(`cfg-${which}-ta`); if(!ta) return;
+  const r=await (which==='modules'?api.setModulesConfig(ta.value):api.setBaseConfig(ta.value)).catch(()=>null);
+  const re=el(`cfg-${which}-result`); if(!re) return;
+  re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
+  if(r?.success) toastOk(r.message);
+};
+window._resetCfg=async(which)=>{
+  if(!confirm('Restore from backup? Current content will be overwritten.')) return;
+  const r=await (which==='modules'?api.resetModulesConfig():api.resetBaseConfig()).catch(()=>null);
+  if(r?.success){toastOk(r.message);window._loadCfg(which);}
+  else toastErr(r?.error||'Error');
+};
+
+// ── Database Browser ──────────────────────────────────────────────────────
+let dbCurrentColl='', dbPage=1;
+async function loadCollections() {
+  const r=await api.dbCollections().catch(()=>null);
+  const c=el('db-coll-list'); if(!c) return;
+  if(!r?.success){c.innerHTML='<div class="empty">MongoDB unavailable</div>';return;}
+  c.innerHTML=(r.data||[]).map(col=>`
+    <div class="db-coll${col.name===dbCurrentColl?' active':''}" onclick="window._dbSelectColl('${col.name}')">
+      <span class="db-cn">${col.name}</span>
+      <span class="db-cc">${col.count}</span>
+    </div>`).join('');
+}
+window._loadCollections=loadCollections;
+window._dbSelectColl=async(name)=>{
+  dbCurrentColl=name; dbPage=1;
+  document.querySelectorAll('.db-coll').forEach(c=>c.classList.toggle('active',c.querySelector('.db-cn')?.textContent===name));
+  el('db-docs-h').textContent=name;
+  el('db-docs-search')?.classList.remove('hidden');
+  await loadDocs();
+};
+window._dbSearch=()=>{ dbPage=1; loadDocs(); };
+async function loadDocs() {
+  const list=el('db-doc-list'); if(!list) return;
+  list.innerHTML='<div class="loading">Loading…</div>';
+  const r=await api.dbCollection(dbCurrentColl,dbPage).catch(()=>null);
+  if(!r?.success){list.innerHTML='<div class="empty">Error loading</div>';return;}
+  const docs=r.data||[];
+  if(!docs.length){list.innerHTML='<div class="empty">No documents</div>';el('db-pg').innerHTML='';return;}
+  list.innerHTML=docs.map((doc,i)=>{
+    const id=doc._id?String(doc._id):`doc-${i}`;
+    const preview=JSON.stringify(doc,null,2);
+    return `<div class="db-doc">
+      <div class="db-doc-h" onclick="window._dbToggle(this)">
+        <span class="db-doc-id">${id}</span>
+        <div class="db-doc-acts">
+          <button class="btn btn-accent btn-sm" onclick="event.stopPropagation();window._dbEdit('${id}',this)">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();window._dbDelete('${id}')">Delete</button>
+        </div>
+      </div>
+      <div class="db-doc-body hidden" id="dbdoc-${id}">${preview.replace(/</g,'&lt;')}</div>
+    </div>`;
+  }).join('');
+  const pages=Math.ceil(r.total/r.limit);
+  if(pages>1){
+    el('db-pg').innerHTML=`<div class="pg"><button class="pg-btn" onclick="window._dbPg(${dbPage-1})" ${dbPage<=1?'disabled':''}>‹</button>${Array.from({length:pages},(_,i)=>`<button class="pg-btn${i+1===dbPage?' active':''}" onclick="window._dbPg(${i+1})">${i+1}</button>`).join('')}<button class="pg-btn" onclick="window._dbPg(${dbPage+1})" ${dbPage>=pages?'disabled':''}>›</button></div>`;
+  } else el('db-pg').innerHTML='';
+}
+window._dbPg=p=>{dbPage=p;loadDocs();};
+window._dbToggle=h=>{const body=h.nextElementSibling;if(body)body.classList.toggle('hidden');};
+window._dbEdit=async(id,btn)=>{
+  const body=btn.closest('.db-doc')?.querySelector('.db-doc-body'); if(!body) return;
+  body.classList.remove('hidden');
+  const current=body.textContent;
+  body.classList.add('editing');
+  body.innerHTML='';
+  const ta=document.createElement('textarea');
+  ta.className='db-doc-edit'; ta.value=current;
+  body.appendChild(ta);
+  btn.textContent='Save';
+  btn.onclick=async(ev)=>{
+    ev.stopPropagation();
+    try{
+      const data=JSON.parse(ta.value);
+      const r=await api.dbUpdateDoc(dbCurrentColl,id,data).catch(()=>null);
+      if(r?.success){toastOk('Saved');loadDocs();}else toastErr(r?.error||'Error');
+    } catch(e){toastErr('Invalid JSON');}
+  };
+};
+window._dbDelete=async(id)=>{
+  if(!confirm(`Delete document ${id}?`)) return;
+  const r=await api.dbDeleteDoc(dbCurrentColl,id).catch(()=>null);
+  r?.success?(toastOk('Deleted'),loadDocs()):toastErr(r?.error||'Error');
+};
+
+// ── File Browser ──────────────────────────────────────────────────────────
+let fbCurrentPath='', fbCurrentFile='';
+async function fbNav(path) {
+  fbCurrentPath=path;
+  const r=await api.files(path).catch(()=>null);
+  const list=el('fb-list'); if(!list) return;
+  if(!r?.success){list.innerHTML='<div class="empty">Error loading</div>';return;}
+  const parts=path?path.split('/'):[];
+  const pb=el('fb-path'); if(pb){
+    let html=`<span class="fb-path-seg" onclick="window._fbNav('')">root</span>`;
+    let built='';
+    parts.forEach(p=>{built+=built?'/'+p:p;html+=`<span class="fb-path-sep">/</span><span class="fb-path-seg" onclick="window._fbNav('${built}')">${p}</span>`;});
+    pb.innerHTML=html;
+  }
+  if(r.type==='dir'){
+    const entries=r.entries||[];
+    const dirs=entries.filter(e=>e.type==='dir').sort((a,b)=>a.name.localeCompare(b.name));
+    const files=entries.filter(e=>e.type==='file').sort((a,b)=>a.name.localeCompare(b.name));
+    list.innerHTML=[...dirs,...files].map(e=>`
+      <div class="fb-e${e.path===fbCurrentFile?' active':''}" onclick="window._fbClick('${e.path}','${e.type}')">
+        <svg class="fb-ei" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">${e.type==='dir'?'<path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>':'<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>'}
+        </svg>
+        <span class="fb-en">${e.name}</span>
+        ${e.type==='file'?`<span class="fb-es">${fmtBytes(e.size)}</span>`:''}
+      </div>`).join('');
+  }
+}
+window._fbNav=fbNav;
+window._fbClick=async(path,type)=>{
+  if(type==='dir'){fbNav(path);return;}
+  fbCurrentFile=path;
+  const r=await api.files(path).catch(()=>null);
+  if(!r?.success){toastErr(r?.error||'Error');return;}
+  el('fb-editor').style.display='flex';
+  el('fb-editor').style.flexDirection='column';
+  el('fb-no-file').style.display='none';
+  setText('fb-fn',path.split('/').pop()||path);
+  const ta=el('fb-ta'); if(ta) ta.value=r.content||'';
+  document.querySelectorAll('.fb-e').forEach(e=>e.classList.toggle('active',e.querySelector('.fb-en')?.textContent===path.split('/').pop()));
+};
+window._fbSave=async()=>{
+  const content=el('fb-ta')?.value; if(content===undefined) return;
+  const r=await api.saveFile(fbCurrentFile,content).catch(()=>null);
+  r?.success?toastOk('Saved'):toastErr(r?.error||'Error');
+};
+window._fbDelete=async()=>{
+  if(!confirm(`Delete ${fbCurrentFile}?`)) return;
+  const r=await api.deleteFile(fbCurrentFile).catch(()=>null);
+  if(r?.success){toastOk('Deleted');el('fb-editor').style.display='none';el('fb-no-file').style.display='';fbNav(fbCurrentPath);}
+  else toastErr(r?.error||'Error');
+};
+
+window._copyInvite=async()=>{
+  const r=await api.inviteLink().catch(()=>null);
+  if(!r?.link){toastErr('Could not get invite link');return;}
+  navigator.clipboard?.writeText(r.link).then(()=>toastOk('Invite link copied!')).catch(()=>toastInfo(`Link: ${r.link}`));
+};
+
+initAuth();
