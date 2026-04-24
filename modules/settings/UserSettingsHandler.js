@@ -220,9 +220,10 @@ export async function showUserSettings(interaction, isUpdate = false) {
 export async function showUserSettingsPage2(interaction, isUpdate = false) {
   const userId      = interaction.user.id;
   const userSettings = state.userSettings[userId] || {};
-  const continuousReply   = userSettings.continuousReply ?? true;
-  const embedColor        = userSettings.embedColor || BOT_CONFIG.HEX_COLOUR;
-  const hasPersonality    = !!userSettings.customPersonality;
+  const continuousReply       = userSettings.continuousReply       ?? true;
+  const crossContextEnabled   = userSettings.crossContextEnabled   ?? false;
+  const embedColor            = userSettings.embedColor || BOT_CONFIG.HEX_COLOUR;
+  const hasPersonality        = !!userSettings.customPersonality;
 
   const continuousReplySelect = new StringSelectMenuBuilder()
     .setCustomId('user_continuous_reply').setPlaceholder('Continuous Reply')
@@ -233,6 +234,17 @@ export async function showUserSettingsPage2(interaction, isUpdate = false) {
       new StringSelectMenuOptionBuilder()
         .setLabel('Disabled').setDescription('Bot requires mentions')
         .setValue('disabled').setEmoji('⏸️').setDefault(!continuousReply)
+    );
+
+  const crossContextSelect = new StringSelectMenuBuilder()
+    .setCustomId('user_cross_context').setPlaceholder('Cross-Context Memory')
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Disabled').setDescription('Only search current conversation memory (default)')
+        .setValue('disabled').setEmoji('🔒').setDefault(!crossContextEnabled),
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Enabled').setDescription('Search your memory across all servers and DMs')
+        .setValue('enabled').setEmoji('🌐').setDefault(crossContextEnabled)
     );
 
   const colorBtn = new ButtonBuilder()
@@ -252,9 +264,10 @@ export async function showUserSettingsPage2(interaction, isUpdate = false) {
     .setTitle('👤 User Settings')
     .setDescription('**Page 2 of 3** • Behavior & Appearance\n\nCustomize how the bot responds and looks.')
     .addFields(
-      { name: '🔄 Continuous Reply',   value: `\`${continuousReply ? 'Enabled' : 'Disabled'}\``, inline: true },
-      { name: '🎨 Embed Color',        value: `\`${embedColor}\``,                                inline: true },
-      { name: '🎭 Custom Personality', value: `\`${hasPersonality ? 'Active' : 'Default'}\``,    inline: true }
+      { name: '🔄 Continuous Reply',   value: `\`${continuousReply ? 'Enabled' : 'Disabled'}\``,       inline: true },
+      { name: '🎨 Embed Color',        value: `\`${embedColor}\``,                                       inline: true },
+      { name: '🎭 Custom Personality', value: `\`${hasPersonality ? 'Active' : 'Default'}\``,            inline: true },
+      { name: '🌐 Cross-Context Memory', value: `\`${crossContextEnabled ? 'Enabled' : 'Disabled'}\`\n> When enabled, the bot searches your memory across all servers and DMs`, inline: false }
     )
     .setFooter({ text: 'Page 2 of 3 • Behavior & Appearance' }).setTimestamp();
 
@@ -262,6 +275,7 @@ export async function showUserSettingsPage2(interaction, isUpdate = false) {
     embeds: [embed],
     components: [
       new ActionRowBuilder().addComponents(continuousReplySelect),
+      new ActionRowBuilder().addComponents(crossContextSelect),
       new ActionRowBuilder().addComponents(colorBtn, personalityBtn, removePersonalityBtn),
       new ActionRowBuilder().addComponents(backBtn, nextBtn)
     ],

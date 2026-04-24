@@ -60,6 +60,14 @@ export async function handleUserContinuousReply(interaction) {
   await showUserSettingsPage2(interaction, true);
 }
 
+export async function handleUserCrossContext(interaction) {
+  const userId = interaction.user.id;
+  if (!state.userSettings[userId]) state.userSettings[userId] = {};
+  state.userSettings[userId].crossContextEnabled = interaction.values[0] === 'enabled';
+  await persistUser(userId);
+  await showUserSettingsPage2(interaction, true);
+}
+
 // ============================================================================
 // MODAL SUBMIT HANDLERS
 // ============================================================================
