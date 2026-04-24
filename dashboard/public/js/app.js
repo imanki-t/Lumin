@@ -336,7 +336,8 @@ window._loadBlacklist=async()=>{
 window._quickUnbl=async(uid,gid)=>{const r=await api.unblacklistUser(uid,gid).catch(()=>null);if(r?.success){toastOk('Removed');window._loadBlacklist();}else toastErr(r?.error||'Error');};
 window._purgeBlacklist=async()=>{if(!confirm('PURGE entire blacklist?'))return;const r=await api.purgeBlacklist().catch(()=>null);r?.success?(toastOk(r.message),window._loadBlacklist()):toastErr(r?.error||'Error');};
 window._viewHistory=async()=>{
-  const uid=v('hist-user-id'); if(!uid){toastErr('Enter an ID');return;}
+  const raw=v('hist-user-id'); if(!raw){toastErr('Enter an ID or username');return;}
+  const uid=await resolveUser(raw); if(!uid) return;
   const r=await api.getChatHistory(uid).catch(()=>null);
   const re=el('hist-result'); if(!re) return;
   if(!r?.success){re.className='result-box err';re.textContent=r?.error||'Not found';re.classList.remove('hidden');return;}
@@ -344,7 +345,8 @@ window._viewHistory=async()=>{
   re.className='result-box ok'; re.textContent=msgs.length?msgs.map(m=>`[${m.role||'?'}]: ${String(m.content||m.parts?.[0]?.text||'').slice(0,120)}`).join('\n'):`No history for ${uid}`; re.classList.remove('hidden');
 };
 window._clearHistory=async()=>{
-  const uid=v('hist-user-id'); if(!uid){toastErr('Enter an ID');return;} if(!confirm('Clear history?')) return;
+  const raw=v('hist-user-id'); if(!raw){toastErr('Enter an ID or username');return;} if(!confirm('Clear history?')) return;
+  const uid=await resolveUser(raw); if(!uid) return;
   const r=await api.clearHistory(uid).catch(()=>null);
   const re=el('hist-result'); if(!re) return;
   re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
@@ -383,8 +385,60 @@ async function loadModels() {
       if(sel) sel.value=String(flags[f]??false);
     });
   }
+  // Load migration config
+  const mc=await api.getMigrationConfig().catch(()=>null);
+  if(mc?.success){
+    const d=mc.data||{};
+    if(el('mc-enable'))     el('mc-enable').value=String(d.ENABLE_MIGRATION??false);
+    if(el('mc-batch-size')) el('mc-batch-size').value=d.BATCH_SIZE??50;
+    if(el('mc-batch-delay'))el('mc-batch-delay').value=d.BATCH_DELAY_MS??100;
+  }
+  // Load bot/state config
+  const bc=await api.getBotConfig().catch(()=>null);
+  if(bc?.success){
+    const d=bc.data||{};
+    if(el('bc-resp-format'))  el('bc-resp-format').value=d.DEFAULT_RESPONSE_FORMAT||'Normal';
+    if(el('bc-dms'))          el('bc-dms').value=String(d.WORK_IN_DMS??true);
+    if(el('bc-queue'))        el('bc-queue').value=d.MAX_QUEUE_DEPTH_PER_USER??5;
+    if(el('bc-key-hold'))     el('bc-key-hold').value=d.KEY_SWITCH_HOLD_MS??1500;
+    if(el('bc-ram'))          el('bc-ram').value=d.RAM_MEDIA_SUSPEND_THRESHOLD_MB??380;
+    if(el('bc-max-msg'))      el('bc-max-msg').value=d.STATE_MAX_MESSAGES??50;
+    if(el('bc-ctx-break'))    el('bc-ctx-break').value=d.CONTEXT_BREAK_THRESHOLD_MIN??30;
+    if(el('bc-gemma-limit'))  el('bc-gemma-limit').value=d.GEMMA_DAILY_LIMIT_PER_KEY??1500;
+    if(el('bc-gemma-default'))el('bc-gemma-default').value=d.GEMMA_DEFAULT_MODEL||'';
+    if(el('bc-gemma-fallback'))el('bc-gemma-fallback').value=d.GEMMA_FALLBACK_MODEL||'';
+  }
 }
 window._loadModels=loadModels;
+window._saveMigrationConfig=async()=>{
+  const payload={
+    ENABLE_MIGRATION: el('mc-enable')?.value==='true',
+    BATCH_SIZE:       parseInt(el('mc-batch-size')?.value||'50'),
+    BATCH_DELAY_MS:   parseInt(el('mc-batch-delay')?.value||'100'),
+  };
+  const r=await api.setMigrationConfig(payload).catch(()=>null);
+  const re=el('mc-result'); if(!re) return;
+  re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
+  if(r?.success) toastOk(r.message);
+};
+window._saveBotConfig=async()=>{
+  const payload={
+    DEFAULT_RESPONSE_FORMAT:        el('bc-resp-format')?.value||'Normal',
+    WORK_IN_DMS:                    el('bc-dms')?.value==='true',
+    MAX_QUEUE_DEPTH_PER_USER:       parseInt(el('bc-queue')?.value||'5'),
+    KEY_SWITCH_HOLD_MS:             parseInt(el('bc-key-hold')?.value||'1500'),
+    RAM_MEDIA_SUSPEND_THRESHOLD_MB: parseInt(el('bc-ram')?.value||'380'),
+    STATE_MAX_MESSAGES:             parseInt(el('bc-max-msg')?.value||'50'),
+    CONTEXT_BREAK_THRESHOLD_MIN:    parseInt(el('bc-ctx-break')?.value||'30'),
+    GEMMA_DAILY_LIMIT_PER_KEY:      parseInt(el('bc-gemma-limit')?.value||'1500'),
+    GEMMA_DEFAULT_MODEL:            el('bc-gemma-default')?.value||'',
+    GEMMA_FALLBACK_MODEL:           el('bc-gemma-fallback')?.value||'',
+  };
+  const r=await api.setBotConfig(payload).catch(()=>null);
+  const re=el('bc-result'); if(!re) return;
+  re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
+  if(r?.success) toastOk(r.message);
+};
 window._setModel=async(model,cardEl)=>{
   const r=await api.setModel(model).catch(()=>null);
   if(r?.success){

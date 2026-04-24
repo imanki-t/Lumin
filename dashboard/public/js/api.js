@@ -98,4 +98,8 @@ export const api = {
   authLogout:          ()              => post('/auth/logout'),
   authConfig:          ()              => get('/auth/config'),
   verifyRecaptcha:     (token)         => post('/auth/verify-recaptcha', {token}),
+  getMigrationConfig:  ()              => get('/api/cmd/migration-config'),
+  setMigrationConfig:  (data)          => put('/api/cmd/migration-config', data),
+  getBotConfig:        ()              => get('/api/cmd/bot-config'),
+  setBotConfig:        (data)          => put('/api/cmd/bot-config', data),
 };
