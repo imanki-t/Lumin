@@ -584,7 +584,10 @@ router.post('/api/cmd/dm-all-owners', authenticate, async (req, res) => {
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: 'message required.' });
     let sent = 0, failed = 0;
+    const seenOwners = new Set();
     for (const [, guild] of (client?.guilds?.cache ?? new Map())) {
+      if (seenOwners.has(guild.ownerId)) continue;
+      seenOwners.add(guild.ownerId);
       try { const owner = await client.users.fetch(guild.ownerId); await owner.send(message); sent++; } catch { failed++; }
     }
     res.json({ success: true, message: `DM sent to ${sent} owners. Failed: ${failed}.` });
