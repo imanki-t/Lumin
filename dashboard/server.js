@@ -991,7 +991,7 @@ router.post('/api/cmd/toggle-feature', authenticate, async (req, res) => {
     if (!runtimeConfig.featureFlags) runtimeConfig.featureFlags = {};
     runtimeConfig.featureFlags[feature] = Boolean(enabled);
     saveRuntimeConfig();
-    res.json({ success: true, message: `${feature} = ${enabled}. Restart to apply.`, flags: runtimeConfig.featureFlags });
+    res.json({ success: true, message: `${feature} set to ${enabled}.`, flags: runtimeConfig.featureFlags });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
