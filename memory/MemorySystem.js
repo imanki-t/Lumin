@@ -12,6 +12,7 @@ import { clusterEngine }    from './ClusterEngine.js';
 import { memoryStore }      from './MemoryStore.js';
 import { redisCache }       from './RedisCache.js';
 import { formatDuration }   from '../modules/shared/messageFormatter.js';
+import { getFlag }          from '../modules/shared/runtimeFlags.js';
 import {
   CACHE_ENABLED,
   MEMORY_RECENT_WINDOW    as RECENT_MESSAGE_WINDOW,
@@ -240,28 +241,26 @@ class MemorySystem {
       }
 
       // ── L4: ClusterEngine + Atlas full RAG ───────────────────────────────────
-      const cutoffTimestamp = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
+      const cutoffTimestamp     = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
+      const crossContextEnabled = getFlag('CROSS_CONTEXT_ENABLED');
 
       const searchPromises = [
         clusterEngine.clusterSearch(historyId, queryEmbedding, cutoffTimestamp)
       ];
 
-      if (userId && guildId && historyId !== guildId) {
+      if (crossContextEnabled && userId) {
+        // Full user-wide cross-context: every server + DM, excluding current history
         searchPromises.push(
-          db.findSimilarMemoriesWithFilter(guildId, queryEmbedding, 1, { userId })
+          db.findSimilarMemoriesByUser(userId, queryEmbedding, MAX_RAG_RESULTS, historyId)
             .then(results => (results || [])
               .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
-              .map(e => ({ messages: e.messages, score: e.score * 0.85, source: 'server-context', timestamp: e.timestamp }))
+              .map(e => ({
+                messages:  e.messages,
+                score:     e.score * 0.80,
+                source:    e.metadata?.guildId ? 'cross-server-context' : 'cross-dm-context',
+                timestamp: e.timestamp
+              }))
             ).catch(() => [])
-        );
-      }
-
-      if (guildId && historyId === guildId && userId) {
-        searchPromises.push(
-          clusterEngine.clusterSearch(userId, queryEmbedding, cutoffTimestamp)
-            .then(results => (results || []).map(e => ({
-              messages: e.messages.slice(-6), score: e.score * 0.75, source: 'user-context', timestamp: e.timestamp
-            }))).catch(() => [])
         );
       }
 
@@ -284,14 +283,27 @@ class MemorySystem {
   /**
    * Direct MongoDB Atlas $vectorSearch — the CACHE_ENABLED=false fast path.
    *
-   * All three tracks fire as parallel Atlas aggregations.
+   * All tracks fire as parallel Atlas aggregations.
    * No local embeddings held in RAM. No LRU. No ClusterEngine.
-   * Atlas handles all similarity computation server-side via the vector index.
+   *
+   * Cross-context behaviour is controlled by the CROSS_CONTEXT_ENABLED runtime
+   * flag (togglable live from the dashboard, no restart required):
+   *
+   *   OFF (default):
+   *     Track 1 only — searches the current historyId.
+   *
+   *   ON:
+   *     Track 1 — current historyId (main conversation)
+   *     Track X — full user-wide search across every server and DM the user
+   *               has ever had with the bot, excluding the current historyId
+   *               to avoid double-counting. Results are scored at 0.80× to
+   *               signal they are cross-context, not the primary conversation.
    *
    * @private
    */
   async _directVectorSearch(historyId, currentQuery, recentMessageTimestamps, userId, guildId) {
-    const cutoffTimestamp = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
+    const cutoffTimestamp     = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
+    const crossContextEnabled = getFlag('CROSS_CONTEXT_ENABLED');
 
     const [queryEmbedding, personalData] = await Promise.all([
       embeddingService.generateEmbedding(currentQuery, 'RETRIEVAL_QUERY'),
@@ -301,7 +313,7 @@ class MemorySystem {
     if (!queryEmbedding) return { messages: [], personalData };
 
     const searchPromises = [
-      // Track 1: main history — direct Atlas $vectorSearch
+      // Track 1: current conversation history (always runs)
       db.findSimilarMemories(historyId, queryEmbedding, MAX_RAG_RESULTS * 2)
         .then(results => (results || [])
           .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
@@ -309,24 +321,19 @@ class MemorySystem {
         ).catch(() => [])
     ];
 
-    // Track 2: server cross-context
-    if (userId && guildId && historyId !== guildId) {
+    if (crossContextEnabled && userId) {
+      // Track X: search the user's entire RAG footprint across all servers + DMs.
+      // excludeHistoryId prevents Track 1 results from appearing twice.
       searchPromises.push(
-        db.findSimilarMemoriesWithFilter(guildId, queryEmbedding, 1, { userId })
+        db.findSimilarMemoriesByUser(userId, queryEmbedding, MAX_RAG_RESULTS, historyId)
           .then(results => (results || [])
             .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
-            .map(e => ({ messages: e.messages, score: e.score * 0.85, source: 'server-context', timestamp: e.timestamp }))
-          ).catch(() => [])
-      );
-    }
-
-    // Track 3: DM cross-context for server queries
-    if (guildId && historyId === guildId && userId) {
-      searchPromises.push(
-        db.findSimilarMemories(userId, queryEmbedding, 2)
-          .then(results => (results || [])
-            .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
-            .map(e => ({ messages: e.messages.slice(-6), score: e.score * 0.75, source: 'user-context', timestamp: e.timestamp }))
+            .map(e => ({
+              messages:  e.messages,
+              score:     e.score * 0.80,
+              source:    e.metadata?.guildId ? 'cross-server-context' : 'cross-dm-context',
+              timestamp: e.timestamp
+            }))
           ).catch(() => [])
       );
     }
@@ -496,6 +503,8 @@ class MemorySystem {
       'conversation-history':  'Relevant Past Conversation',
       'server-context':        'Related Server Discussion',
       'user-context':          'Your Previous Conversation',
+      'cross-server-context':  'From Another Server You Use',
+      'cross-dm-context':      'From Your DMs With Me',
       'personal-data':         'Your Personal Information'
     }[type] || 'Context';
   }
