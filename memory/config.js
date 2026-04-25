@@ -2,6 +2,7 @@
 // Import memory config from here rather than reaching up to ../../modules/config.js.
 export {
   CACHE_ENABLED,
+  ENABLE_RAG,
   MEMORY_RECENT_WINDOW,
   MEMORY_MAX_RAG_RESULTS,
   MEMORY_SCORE_THRESHOLD,
