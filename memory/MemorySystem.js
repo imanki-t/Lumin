@@ -15,6 +15,7 @@ import { formatDuration }   from '../modules/shared/messageFormatter.js';
 import { state }            from '../managers/StateManager.js';
 import {
   CACHE_ENABLED,
+  ENABLE_RAG,
   MEMORY_RECENT_WINDOW    as RECENT_MESSAGE_WINDOW,
   MEMORY_MAX_RAG_RESULTS  as MAX_RAG_RESULTS,
   MEMORY_SCORE_THRESHOLD  as MIN_SIMILARITY_THRESHOLD,
@@ -205,7 +206,7 @@ class MemorySystem {
    */
   async getRelevantContext(historyId, currentQuery, recentMessageTimestamps, userId = null, guildId = null) {
     try {
-      if (!currentQuery?.trim()) return { messages: [], personalData: null };
+      if (!currentQuery?.trim()) return { messages: [], personalData: null, queryEmbedding: null };
 
       // ── CACHE DISABLED: direct Atlas $vectorSearch, zero local RAM ───────────
       if (!CACHE_ENABLED) {
@@ -218,7 +219,7 @@ class MemorySystem {
       const exactCached = memoryCache.getCachedQueryResults(historyId, currentQuery, userId, guildId);
       if (exactCached) {
         const personalData = userId ? await memoryStore.getUserPersonalData(userId) : null;
-        return { messages: exactCached, personalData };
+        return { messages: exactCached, personalData, queryEmbedding: null };
       }
 
       const [queryEmbedding, personalData] = await Promise.all([
@@ -226,18 +227,18 @@ class MemorySystem {
         userId ? memoryStore.getUserPersonalData(userId) : Promise.resolve(null)
       ]);
 
-      if (!queryEmbedding) return { messages: [], personalData };
+      if (!queryEmbedding) return { messages: [], personalData, queryEmbedding: null };
 
       // ── L2: Semantic in-memory hit (free, <1ms) ──────────────────────────────
       const semanticCached = memoryCache.getSemanticallyCachedResults(historyId, queryEmbedding, userId, guildId);
-      if (semanticCached) return { messages: semanticCached, personalData };
+      if (semanticCached) return { messages: semanticCached, personalData, queryEmbedding };
 
       // ── L3: Redis hit (~1-2ms, survives restarts) ─────────────────────────────
       const queryHash   = memoryCache.generateQueryHash(historyId, currentQuery, userId, guildId);
       const redisCached = await redisCache.get(historyId, queryHash);
       if (redisCached) {
         memoryCache.cacheQueryResults(historyId, currentQuery, redisCached, userId, guildId, queryEmbedding);
-        return { messages: redisCached, personalData };
+        return { messages: redisCached, personalData, queryEmbedding };
       }
 
       // ── L4: ClusterEngine + Atlas full RAG ───────────────────────────────────
@@ -296,11 +297,11 @@ class MemorySystem {
       memoryCache.cacheQueryResults(historyId, currentQuery, topResults, userId, guildId, queryEmbedding);
       redisCache.set(historyId, queryHash, topResults);
 
-      return { messages: topResults, personalData };
+      return { messages: topResults, personalData, queryEmbedding };
 
     } catch (error) {
       logger.error('Context retrieval failed', error);
-      return { messages: [], personalData: null };
+      return { messages: [], personalData: null, queryEmbedding: null };
     }
   }
 
@@ -336,7 +337,7 @@ class MemorySystem {
       userId ? memoryStore.getUserPersonalData(userId) : Promise.resolve(null)
     ]);
 
-    if (!queryEmbedding) return { messages: [], personalData };
+    if (!queryEmbedding) return { messages: [], personalData, queryEmbedding: null };
 
     const searchPromises = [
       // Track 1: current conversation history (always runs)
@@ -388,7 +389,7 @@ class MemorySystem {
 
     const allResults = (await Promise.all(searchPromises)).flat();
     allResults.sort((a, b) => b.score - a.score);
-    return { messages: allResults.slice(0, MAX_RAG_RESULTS), personalData };
+    return { messages: allResults.slice(0, MAX_RAG_RESULTS), personalData, queryEmbedding };
   }
 
     // ==========================================================================
@@ -440,11 +441,17 @@ class MemorySystem {
         return this.formatHistoryForAPI(recentMessages);
       }
 
+      // RAG disabled — let the AI use the search_memory tool only when needed.
+      // This avoids 3 extra embed API calls per message.
+      if (!ENABLE_RAG) {
+        return this.formatHistoryForAPI(recentMessages);
+      }
+
       // Fetch RAG context (no summary — see JSDoc above)
       const ragResults = await this.getRelevantContext(
         historyId, currentQuery, recentTimestamps, userId, guildId
       );
-      const { messages: relevantMemories, personalData } = ragResults;
+      const { messages: relevantMemories, personalData, queryEmbedding } = ragResults;
 
       const contextSections = [];
 
@@ -474,18 +481,15 @@ class MemorySystem {
       }
 
       // Personal data (only if semantically relevant to this query)
-      if (personalData?.embedding) {
-        const queryEmbedding = await embeddingService.generateEmbedding(currentQuery, 'RETRIEVAL_QUERY');
-        if (queryEmbedding) {
-          const sim = embeddingService.cosineSimilarity(queryEmbedding, personalData.embedding);
-          if (sim >= 0.3) {
-            contextSections.push({
-              type:      'personal-data',
-              content:   personalData.text,
-              score:     sim,
-              timestamp: Date.now()
-            });
-          }
+      if (personalData?.embedding && queryEmbedding) {
+        const sim = embeddingService.cosineSimilarity(queryEmbedding, personalData.embedding);
+        if (sim >= 0.3) {
+          contextSections.push({
+            type:      'personal-data',
+            content:   personalData.text,
+            score:     sim,
+            timestamp: Date.now()
+          });
         }
       }
 
