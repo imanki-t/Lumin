@@ -17,31 +17,66 @@ export const GEMMA_DEFAULT_MODEL     = 'gemma-4-26b';  // key in MODELS map
 export const GEMMA_FALLBACK_MODEL    = 'gemma-4-31b';  // key in MODELS map, used when CYCLE_GEMMA_WITH_GEMINI=true
 export const CYCLE_GEMMA_WITH_GEMINI = false;          // true = append Gemma to fallback chain after all Gemini keys exhaust
 
+// ── RAG ──────────────────────────────────────────────────────────────────────
+// ENABLE_RAG = true  → auto vector-search memory before every reply once
+//                       history exceeds MEMORY_RECENT_WINDOW messages.
+// ENABLE_RAG = false → no automatic RAG; the AI uses the search_memory tool
+//                       only when it decides it actually needs old context.
+//                       Saves ~3 embed API calls per message.
+export const ENABLE_RAG = false;
+
 // ── MODELS ───────────────────────────────────────────────────────────────────
 
 export const DEFAULT_MODEL = 'gemini-3.1-flash-lite-preview';
 
 export const MODELS = {
-  'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',
-  'gemini-3-flash':        'gemini-3-flash-preview',
-  'gemini-2.5-flash':      'gemini-2.5-flash',
-  'gemini-2.5-pro':        'gemini-2.5-pro',
-  'gemini-2.0-flash-lite': 'gemini-2.0-flash-lite',
-  'gemma-4-27b':           'gemma-4-27b-it',
-  'gemma-4-9b':            'gemma-4-9b-it',
-  'gemma-4-26b':           'gemma-4-26b-a4b-it',
-  'gemma-4-31b':           'gemma-4-31b-it'
+  // ── Gemini 3 series ────────────────────────────────────────────────────────
+  'gemini-3.1-pro':        'gemini-3.1-pro-preview',      // most capable, agentic
+  'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview', // fastest / cheapest Gemini 3
+  'gemini-3-flash':        'gemini-3-flash-preview',      // frontier-class, fraction of cost
+
+  // ── Gemini 2.5 series ──────────────────────────────────────────────────────
+  'gemini-2.5-pro':        'gemini-2.5-pro',              // best reasoning + coding
+  'gemini-2.5-flash':      'gemini-2.5-flash',            // best price-performance
+  'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite',       // fastest / cheapest 2.5
+
+  // ── Gemma 4 (open, via Gemini API) ────────────────────────────────────────
+  'gemma-4-26b':           'gemma-4-26b-a4b-it',          // MoE 26B active params
+  'gemma-4-31b':           'gemma-4-31b-it',              // dense 31B
+  'gemma-4-27b':           'gemma-4-27b-it',              // dense 27B
+  'gemma-4-9b':            'gemma-4-9b-it',               // dense 9B — lightest Gemma 4
+
+  // ── Gemma 3 (open, via Gemini API) ────────────────────────────────────────
+  'gemma-3-27b':           'gemma-3-27b-it',              // multilingual, 128K ctx
+  'gemma-3-12b':           'gemma-3-12b-it',
+  'gemma-3-4b':            'gemma-3-4b-it',
+  'gemma-3-1b':            'gemma-3-1b-it',               // smallest, on-device class
+
+  // ── Gemma 3n (efficient on-device series) ─────────────────────────────────
+  'gemma-3n-e4b':          'gemma-3n-e4b-it',             // multimodal (text+img+audio)
+  'gemma-3n-e2b':          'gemma-3n-e2b-it'
 };
 
 export const GEMINI_3_MODELS = [
+  'gemini-3.1-pro-preview',
   'gemini-3.1-flash-lite-preview',
   'gemini-3-flash-preview',
-  'gemini-3-pro-preview'
 ];
 
 export const GEMMA_MODELS = [
+  // Gemma 4
   'gemma-4-26b-a4b-it',
-  'gemma-4-31b-it'
+  'gemma-4-31b-it',
+  'gemma-4-27b-it',
+  'gemma-4-9b-it',
+  // Gemma 3
+  'gemma-3-27b-it',
+  'gemma-3-12b-it',
+  'gemma-3-4b-it',
+  'gemma-3-1b-it',
+  // Gemma 3n
+  'gemma-3n-e4b-it',
+  'gemma-3n-e2b-it',
 ];
 
 export const GEMMA_DAILY_LIMIT_PER_KEY     = 1500;
@@ -282,6 +317,7 @@ export const MESSAGE_FETCH_CONFIG = Object.freeze({
 export default {
   BOT_CONFIG,
   ENABLE_GEMMA, GEMMA_DEFAULT_MODEL, GEMMA_FALLBACK_MODEL, CYCLE_GEMMA_WITH_GEMINI,
+  ENABLE_RAG,
   DEFAULT_MODEL, MODELS, GEMINI_3_MODELS, GEMMA_MODELS,
   GEMMA_DAILY_LIMIT_PER_KEY, GEMMA_SUPPORTED_MIME_PREFIXES, GEMMA_SUPPORTED_EXTENSIONS,
   isGemmaModel,
