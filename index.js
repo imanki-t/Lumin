@@ -16,7 +16,7 @@ import { createServer } from 'http';
 import express from 'express';
 
 import config from './config.js';
-import { mountDashboard, isGlobalLockdown } from './dashboard/server.js';
+import { mountDashboard, isGlobalLockdown, saveRuntimeConfig } from './dashboard/server.js';
 import {
   client,
   token,
@@ -28,7 +28,7 @@ import {
   BOT_CONFIG,
   DEFAULT_USER_SETTINGS,
   requestQueues,   // ← direct import; avoids going through state getter
-  getDailyMessageStats
+  getDailyMessageStats,
 } from './managers/BotManager.js';
 
 import { Logger }       from './core/Logger.js';
@@ -417,6 +417,7 @@ async function gracefulShutdown(signal) {
   try {
     logger.info('Saving final state…');
     await saveStateToFile();
+    saveRuntimeConfig();  // flush per-key request counts to runtime-config.json
 
     logger.info('Closing Discord connection…');
     client.destroy();
