@@ -525,3 +525,7 @@ code.ic{font-family:var(--fm);font-size:11px;background:var(--bg3);padding:1px 5
   .mig-layout{grid-template-columns:1fr;}
   .mig-btns .btn{flex:1 1 100%;}
 }
+
+/* ── Models flags grid (Generation + Media side by side, stack on mobile) ─── */
+.mdl-flags-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+@media(max-width:700px){.mdl-flags-grid{grid-template-columns:1fr;}}
