@@ -221,12 +221,12 @@
           <div class="sh-l"><div class="sh-title">Models & API Keys</div><div class="sh-desc">Switch active AI model, manage API key rotation and view per-key stats.</div></div>
           <div class="sh-r"><button class="btn btn-ghost btn-sm" onclick="window._loadModels()">Refresh</button></div>
         </div>
-        <div class="g3" style="margin-bottom:14px">
-          <div class="panel" style="grid-column:1/3">
-            <div class="panel-h">AI Models — click to set active</div>
-            <div id="mdl-grid" class="mdl-grid"><div class="loading">Loading…</div></div>
-            <div class="mt8" style="font-size:11px;color:var(--text3)" id="mdl-active-info"></div>
-          </div>
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-h">AI Models — click to set active</div>
+          <div id="mdl-grid" class="mdl-grid"><div class="loading">Loading…</div></div>
+          <div class="mt8" style="font-size:11px;color:var(--text3)" id="mdl-active-info"></div>
+        </div>
+        <div class="mdl-flags-grid" style="margin-bottom:14px">
           <div class="panel">
             <div class="panel-h">Generation Settings</div>
             <div class="form-g"><label class="form-l">Gemma Enabled</label>
@@ -241,11 +241,6 @@
             </div>
             <div class="form-g"><label class="form-l">Redis Cache</label>
               <select class="form-sel" id="ff-cache" onchange="window._toggleFlag('CACHE_ENABLED',this.value==='true')">
-                <option value="false">Disabled</option><option value="true">Enabled</option>
-              </select>
-            </div>
-            <div class="form-g"><label class="form-l">PDF for Gemini</label>
-              <select class="form-sel" id="ff-pdf" onchange="window._toggleFlag('PDF_ENABLED_FOR_GEMINI',this.value==='true')">
                 <option value="false">Disabled</option><option value="true">Enabled</option>
               </select>
             </div>
@@ -275,10 +270,10 @@
               </select>
             </div>
           </div>
-          <!-- ── Media Toggles ─────────────────────────────────────── -->
+          <!-- ── Media Processing ───────────────────────────────────── -->
           <div class="panel">
             <div class="panel-h">Media Processing</div>
-            <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Control which attachment types the bot accepts. Changes apply immediately (runtime flag).</div>
+            <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Control which attachment types the bot accepts. Changes apply immediately.</div>
             <div class="form-g"><label class="form-l">🖼 Images (png/jpeg)</label>
               <select class="form-sel" id="ff-image" onchange="window._toggleFlag('ENABLE_IMAGE_PROCESSING',this.value==='true')">
                 <option value="true">Enabled</option><option value="false">Disabled</option>
@@ -299,7 +294,11 @@
                 <option value="false">Disabled</option><option value="true">Enabled</option>
               </select>
             </div>
-            <div style="font-size:10px;color:var(--text3);margin-top:6px">PDF is controlled separately above under "PDF for Gemini".</div>
+            <div class="form-g"><label class="form-l">📄 PDF (Gemini)</label>
+              <select class="form-sel" id="ff-pdf" onchange="window._toggleFlag('PDF_ENABLED_FOR_GEMINI',this.value==='true')">
+                <option value="false">Disabled</option><option value="true">Enabled</option>
+              </select>
+            </div>
           </div>
         </div>
         <div class="cfg-row" style="margin-bottom:14px">
