@@ -40,21 +40,16 @@ export const MODELS = {
   'gemini-2.5-flash':      'gemini-2.5-flash',            // best price-performance
   'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite',       // fastest / cheapest 2.5
 
-  // ── Gemma 4 (open, via Gemini API) ────────────────────────────────────────
-  'gemma-4-26b':           'gemma-4-26b-a4b-it',          // MoE 26B active params
-  'gemma-4-31b':           'gemma-4-31b-it',              // dense 31B
-  'gemma-4-27b':           'gemma-4-27b-it',              // dense 27B
-  'gemma-4-9b':            'gemma-4-9b-it',               // dense 9B — lightest Gemma 4
+  // ── Gemma 4 (confirmed on Gemini API) ─────────────────────────────────────
+  'gemma-4-26b':           'gemma-4-26b-a4b-it',   // MoE 26B active params
+  'gemma-4-31b':           'gemma-4-31b-it',        // Dense 31B
 
-  // ── Gemma 3 (open, via Gemini API) ────────────────────────────────────────
-  'gemma-3-27b':           'gemma-3-27b-it',              // multilingual, 128K ctx
+  // ── Gemma 3 (confirmed on Gemini API via AI Studio) ────────────────────────
+  'gemma-3-27b':           'gemma-3-27b-it',
   'gemma-3-12b':           'gemma-3-12b-it',
   'gemma-3-4b':            'gemma-3-4b-it',
-  'gemma-3-1b':            'gemma-3-1b-it',               // smallest, on-device class
-
-  // ── Gemma 3n (efficient on-device series) ─────────────────────────────────
-  'gemma-3n-e4b':          'gemma-3n-e4b-it',             // multimodal (text+img+audio)
-  'gemma-3n-e2b':          'gemma-3n-e2b-it'
+  'gemma-3-2b':            'gemma-3-2b-it',
+  'gemma-3-1b':            'gemma-3-1b-it',
 };
 
 export const GEMINI_3_MODELS = [
@@ -64,19 +59,15 @@ export const GEMINI_3_MODELS = [
 ];
 
 export const GEMMA_MODELS = [
-  // Gemma 4
+  // Gemma 4 (confirmed on Gemini API)
   'gemma-4-26b-a4b-it',
   'gemma-4-31b-it',
-  'gemma-4-27b-it',
-  'gemma-4-9b-it',
-  // Gemma 3
+  // Gemma 3 (confirmed on Gemini API / AI Studio)
   'gemma-3-27b-it',
   'gemma-3-12b-it',
   'gemma-3-4b-it',
+  'gemma-3-2b-it',
   'gemma-3-1b-it',
-  // Gemma 3n
-  'gemma-3n-e4b-it',
-  'gemma-3n-e2b-it',
 ];
 
 export const GEMMA_DAILY_LIMIT_PER_KEY     = 1500;
