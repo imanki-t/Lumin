@@ -163,6 +163,16 @@ export const CACHE_ENABLED                  = false; // Redis L3 cache; in-memor
 export const WEEKLY_SUMMARY_ENABLED         = true;  // set false to skip weekly context summary job entirely
 export const CROSS_CONTEXT_ENABLED          = false; // set true to allow RAG to pull context across all servers + DMs (future)
 
+// ── MEDIA PROCESSING ─────────────────────────────────────────────────────────
+// Individual toggles — set false to reject that media type before it hits the AI.
+// RAM_MEDIA_SUSPEND_THRESHOLD_MB is the global kill-switch; these are per-type.
+export const ENABLE_IMAGE_PROCESSING = true;   // inline images (png/jpeg)
+export const ENABLE_VIDEO_PROCESSING = false;  // video attachments (mp4/mov)
+export const ENABLE_AUDIO_PROCESSING = false;  // audio attachments (mp3/wav)
+export const ENABLE_FILE_PROCESSING  = false;  // generic file attachments
+export const ENABLE_WEB_SEARCH       = true;   // Gemini grounding / web search tool
+export const ENABLE_FUNCTION_CALLING = true;   // all tool / function-call use
+
 // ── BOT STATE ────────────────────────────────────────────────────────────────
 
 export const STATE_CONFIG = Object.freeze({
@@ -326,6 +336,8 @@ export default {
   safetySettings,
   RAM_MEDIA_SUSPEND_THRESHOLD_MB, KEY_SWITCH_HOLD_MS, MAX_QUEUE_DEPTH_PER_USER,
   PDF_ENABLED_FOR_GEMINI, CACHE_ENABLED, WEEKLY_SUMMARY_ENABLED, CROSS_CONTEXT_ENABLED,
+  ENABLE_IMAGE_PROCESSING, ENABLE_VIDEO_PROCESSING, ENABLE_AUDIO_PROCESSING,
+  ENABLE_FILE_PROCESSING, ENABLE_WEB_SEARCH, ENABLE_FUNCTION_CALLING,
   STATE_CONFIG, RESOURCE_CONFIG, MIGRATION_CONFIG, POLL_CONFIG,
   DB_CONNECTION_CONFIG, DB_RETRY_CONFIG, DB_VECTOR_SEARCH_CONFIG,
   MEMORY_RECENT_WINDOW, MEMORY_MAX_RAG_RESULTS, MEMORY_SCORE_THRESHOLD,
