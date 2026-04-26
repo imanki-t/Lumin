@@ -153,7 +153,7 @@ window._navigate = id => {
   if(id==='mongo-console') { setTimeout(initMongoTerminal, 50); }
   if(id==='shell-console') { setTimeout(initShellTerminal, 50); }
   if(id==='servers')       loadServers();
-  if(id==='models')        loadModels();
+  if(id==='models')        window._loadModels();
   if(id==='database')      loadCollections();
   if(id==='files')         fbNav('');
   if(id==='users')         { }

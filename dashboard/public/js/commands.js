@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { toastOk, toastErr } from './toast.js';
+import { toastOk, toastErr, toastConfirm } from './toast.js';
 
 const v  = id => (document.getElementById(id)?.value || '').trim();
 const el = id => document.getElementById(id);
@@ -180,7 +180,7 @@ function getResultId(btnEl) {
 
 window.CMD = {
   saveState:          (e) => run(() => api.saveState(), getResultId(e?.target||document.activeElement)||''),
-  clearAllHistories:  (e) => { if(!confirm('Clear ALL chat histories?')) return; run(() => api.clearHistory(), getResultId(e?.target||document.activeElement)||''); },
+  clearAllHistories:  async(e) => { if(!await toastConfirm('Clear ALL chat histories?')) return; run(() => api.clearHistory(), getResultId(e?.target||document.activeElement)||''); },
   clearUserHistory:   async(e) => {
     const raw=v('ci-user'); if(!raw){toastErr('Enter a User ID or username');return;}
     const id=await resolveUser(raw); if(!id) return;
