@@ -986,7 +986,13 @@ router.post('/api/cmd/toggle-feature', authenticate, async (req, res) => {
   try {
     const { feature, enabled } = req.body;
     if (!feature) return res.status(400).json({ error: 'feature required.' });
-    const allowed = ['ENABLE_GEMMA','CACHE_ENABLED','PDF_ENABLED_FOR_GEMINI','CYCLE_GEMMA_WITH_GEMINI','WEEKLY_SUMMARY_ENABLED'];
+    const allowed = [
+      'ENABLE_GEMMA','CACHE_ENABLED','PDF_ENABLED_FOR_GEMINI',
+      'CYCLE_GEMMA_WITH_GEMINI','WEEKLY_SUMMARY_ENABLED',
+      'ENABLE_RAG','CROSS_CONTEXT_ENABLED',
+      'ENABLE_IMAGE_PROCESSING','ENABLE_VIDEO_PROCESSING','ENABLE_AUDIO_PROCESSING',
+      'ENABLE_FILE_PROCESSING','ENABLE_WEB_SEARCH','ENABLE_FUNCTION_CALLING',
+    ];
     if (!allowed.includes(feature)) return res.status(400).json({ error: `Allowed: ${allowed.join(', ')}` });
     if (!runtimeConfig.featureFlags) runtimeConfig.featureFlags = {};
     runtimeConfig.featureFlags[feature] = Boolean(enabled);
@@ -1004,6 +1010,14 @@ router.get('/api/cmd/feature-flags', authenticate, async (req, res) => {
       PDF_ENABLED_FOR_GEMINI:  cfg.PDF_ENABLED_FOR_GEMINI  ?? false,
       CYCLE_GEMMA_WITH_GEMINI: cfg.CYCLE_GEMMA_WITH_GEMINI ?? false,
       WEEKLY_SUMMARY_ENABLED:  cfg.WEEKLY_SUMMARY_ENABLED  ?? true,
+      ENABLE_RAG:              cfg.ENABLE_RAG              ?? false,
+      CROSS_CONTEXT_ENABLED:   cfg.CROSS_CONTEXT_ENABLED   ?? false,
+      ENABLE_IMAGE_PROCESSING: cfg.ENABLE_IMAGE_PROCESSING ?? true,
+      ENABLE_VIDEO_PROCESSING: cfg.ENABLE_VIDEO_PROCESSING ?? false,
+      ENABLE_AUDIO_PROCESSING: cfg.ENABLE_AUDIO_PROCESSING ?? false,
+      ENABLE_FILE_PROCESSING:  cfg.ENABLE_FILE_PROCESSING  ?? false,
+      ENABLE_WEB_SEARCH:       cfg.ENABLE_WEB_SEARCH       ?? true,
+      ENABLE_FUNCTION_CALLING: cfg.ENABLE_FUNCTION_CALLING ?? true,
     };
     const flags = { ...configDefaults, ...(runtimeConfig.featureFlags || {}) };
     res.json({ success: true, data: flags });
@@ -1212,6 +1226,167 @@ function handleShellRepl(ws, initialCmd) {
   const proc = spawnTerminal(ws, '/bin/bash', [], { PS1: '\\w $ ' });
   if (initialCmd) setTimeout(() => { try { proc.stdin.write(initialCmd + '\n'); } catch {} }, 300);
 }
+
+// ── Rate-limit config (RPM per model per key) ────────────────────────────────
+router.get('/api/config/rate-limits', authenticate, (req, res) => {
+  try {
+    // Return stored overrides merged with sensible defaults so the UI always
+    // has something to display even before any override has been saved.
+    const defaults = {
+      REQUESTS_PER_MINUTE: 15,
+      WINDOW_DURATION_MS:  60_000,
+      COOLDOWN_DURATION_MS: 60_000,
+      MODEL_REQUESTS_PER_MINUTE: {
+        'gemini-3.1-flash-lite-preview': null  // null = Infinity / unlimited
+      },
+      RETRY_DELAYS: {
+        FORBIDDEN:    3_000,
+        RATE_LIMIT:   2_500,
+        SERVER_ERROR: 1_000,
+        DEFAULT:      1_000
+      }
+    };
+    const overrides = runtimeConfig.rateLimits || {};
+    res.json({ success: true, data: { ...defaults, ...overrides } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/api/config/rate-limits', authenticate, (req, res) => {
+  try {
+    if (!runtimeConfig.rateLimits) runtimeConfig.rateLimits = {};
+    const allowed = [
+      'REQUESTS_PER_MINUTE','WINDOW_DURATION_MS','COOLDOWN_DURATION_MS',
+      'MODEL_REQUESTS_PER_MINUTE','RETRY_DELAYS'
+    ];
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) runtimeConfig.rateLimits[key] = req.body[key];
+    }
+    saveRuntimeConfig();
+    res.json({ success: true, data: runtimeConfig.rateLimits, message: 'Rate-limit config saved. Restart to apply.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Full bot config (all tuneable knobs from modules/config.js) ──────────────
+router.get('/api/config/all', authenticate, async (req, res) => {
+  try {
+    const cfg = await import('../modules/config.js');
+    res.json({
+      success: true,
+      data: {
+        // ── AI routing ──────────────────────────────────────────────────────
+        ENABLE_GEMMA:            cfg.ENABLE_GEMMA            ?? false,
+        GEMMA_DEFAULT_MODEL:     cfg.GEMMA_DEFAULT_MODEL     ?? '',
+        GEMMA_FALLBACK_MODEL:    cfg.GEMMA_FALLBACK_MODEL    ?? '',
+        CYCLE_GEMMA_WITH_GEMINI: cfg.CYCLE_GEMMA_WITH_GEMINI ?? false,
+        ENABLE_RAG:              cfg.ENABLE_RAG              ?? false,
+        // ── Models ─────────────────────────────────────────────────────────
+        DEFAULT_MODEL:           cfg.DEFAULT_MODEL           ?? '',
+        MODELS:                  cfg.MODELS                  ?? {},
+        MODEL_FALLBACK_CHAIN:    cfg.MODEL_FALLBACK_CHAIN    ?? [],
+        MODEL_CALL_THRESHOLDS:   cfg.MODEL_CALL_THRESHOLDS   ?? {},
+        GEMMA_DAILY_LIMIT_PER_KEY: cfg.GEMMA_DAILY_LIMIT_PER_KEY ?? 1500,
+        // ── Feature flags ──────────────────────────────────────────────────
+        CACHE_ENABLED:           cfg.CACHE_ENABLED           ?? false,
+        PDF_ENABLED_FOR_GEMINI:  cfg.PDF_ENABLED_FOR_GEMINI  ?? false,
+        WEEKLY_SUMMARY_ENABLED:  cfg.WEEKLY_SUMMARY_ENABLED  ?? true,
+        CROSS_CONTEXT_ENABLED:   cfg.CROSS_CONTEXT_ENABLED   ?? false,
+        // ── Queue & media ──────────────────────────────────────────────────
+        MAX_QUEUE_DEPTH_PER_USER:       cfg.MAX_QUEUE_DEPTH_PER_USER        ?? 5,
+        KEY_SWITCH_HOLD_MS:             cfg.KEY_SWITCH_HOLD_MS              ?? 1500,
+        RAM_MEDIA_SUSPEND_THRESHOLD_MB: cfg.RAM_MEDIA_SUSPEND_THRESHOLD_MB  ?? 380,
+        // ── State ──────────────────────────────────────────────────────────
+        STATE_MAX_MESSAGES:          cfg.STATE_CONFIG?.MAX_MESSAGES          ?? 50,
+        CONTEXT_BREAK_THRESHOLD_MIN: Math.round((cfg.STATE_CONFIG?.CONTEXT_BREAK_THRESHOLD ?? 1_800_000) / 60_000),
+        // ── Memory system ──────────────────────────────────────────────────
+        MEMORY_RECENT_WINDOW:    cfg.MEMORY_RECENT_WINDOW    ?? 10,
+        MEMORY_MAX_RAG_RESULTS:  cfg.MEMORY_MAX_RAG_RESULTS  ?? 3,
+        MEMORY_SCORE_THRESHOLD:  cfg.MEMORY_SCORE_THRESHOLD  ?? 0.72,
+        MEMORY_CHUNK_SIZE:       cfg.MEMORY_CHUNK_SIZE       ?? 8,
+        MEMORY_CHUNK_OVERLAP:    cfg.MEMORY_CHUNK_OVERLAP    ?? 2,
+        MEMORY_INDEX_BATCH_SIZE: cfg.MEMORY_INDEX_BATCH_SIZE ?? 3,
+        // ── Embedding ──────────────────────────────────────────────────────
+        EMBEDDING_MODEL:          cfg.EMBEDDING_MODEL          ?? '',
+        EMBEDDING_DIM:            cfg.EMBEDDING_DIM            ?? 768,
+        EMBEDDING_MAX_CONCURRENT: cfg.EMBEDDING_MAX_CONCURRENT ?? 3,
+        EMBEDDING_CACHE_MAX_SIZE: cfg.EMBEDDING_CACHE_MAX_SIZE ?? 50,
+        // ── DB vector search ───────────────────────────────────────────────
+        DB_VECTOR_INDEX_NAME:    cfg.DB_VECTOR_SEARCH_CONFIG?.INDEX_NAME    ?? 'vector_index',
+        DB_VECTOR_SCORE_THRESHOLD: cfg.DB_VECTOR_SEARCH_CONFIG?.SCORE_THRESHOLD ?? 0.72,
+        DB_VECTOR_DEFAULT_LIMIT: cfg.DB_VECTOR_SEARCH_CONFIG?.DEFAULT_LIMIT ?? 4,
+        // ── Cluster engine ─────────────────────────────────────────────────
+        CLUSTER_MIN_MEMORIES:    cfg.CLUSTER_MIN_MEMORIES    ?? 150,
+        CLUSTER_MAX:             cfg.CLUSTER_MAX             ?? 20,
+        CLUSTER_MIN_SIMILARITY:  cfg.CLUSTER_MIN_SIMILARITY  ?? 0.45,
+        // ── Migration ──────────────────────────────────────────────────────
+        MIGRATION_ENABLE:     cfg.MIGRATION_CONFIG?.ENABLE_MIGRATION ?? false,
+        MIGRATION_BATCH_SIZE: cfg.MIGRATION_CONFIG?.BATCH_SIZE       ?? 50,
+        MIGRATION_DELAY_MS:   cfg.MIGRATION_CONFIG?.BATCH_DELAY_MS   ?? 100,
+        // ── Runtime overrides (layered on top) ─────────────────────────────
+        _runtimeOverrides: runtimeConfig,
+      }
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Migration run endpoints ──────────────────────────────────────────────────
+// Options body (all optional):
+//   scope:  'servers' | 'users' | 'both'   (default: 'both')
+//   fields: string[]                        (only migrate these fields)
+//   force:  boolean                         (overwrite even if user/server already has the field)
+
+router.post('/api/cmd/migrate', authenticate, async (req, res) => {
+  try {
+    const { runMigration } = await import('../managers/StateManager.js');
+    const { scope = 'both', fields = [], force = false } = req.body;
+    const result = await runMigration({ scope, fields: fields.length ? fields : null, force });
+    res.json({ success: true, ...result });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Convenience shorthands
+router.post('/api/cmd/migrate/servers', authenticate, async (req, res) => {
+  try {
+    const { runMigration } = await import('../managers/StateManager.js');
+    const { fields = [], force = false } = req.body;
+    const result = await runMigration({ scope: 'servers', fields: fields.length ? fields : null, force });
+    res.json({ success: true, ...result });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/api/cmd/migrate/users', authenticate, async (req, res) => {
+  try {
+    const { runMigration } = await import('../managers/StateManager.js');
+    const { fields = [], force = false } = req.body;
+    const result = await runMigration({ scope: 'users', fields: fields.length ? fields : null, force });
+    res.json({ success: true, ...result });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Returns the full list of migratable fields so the UI can render checkboxes
+router.get('/api/cmd/migrate/fields', authenticate, async (req, res) => {
+  try {
+    const { DEFAULT_SERVER_SETTINGS, DEFAULT_USER_SETTINGS } = await import('../managers/StateManager.js');
+    res.json({
+      success: true,
+      serverFields: Object.keys(DEFAULT_SERVER_SETTINGS),
+      userFields:   Object.keys(DEFAULT_USER_SETTINGS),
+    });
+  } catch {
+    // fallback — hardcode the known fields so the endpoint never 500s
+    res.json({
+      success: true,
+      serverFields: [
+        'selectedModel','responseFormat','showActionButtons','continuousReply',
+        'customPersonality','embedColor','overrideUserSettings','serverChatHistory',
+        'allowedChannels','gemmaEnabled',
+      ],
+      userFields: [
+        'selectedModel','responseFormat','showActionButtons','continuousReply',
+        'customPersonality','embedColor','gemmaEnabled','crossContextEnabled',
+      ],
+    });
+  }
+});
 
 export function mountDashboard(app, httpServer) {
   app.use('/dashboard', router);
