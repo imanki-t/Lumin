@@ -2,7 +2,7 @@ import { getToken, setToken, clearToken, hasToken, BASE_URL } from './config.js'
 import { buildSidebarNav, buildBottomNav, navigate, onNavigate, setLockdownIndicator } from './router.js';
 import { renderCommands, renderApiKeysPanel } from './commands.js';
 import { initNodeTerminal, initMongoTerminal, initShellTerminal } from './terminals.js';
-import { toastOk, toastErr, toastInfo, toastWarn } from './toast.js';
+import { toastOk, toastErr, toastInfo, toastWarn, toastConfirm } from './toast.js';
 import { api } from './api.js';
 
 const fmtBytes=(b,d=1)=>!b||b<0?'—':b<1024?`${b}B`:b<1048576?`${(b/1024).toFixed(d)}KB`:b<1073741824?`${(b/1048576).toFixed(d)}MB`:`${(b/1073741824).toFixed(d)}GB`;
@@ -209,7 +209,7 @@ function renderServers(list) {
 window._svPg          = p=>{ serverPage=p; renderServers(window._filteredServers||allServers); };
 window._filterServers = q=>{ const f=allServers.filter(g=>!q||g.name?.toLowerCase().includes(q.toLowerCase())||g.id?.includes(q)); window._filteredServers=f; serverPage=1; renderServers(f); };
 window._loadServers   = loadServers;
-window._leaveServer   = async(id,name)=>{ if(!confirm(`Leave ${name}?`)) return; const r=await api.leaveServer(id); r?.success?toastOk(`Left ${name}`):(toastErr(r?.error||'Error'),null); loadServers(); };
+window._leaveServer   = async(id,name)=>{ if(!await toastConfirm(`Leave ${name}?`)) return; const r=await api.leaveServer(id); r?.success?toastOk(`Left ${name}`):(toastErr(r?.error||'Error'),null); loadServers(); };
 window._viewServerSettings = async(gid)=>{
   const r=await api.getServerSettings(gid).catch(()=>null);
   if(!r?.success){toastErr('Could not load settings');return;}
@@ -289,8 +289,8 @@ window._viewUserSettings = async(uid)=>{
   modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
 };
 window._saveUSettings=async(uid)=>{try{const data=JSON.parse(v('us-edit'));const r=await api.setUserSettings(uid,data);r?.success?toastOk('Saved'):toastErr(r?.error||'Error');}catch(e){toastErr('Invalid JSON');}};
-window._resetUSett=async(uid)=>{if(!confirm('Reset user settings?'))return;const r=await api.resetUserSettings(uid);r?.success?toastOk('Reset'):toastErr(r?.error||'Error');};
-window._clearUserHist=async(uid)=>{if(!confirm('Clear history?'))return;const r=await api.clearHistory(uid);r?.success?toastOk('Cleared'):toastErr(r?.error||'Error');};
+window._resetUSett=async(uid)=>{if(!await toastConfirm('Reset user settings?'))return;const r=await api.resetUserSettings(uid);r?.success?toastOk('Reset'):toastErr(r?.error||'Error');};
+window._clearUserHist=async(uid)=>{if(!await toastConfirm('Clear history?'))return;const r=await api.clearHistory(uid);r?.success?toastOk('Cleared'):toastErr(r?.error||'Error');};
 window._viewMemory=async(uid)=>{
   const r=await api.getMemory(uid).catch(()=>null);
   const modal=document.createElement('div');
@@ -300,7 +300,7 @@ window._viewMemory=async(uid)=>{
   document.body.appendChild(modal);
   modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
 };
-window._delMemory=async(uid,btn)=>{if(!confirm('Delete all memories?'))return;const r=await api.deleteMemory(uid);r?.success?(toastOk('Deleted'),btn.closest('div[style*=fixed]').remove()):toastErr(r?.error||'Error');};
+window._delMemory=async(uid,btn)=>{if(!await toastConfirm('Delete all memories?'))return;const r=await api.deleteMemory(uid);r?.success?(toastOk('Deleted'),btn.closest('div[style*=fixed]').remove()):toastErr(r?.error||'Error');};
 window._sendDm=async()=>{
   const raw=v('dm-user-id'),msg=v('dm-message'); if(!raw||!msg){toastErr('User and message required');return;}
   const uid=await resolveUser(raw); if(!uid) return;
@@ -334,7 +334,7 @@ window._loadBlacklist=async()=>{
   c.innerHTML=entries.map(e=>`<div class="bl-e"><span class="bl-u">${e.uid}</span><span class="bl-g">${e.guild}</span><button class="btn btn-danger btn-sm" onclick="window._quickUnbl('${e.uid}','${e.guild}')">Remove</button></div>`).join('');
 };
 window._quickUnbl=async(uid,gid)=>{const r=await api.unblacklistUser(uid,gid).catch(()=>null);if(r?.success){toastOk('Removed');window._loadBlacklist();}else toastErr(r?.error||'Error');};
-window._purgeBlacklist=async()=>{if(!confirm('PURGE entire blacklist?'))return;const r=await api.purgeBlacklist().catch(()=>null);r?.success?(toastOk(r.message),window._loadBlacklist()):toastErr(r?.error||'Error');};
+window._purgeBlacklist=async()=>{if(!await toastConfirm('PURGE entire blacklist?'))return;const r=await api.purgeBlacklist().catch(()=>null);r?.success?(toastOk(r.message),window._loadBlacklist()):toastErr(r?.error||'Error');};
 window._viewHistory=async()=>{
   const raw=v('hist-user-id'); if(!raw){toastErr('Enter an ID or username');return;}
   const uid=await resolveUser(raw); if(!uid) return;
@@ -345,7 +345,7 @@ window._viewHistory=async()=>{
   re.className='result-box ok'; re.textContent=msgs.length?msgs.map(m=>`[${m.role||'?'}]: ${String(m.content||m.parts?.[0]?.text||'').slice(0,120)}`).join('\n'):`No history for ${uid}`; re.classList.remove('hidden');
 };
 window._clearHistory=async()=>{
-  const raw=v('hist-user-id'); if(!raw){toastErr('Enter an ID or username');return;} if(!confirm('Clear history?')) return;
+  const raw=v('hist-user-id'); if(!raw){toastErr('Enter an ID or username');return;} if(!await toastConfirm('Clear history?')) return;
   const uid=await resolveUser(raw); if(!uid) return;
   const r=await api.clearHistory(uid).catch(()=>null);
   const re=el('hist-result'); if(!re) return;
@@ -512,7 +512,7 @@ window._sendAnnounce=async()=>{
   } catch(e){if(re){re.className='result-box err';re.textContent=e.message;}toastErr(e.message);}
 };
 window._dmAllOwners=async()=>{
-  const msg=v('ann-owners-msg'); if(!msg){toastErr('Enter a message');return;} if(!confirm('DM all server owners?'))return;
+  const msg=v('ann-owners-msg'); if(!msg){toastErr('Enter a message');return;} if(!await toastConfirm('DM all server owners?'))return;
   const r=await api.dmAllOwners(msg).catch(()=>null);
   const re=el('ann-owners-result'); if(!re) return;
   re.className=`result-box ${r?.success?'ok':'err'}`; re.textContent=r?.message||r?.error||'Error'; re.classList.remove('hidden');
@@ -562,7 +562,7 @@ window._saveRuntimeRaw=async()=>{
   } catch(e){toastErr('Invalid JSON: '+e.message);}
 };
 window._clearRuntimeConfig=async()=>{
-  if(!confirm('Clear all runtime config?')) return;
+  if(!await toastConfirm('Clear all runtime config?')) return;
   const r=await api.clearRuntimeConfig().catch(()=>null);
   r?.success?(toastOk('Cleared'),loadRuntimeConfig()):toastErr(r?.error||'Error');
 };
@@ -589,7 +589,7 @@ window._saveCfg=async(which)=>{
   if(r?.success) toastOk(r.message);
 };
 window._resetCfg=async(which)=>{
-  if(!confirm('Restore from backup? Current content will be overwritten.')) return;
+  if(!await toastConfirm('Restore from backup?')) return;
   const r=await (which==='modules'?api.resetModulesConfig():api.resetBaseConfig()).catch(()=>null);
   if(r?.success){toastOk(r.message);window._loadCfg(which);}
   else toastErr(r?.error||'Error');
@@ -664,7 +664,7 @@ window._dbEdit=async(id,btn)=>{
   };
 };
 window._dbDelete=async(id)=>{
-  if(!confirm(`Delete document ${id}?`)) return;
+  if(!await toastConfirm(`Delete document ${id}?`)) return;
   const r=await api.dbDeleteDoc(dbCurrentColl,id).catch(()=>null);
   r?.success?(toastOk('Deleted'),loadDocs()):toastErr(r?.error||'Error');
 };
@@ -715,7 +715,7 @@ window._fbSave=async()=>{
   r?.success?toastOk('Saved'):toastErr(r?.error||'Error');
 };
 window._fbDelete=async()=>{
-  if(!confirm(`Delete ${fbCurrentFile}?`)) return;
+  if(!await toastConfirm(`Delete ${fbCurrentFile}?`)) return;
   const r=await api.deleteFile(fbCurrentFile).catch(()=>null);
   if(r?.success){toastOk('Deleted');el('fb-editor').style.display='none';el('fb-no-file').style.display='';fbNav(fbCurrentPath);}
   else toastErr(r?.error||'Error');
@@ -725,6 +725,126 @@ window._copyInvite=async()=>{
   const r=await api.inviteLink().catch(()=>null);
   if(!r?.link){toastErr('Could not get invite link');return;}
   navigator.clipboard?.writeText(r.link).then(()=>toastOk('Invite link copied!')).catch(()=>toastInfo(`Link: ${r.link}`));
+};
+
+
+// ── Feature flags (models page selects) ─────────────────────────────────────
+// Load all flags including new media + RAG flags
+async function loadAllFeatureFlags() {
+  const ff = await api.getFeatureFlags().catch(() => null);
+  if (!ff?.success) return;
+  const flags = ff.data || {};
+  const map = {
+    'ENABLE_GEMMA':            'ff-gemma',
+    'CACHE_ENABLED':           'ff-cache',
+    'PDF_ENABLED_FOR_GEMINI':  'ff-pdf',
+    'CYCLE_GEMMA_WITH_GEMINI': 'ff-cycle',
+    'WEEKLY_SUMMARY_ENABLED':  'ff-weekly',
+    'ENABLE_RAG':              'ff-rag',
+    'ENABLE_IMAGE_PROCESSING': 'ff-image',
+    'ENABLE_VIDEO_PROCESSING': 'ff-video',
+    'ENABLE_AUDIO_PROCESSING': 'ff-audio',
+    'ENABLE_FILE_PROCESSING':  'ff-file',
+    'ENABLE_WEB_SEARCH':       'ff-websearch',
+    'ENABLE_FUNCTION_CALLING': 'ff-funcall',
+    'CROSS_CONTEXT_ENABLED':   'ff-cross',
+  };
+  for (const [flag, elId] of Object.entries(map)) {
+    const sel = el(elId);
+    if (sel) sel.value = String(flags[flag] ?? (flag === 'WEEKLY_SUMMARY_ENABLED' || flag === 'ENABLE_IMAGE_PROCESSING' || flag === 'ENABLE_WEB_SEARCH' || flag === 'ENABLE_FUNCTION_CALLING' ? true : false));
+  }
+}
+
+// ── Rate limits ───────────────────────────────────────────────────────────────
+async function loadRateLimits() {
+  const r = await api.getRateLimits().catch(() => null);
+  if (!r?.success) return;
+  const d = r.data || {};
+  if (el('rl-rpm'))     el('rl-rpm').value     = d.REQUESTS_PER_MINUTE ?? 15;
+  if (el('rl-window'))  el('rl-window').value  = d.WINDOW_DURATION_MS  ?? 60000;
+  if (el('rl-cool'))    el('rl-cool').value    = d.COOLDOWN_DURATION_MS ?? 60000;
+  if (el('rl-fd'))      el('rl-fd').value      = d.RETRY_DELAYS?.FORBIDDEN    ?? 3000;
+  if (el('rl-rl'))      el('rl-rl').value      = d.RETRY_DELAYS?.RATE_LIMIT   ?? 2500;
+  if (el('rl-se'))      el('rl-se').value      = d.RETRY_DELAYS?.SERVER_ERROR ?? 1000;
+  // Per-model overrides — show as JSON
+  if (el('rl-model-overrides')) {
+    el('rl-model-overrides').value = JSON.stringify(d.MODEL_REQUESTS_PER_MINUTE || {}, null, 2);
+  }
+}
+window._loadRateLimits = loadRateLimits;
+window._saveRateLimits = async () => {
+  try {
+    const modelOverrides = JSON.parse(el('rl-model-overrides')?.value || '{}');
+    const payload = {
+      REQUESTS_PER_MINUTE:  parseInt(el('rl-rpm')?.value  || '15'),
+      WINDOW_DURATION_MS:   parseInt(el('rl-window')?.value || '60000'),
+      COOLDOWN_DURATION_MS: parseInt(el('rl-cool')?.value  || '60000'),
+      RETRY_DELAYS: {
+        FORBIDDEN:    parseInt(el('rl-fd')?.value || '3000'),
+        RATE_LIMIT:   parseInt(el('rl-rl')?.value || '2500'),
+        SERVER_ERROR: parseInt(el('rl-se')?.value || '1000'),
+        DEFAULT:      parseInt(el('rl-se')?.value || '1000'),
+      },
+      MODEL_REQUESTS_PER_MINUTE: modelOverrides,
+    };
+    const r = await api.setRateLimits(payload).catch(() => null);
+    const re = el('rl-result'); if (!re) return;
+    re.className = `result-box ${r?.success ? 'ok' : 'err'}`;
+    re.textContent = r?.message || r?.error || 'Error';
+    re.classList.remove('hidden');
+    if (r?.success) toastOk(r.message);
+  } catch (e) { toastErr('Invalid JSON in model overrides: ' + e.message); }
+};
+
+// ── Migration UI ──────────────────────────────────────────────────────────────
+async function loadMigrateFields() {
+  const r = await api.getMigrateFields().catch(() => null);
+  if (!r?.success) return;
+  const renderCheckboxes = (fields, containerId) => {
+    const c = el(containerId); if (!c) return;
+    c.innerHTML = fields.map(f =>
+      `<label class="cb-row"><input type="checkbox" class="mig-cb" value="${f}"/> ${f}</label>`
+    ).join('');
+  };
+  renderCheckboxes(r.serverFields || [], 'mig-server-fields');
+  renderCheckboxes(r.userFields   || [], 'mig-user-fields');
+}
+window._loadMigrateFields = loadMigrateFields;
+
+function getMigChecked(containerId) {
+  return [...document.querySelectorAll(`#${containerId} .mig-cb:checked`)].map(cb => cb.value);
+}
+window._selectAllMigFields = (containerId, check) => {
+  document.querySelectorAll(`#${containerId} .mig-cb`).forEach(cb => cb.checked = check);
+};
+
+window._runMigration = async (scope) => {
+  const serverFields = getMigChecked('mig-server-fields');
+  const userFields   = getMigChecked('mig-user-fields');
+  const fields = scope === 'servers' ? serverFields : scope === 'users' ? userFields : [...new Set([...serverFields, ...userFields])];
+  const force  = el('mig-force')?.checked || false;
+
+  const label = scope === 'both' ? 'Migrate ALL (servers + users)' : `Migrate ${scope}`;
+  if (!await toastConfirm(`${label}${force ? ' — FORCE mode, will overwrite existing fields' : ''}. Continue?`)) return;
+
+  const re = el('mig-result'); if (re) { re.className = 'result-box'; re.textContent = 'Running…'; re.classList.remove('hidden'); }
+
+  const r = await api.runMigration({ scope, fields: fields.length ? fields : undefined, force }).catch(() => null);
+
+  if (!re) return;
+  re.className = `result-box ${r?.success ? 'ok' : 'err'}`;
+  re.textContent = r?.message || r?.error || 'Error';
+  if (r?.success) toastOk(`Migration complete: ${r.message}`);
+  else toastErr(r?.error || 'Migration failed');
+};
+
+// Extend loadModels to also load all new flag sections
+const _origLoadModels = window._loadModels;
+window._loadModels = async () => {
+  await _origLoadModels();
+  await loadAllFeatureFlags();
+  await loadRateLimits();
+  await loadMigrateFields();
 };
 
 initAuth();

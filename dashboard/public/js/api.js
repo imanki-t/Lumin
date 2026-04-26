@@ -102,4 +102,9 @@ export const api = {
   setMigrationConfig:  (data)          => put('/api/cmd/migration-config', data),
   getBotConfig:        ()              => get('/api/cmd/bot-config'),
   setBotConfig:        (data)          => put('/api/cmd/bot-config', data),
+  getRateLimits:       ()              => get('/api/config/rate-limits'),
+  setRateLimits:       (data)          => put('/api/config/rate-limits', data),
+  getAllConfig:        ()              => get('/api/config/all'),
+  runMigration:        (data)          => post('/api/cmd/migrate', data),
+  getMigrateFields:    ()              => get('/api/cmd/migrate/fields'),
 };
