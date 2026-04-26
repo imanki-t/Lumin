@@ -15,6 +15,8 @@ import {
   switchToNextKey,
   rotateToNextKey,
   saveStateToFile,
+  dumpKeyStats,
+  loadKeyStats,
 } from '../managers/BotManager.js';
 import { DEFAULT_SERVER_SETTINGS, DEFAULT_USER_SETTINGS } from '../managers/StateManager.js';
 import * as db from '../database.js';
@@ -46,9 +48,23 @@ try {
   }
 } catch {}
 
-function saveRuntimeConfig() {
-  try { fs.writeFileSync(RUNTIME_CONFIG_PATH, JSON.stringify(runtimeConfig, null, 2)); } catch {}
+// Restore per-key request counts + Gemma daily counts from last run
+if (runtimeConfig._keyStats) {
+  try { loadKeyStats(runtimeConfig._keyStats); } catch {}
 }
+
+function saveRuntimeConfig() {
+  try {
+    // Always snapshot current key stats before writing so they survive restarts
+    runtimeConfig._keyStats = dumpKeyStats();
+    fs.writeFileSync(RUNTIME_CONFIG_PATH, JSON.stringify(runtimeConfig, null, 2));
+  } catch {}
+}
+
+// Autosave key stats every 5 minutes so they survive hard crashes too
+setInterval(saveRuntimeConfig, 5 * 60 * 1000).unref();
+
+export { saveRuntimeConfig };
 
 const sessions    = new Map();
 const oauthStates = new Map();
