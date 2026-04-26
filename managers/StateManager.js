@@ -722,12 +722,14 @@ export function scheduleDailyReset() {
 // ============================================================================
 
 /**
- * Migrate all server settings to the latest `DEFAULT_SERVER_SETTINGS` shape.
- * Runs in parallel batches to avoid overloading the database.
+ * Migrate server settings.
  *
+ * @param {object}        [opts]
+ * @param {string[]|null} [opts.fields]  Only migrate these field keys. null = all fields.
+ * @param {boolean}       [opts.force]   true = overwrite field even if server already has it.
  * @returns {Promise<{migrated: number, failed: number}>}
  */
-async function migrateAllServerSettings() {
+async function migrateAllServerSettings({ fields = null, force = false } = {}) {
   const allServers = await db.getAllServerSettings();
   const serverIds  = Object.keys(allServers);
   if (serverIds.length === 0) return { migrated: 0, failed: 0 };
@@ -740,11 +742,30 @@ async function migrateAllServerSettings() {
 
     await Promise.all(batch.map(async guildId => {
       try {
-        const updated = {
-          ...DEFAULT_SERVER_SETTINGS,
-          ...allServers[guildId],
-          selectedModel: DEFAULT_SERVER_SETTINGS.selectedModel
-        };
+        const existing = allServers[guildId] || {};
+        let updated;
+
+        if (fields) {
+          // Specific-field mode: only touch the requested fields
+          updated = { ...existing };
+          for (const field of fields) {
+            if (field in DEFAULT_SERVER_SETTINGS) {
+              if (force || !(field in existing)) {
+                updated[field] = DEFAULT_SERVER_SETTINGS[field];
+              }
+            }
+          }
+        } else if (force) {
+          // Force-all mode: full default overwrite, then re-apply existing non-default fields
+          updated = { ...DEFAULT_SERVER_SETTINGS, ...existing };
+          // Reset selectedModel to default (original behaviour)
+          updated.selectedModel = DEFAULT_SERVER_SETTINGS.selectedModel;
+        } else {
+          // Default mode: fill in any missing fields only
+          updated = { ...DEFAULT_SERVER_SETTINGS, ...existing };
+          updated.selectedModel = DEFAULT_SERVER_SETTINGS.selectedModel;
+        }
+
         await db.saveServerSettings(guildId, updated);
         state.serverSettings[guildId] = updated;
         migrated++;
@@ -762,10 +783,14 @@ async function migrateAllServerSettings() {
 }
 
 /**
- * Migrate all user settings to the latest `DEFAULT_USER_SETTINGS` shape.
+ * Migrate user settings.
+ *
+ * @param {object}        [opts]
+ * @param {string[]|null} [opts.fields]  Only migrate these field keys. null = all fields.
+ * @param {boolean}       [opts.force]   true = overwrite field even if user already has it.
  * @returns {Promise<{migrated: number, failed: number}>}
  */
-async function migrateAllUserSettings() {
+async function migrateAllUserSettings({ fields = null, force = false } = {}) {
   const allUsers = await db.getAllUserSettings();
   const userIds  = Object.keys(allUsers);
   if (userIds.length === 0) return { migrated: 0, failed: 0 };
@@ -778,11 +803,26 @@ async function migrateAllUserSettings() {
 
     await Promise.all(batch.map(async userId => {
       try {
-        const updated = {
-          ...DEFAULT_USER_SETTINGS,
-          ...allUsers[userId],
-          selectedModel: DEFAULT_USER_SETTINGS.selectedModel
-        };
+        const existing = allUsers[userId] || {};
+        let updated;
+
+        if (fields) {
+          updated = { ...existing };
+          for (const field of fields) {
+            if (field in DEFAULT_USER_SETTINGS) {
+              if (force || !(field in existing)) {
+                updated[field] = DEFAULT_USER_SETTINGS[field];
+              }
+            }
+          }
+        } else if (force) {
+          updated = { ...DEFAULT_USER_SETTINGS, ...existing };
+          updated.selectedModel = DEFAULT_USER_SETTINGS.selectedModel;
+        } else {
+          updated = { ...DEFAULT_USER_SETTINGS, ...existing };
+          updated.selectedModel = DEFAULT_USER_SETTINGS.selectedModel;
+        }
+
         await db.saveUserSettings(userId, updated);
         state.userSettings[userId] = updated;
         migrated++;
@@ -797,6 +837,42 @@ async function migrateAllUserSettings() {
   }
 
   return { migrated, failed };
+}
+
+/**
+ * Run migrations with full control over scope, fields, and force-overwrite.
+ *
+ * @param {object}             [opts]
+ * @param {'servers'|'users'|'both'} [opts.scope]   Which settings to migrate. Default: 'both'.
+ * @param {string[]|null}      [opts.fields]         Field keys to migrate. null = all.
+ * @param {boolean}            [opts.force]          Overwrite even if the field already exists.
+ * @returns {Promise<{ servers?: object, users?: object, message: string }>}
+ */
+export async function runMigration({ scope = 'both', fields = null, force = false } = {}) {
+  const opts = { fields, force };
+  let serverRes, userRes;
+
+  if (scope === 'servers' || scope === 'both') {
+    serverRes = await migrateAllServerSettings(opts);
+    logger.info(`Migration (servers) — migrated: ${serverRes.migrated}, failed: ${serverRes.failed}`);
+  }
+
+  if (scope === 'users' || scope === 'both') {
+    userRes = await migrateAllUserSettings(opts);
+    logger.info(`Migration (users)   — migrated: ${userRes.migrated}, failed: ${userRes.failed}`);
+  }
+
+  await saveStateToFile();
+
+  const parts = [];
+  if (serverRes) parts.push(`Servers: ${serverRes.migrated} migrated, ${serverRes.failed} failed`);
+  if (userRes)   parts.push(`Users: ${userRes.migrated} migrated, ${userRes.failed} failed`);
+
+  return {
+    servers: serverRes || null,
+    users:   userRes   || null,
+    message: parts.join(' | '),
+  };
 }
 
 /**
