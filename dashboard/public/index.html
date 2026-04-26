@@ -234,6 +234,11 @@
                 <option value="true">Enabled</option><option value="false">Disabled</option>
               </select>
             </div>
+            <div class="form-g"><label class="form-l">Auto RAG (memory search)</label>
+              <select class="form-sel" id="ff-rag" onchange="window._toggleFlag('ENABLE_RAG',this.value==='true')">
+                <option value="false">Disabled (saves 3 API calls/msg)</option><option value="true">Enabled</option>
+              </select>
+            </div>
             <div class="form-g"><label class="form-l">Redis Cache</label>
               <select class="form-sel" id="ff-cache" onchange="window._toggleFlag('CACHE_ENABLED',this.value==='true')">
                 <option value="false">Disabled</option><option value="true">Enabled</option>
@@ -254,6 +259,47 @@
                 <option value="true">Enabled</option><option value="false">Disabled</option>
               </select>
             </div>
+            <div class="form-g"><label class="form-l">Web Search / Grounding</label>
+              <select class="form-sel" id="ff-websearch" onchange="window._toggleFlag('ENABLE_WEB_SEARCH',this.value==='true')">
+                <option value="true">Enabled</option><option value="false">Disabled</option>
+              </select>
+            </div>
+            <div class="form-g"><label class="form-l">Function / Tool Calling</label>
+              <select class="form-sel" id="ff-funcall" onchange="window._toggleFlag('ENABLE_FUNCTION_CALLING',this.value==='true')">
+                <option value="true">Enabled</option><option value="false">Disabled</option>
+              </select>
+            </div>
+            <div class="form-g"><label class="form-l">Cross-Context Memory</label>
+              <select class="form-sel" id="ff-cross" onchange="window._toggleFlag('CROSS_CONTEXT_ENABLED',this.value==='true')">
+                <option value="false">Disabled</option><option value="true">Enabled</option>
+              </select>
+            </div>
+          </div>
+          <!-- ── Media Toggles ─────────────────────────────────────── -->
+          <div class="panel">
+            <div class="panel-h">Media Processing</div>
+            <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Control which attachment types the bot accepts. Changes apply immediately (runtime flag).</div>
+            <div class="form-g"><label class="form-l">🖼 Images (png/jpeg)</label>
+              <select class="form-sel" id="ff-image" onchange="window._toggleFlag('ENABLE_IMAGE_PROCESSING',this.value==='true')">
+                <option value="true">Enabled</option><option value="false">Disabled</option>
+              </select>
+            </div>
+            <div class="form-g"><label class="form-l">🎥 Video (mp4/mov)</label>
+              <select class="form-sel" id="ff-video" onchange="window._toggleFlag('ENABLE_VIDEO_PROCESSING',this.value==='true')">
+                <option value="false">Disabled</option><option value="true">Enabled</option>
+              </select>
+            </div>
+            <div class="form-g"><label class="form-l">🎵 Audio (mp3/wav)</label>
+              <select class="form-sel" id="ff-audio" onchange="window._toggleFlag('ENABLE_AUDIO_PROCESSING',this.value==='true')">
+                <option value="false">Disabled</option><option value="true">Enabled</option>
+              </select>
+            </div>
+            <div class="form-g"><label class="form-l">📁 Generic Files</label>
+              <select class="form-sel" id="ff-file" onchange="window._toggleFlag('ENABLE_FILE_PROCESSING',this.value==='true')">
+                <option value="false">Disabled</option><option value="true">Enabled</option>
+              </select>
+            </div>
+            <div style="font-size:10px;color:var(--text3);margin-top:6px">PDF is controlled separately above under "PDF for Gemini".</div>
           </div>
         </div>
         <div class="cfg-row" style="margin-bottom:14px">
@@ -321,6 +367,77 @@
         <div class="panel">
           <div class="panel-h">API Keys Detail <button class="btn btn-accent btn-sm" onclick="CMD.switchApiKey()">Rotate to Next</button></div>
           <div id="keys-detail"><div class="loading">Loading…</div></div>
+        </div>
+
+        <!-- ── Rate Limits ────────────────────────────────────────────────── -->
+        <div class="panel" style="margin-top:14px">
+          <div class="panel-h">Rate Limits — per key per model <span style="font-size:10px;font-weight:400;color:var(--warn)">⚠ Restart to apply</span></div>
+          <div class="cfg-grid">
+            <div class="form-g"><label class="form-l">Default RPM</label>
+              <input class="form-inp" type="number" id="rl-rpm" min="1" max="2000" placeholder="15"/>
+            </div>
+            <div class="form-g"><label class="form-l">Window Duration (ms)</label>
+              <input class="form-inp" type="number" id="rl-window" min="5000" max="300000" placeholder="60000"/>
+            </div>
+            <div class="form-g"><label class="form-l">Cooldown After 429 (ms)</label>
+              <input class="form-inp" type="number" id="rl-cool" min="1000" max="300000" placeholder="60000"/>
+            </div>
+            <div class="form-g"><label class="form-l">Retry Delay: Forbidden (ms)</label>
+              <input class="form-inp" type="number" id="rl-fd" min="100" max="30000" placeholder="3000"/>
+            </div>
+            <div class="form-g"><label class="form-l">Retry Delay: Rate Limit (ms)</label>
+              <input class="form-inp" type="number" id="rl-rl" min="100" max="30000" placeholder="2500"/>
+            </div>
+            <div class="form-g"><label class="form-l">Retry Delay: Server Error (ms)</label>
+              <input class="form-inp" type="number" id="rl-se" min="100" max="30000" placeholder="1000"/>
+            </div>
+          </div>
+          <div class="form-g" style="margin-top:8px">
+            <label class="form-l">Per-Model RPM Overrides <span style="font-size:10px;color:var(--text3)">(JSON — null = Infinity)</span></label>
+            <textarea class="cfg-ed" id="rl-model-overrides" rows="4" spellcheck="false" placeholder='{"gemini-3.1-flash-lite-preview": null}'></textarea>
+          </div>
+          <button class="btn btn-accent" style="margin-top:8px;width:100%" onclick="window._saveRateLimits()">Save Rate Limits</button>
+          <div id="rl-result" class="result-box hidden"></div>
+        </div>
+
+        <!-- ── Migration ─────────────────────────────────────────────────── -->
+        <div class="panel" style="margin-top:14px">
+          <div class="panel-h">Migration <span style="font-size:10px;font-weight:400;color:var(--text3)">— push default settings to all users/servers</span></div>
+          <div class="mig-layout">
+            <div class="mig-col">
+              <div class="mig-col-h">
+                Server Fields
+                <div class="mig-sel-btns">
+                  <button class="btn btn-ghost btn-sm" onclick="window._selectAllMigFields('mig-server-fields',true)">All</button>
+                  <button class="btn btn-ghost btn-sm" onclick="window._selectAllMigFields('mig-server-fields',false)">None</button>
+                </div>
+              </div>
+              <div id="mig-server-fields" class="mig-fields"><div class="loading">Loading…</div></div>
+            </div>
+            <div class="mig-col">
+              <div class="mig-col-h">
+                User Fields
+                <div class="mig-sel-btns">
+                  <button class="btn btn-ghost btn-sm" onclick="window._selectAllMigFields('mig-user-fields',true)">All</button>
+                  <button class="btn btn-ghost btn-sm" onclick="window._selectAllMigFields('mig-user-fields',false)">None</button>
+                </div>
+              </div>
+              <div id="mig-user-fields" class="mig-fields"><div class="loading">Loading…</div></div>
+            </div>
+          </div>
+          <div class="mig-opts">
+            <label class="cb-row force-row">
+              <input type="checkbox" id="mig-force"/>
+              <span>Force overwrite <span style="color:var(--text3);font-size:10px">(even if user/server already has this field set)</span></span>
+            </label>
+          </div>
+          <div class="mig-btns">
+            <button class="btn btn-ghost" onclick="window._runMigration('servers')">↑ Servers only</button>
+            <button class="btn btn-ghost" onclick="window._runMigration('users')">↑ Users only</button>
+            <button class="btn btn-accent" onclick="window._runMigration('both')">↑ Both (servers + users)</button>
+          </div>
+          <div id="mig-result" class="result-box hidden"></div>
+          <div style="font-size:10px;color:var(--text3);margin-top:8px">Leave all fields unchecked to migrate ALL fields. Check specific fields to migrate only those.</div>
         </div>
       </section>
 
