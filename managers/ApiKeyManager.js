@@ -785,6 +785,50 @@ export function getCurrentClient() {
  */
 
 /** Returns the total number of loaded API keys. */
+/**
+ * Serialize per-key request stats + Gemma daily counts to a plain object
+ * so they can be persisted in runtime-config.json across restarts.
+ */
+export function dumpKeyStats() {
+  const usage = {};
+  keyUsageStats.forEach((v, k) => { usage[k] = { ...v }; });
+
+  const gemma = {};
+  gemmaKeyDailyCounts.forEach((v, k) => { gemma[k] = v; });
+
+  return { usage, gemma, savedAt: Date.now() };
+}
+
+/**
+ * Restore per-key stats from a previously dumped snapshot.
+ * Called once on startup, before any requests are processed.
+ *
+ * @param {ReturnType<dumpKeyStats>} snapshot
+ */
+export function loadKeyStats(snapshot) {
+  if (!snapshot) return;
+  const { usage = {}, gemma = {} } = snapshot;
+
+  for (const [k, v] of Object.entries(usage)) {
+    const idx = Number(k);
+    if (keyUsageStats.has(idx)) {
+      keyUsageStats.set(idx, {
+        requests:           v.requests           || 0,
+        lastUsed:           v.lastUsed           || null,
+        errors:             v.errors             || 0,
+        successfulRequests: v.successfulRequests || 0,
+      });
+    }
+  }
+
+  for (const [k, v] of Object.entries(gemma)) {
+    const idx = Number(k);
+    if (gemmaKeyDailyCounts.has(idx)) {
+      gemmaKeyDailyCounts.set(idx, v || 0);
+    }
+  }
+}
+
 export function getApiKeyCount() {
   return apiKeys.length;
 }
