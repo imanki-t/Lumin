@@ -798,16 +798,35 @@ window._saveRateLimits = async () => {
 
 // ── Migration UI ──────────────────────────────────────────────────────────────
 async function loadMigrateFields() {
-  const r = await api.getMigrateFields().catch(() => null);
-  if (!r?.success) return;
+  const FALLBACK_SERVER = [
+    'selectedModel','responseFormat','showActionButtons','continuousReply',
+    'customPersonality','embedColor','overrideUserSettings','serverChatHistory',
+    'allowedChannels','gemmaEnabled',
+  ];
+  const FALLBACK_USER = [
+    'selectedModel','responseFormat','showActionButtons','continuousReply',
+    'customPersonality','embedColor','gemmaEnabled','crossContextEnabled',
+  ];
+
+  let serverFields = FALLBACK_SERVER;
+  let userFields   = FALLBACK_USER;
+
+  try {
+    const r = await api.getMigrateFields();
+    if (r?.success) {
+      serverFields = r.serverFields || FALLBACK_SERVER;
+      userFields   = r.userFields   || FALLBACK_USER;
+    }
+  } catch {}
+
   const renderCheckboxes = (fields, containerId) => {
     const c = el(containerId); if (!c) return;
     c.innerHTML = fields.map(f =>
       `<label class="cb-row"><input type="checkbox" class="mig-cb" value="${f}"/> ${f}</label>`
     ).join('');
   };
-  renderCheckboxes(r.serverFields || [], 'mig-server-fields');
-  renderCheckboxes(r.userFields   || [], 'mig-user-fields');
+  renderCheckboxes(serverFields, 'mig-server-fields');
+  renderCheckboxes(userFields,   'mig-user-fields');
 }
 window._loadMigrateFields = loadMigrateFields;
 
