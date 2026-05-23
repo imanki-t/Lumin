@@ -27,13 +27,14 @@ export const ENABLE_RAG = false;
 
 // ── MODELS ───────────────────────────────────────────────────────────────────
 
-export const DEFAULT_MODEL = 'gemini-3.1-flash-lite-preview';
+export const DEFAULT_MODEL = 'gemini-3.1-flash-lite';
 
 export const MODELS = {
   // ── Gemini 3 series ────────────────────────────────────────────────────────
   'gemini-3.1-pro':        'gemini-3.1-pro-preview',      // most capable, agentic
-  'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview', // fastest / cheapest Gemini 3
+  'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite', // fastest / cheapest Gemini 3
   'gemini-3-flash':        'gemini-3-flash-preview',      // frontier-class, fraction of cost
+  'gemini-3.5-flash':        'gemini-3.5-flash',
 
   // ── Gemini 2.5 series ──────────────────────────────────────────────────────
   'gemini-2.5-pro':        'gemini-2.5-pro',              // best reasoning + coding
