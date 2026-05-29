@@ -123,18 +123,19 @@ async function handleManageMemory(userId, action, info) {
  * to give consistent answers about inter-member relationships and server context.
  *
  * @param {string|null} guildId
- * @param {string}      action  - 'add' | 'remove'
+ * @param {string}      action   - 'add' | 'remove'
  * @param {string}      info
+ * @param {string}      [category='general']
  * @returns {Promise<{ result: string }>}
  */
-async function handleManageServerFact(guildId, action, info) {
+async function handleManageServerFact(guildId, action, info, category = 'general') {
   if (!guildId) {
     return { result: 'Server facts are only available in guild (server) channels, not DMs.' };
   }
   try {
     if (action === MEMORY_ACTIONS.ADD) {
-      await db.saveServerFact(guildId, info);
-      return { result: `Server fact saved: ${info}` };
+      await db.saveServerFact(guildId, info, category);
+      return { result: `Server fact saved [${category}]: ${info}` };
     }
     const deleted = await db.deleteServerFact(guildId, info);
     return { result: deleted > 0 ? `Server fact removed (${deleted} entries)` : 'No matching server fact found.' };
@@ -145,8 +146,10 @@ async function handleManageServerFact(guildId, action, info) {
 }
 
 /**
- * Handle `search_memory` — vector-search past conversations.
- * C-3 fix: accept historyId from caller so the correct memory bucket is searched.
+ * Handle `search_memory` — vector-search past conversations + stored facts.
+ * Also searches server facts for the current guild AND cross-server facts if the
+ * user is a member of other guilds the bot is in.
+ *
  * @param {string}      userId
  * @param {string|null} guildId
  * @param {string}      historyId
@@ -154,9 +157,46 @@ async function handleManageServerFact(guildId, action, info) {
  * @returns {Promise<{ result: string }>}
  */
 async function handleSearchMemory(userId, guildId, historyId, query) {
+  // ── 1. Core RAG + user facts search ─────────────────────────────────────
   const memories = await memorySystem.searchMemory(userId, guildId, historyId, query);
+
+  // ── 2. Current guild server facts (keyword match) ────────────────────────
+  const serverFactResults = [];
+  if (guildId) {
+    try {
+      const serverFacts = await db.getServerFacts(guildId);
+      const queryLower  = query.toLowerCase();
+      const queryWords  = queryLower.split(/\s+/).filter(w => w.length > 2);
+      const matched = serverFacts.filter(f =>
+        queryWords.some(w => f.toLowerCase().includes(w))
+      );
+      matched.forEach(f => serverFactResults.push(`[Server Fact] ${f}`));
+    } catch { /* non-fatal */ }
+  }
+
+  // ── 3. Cross-guild server facts (other servers this user is in) ──────────
+  // Works when guild members are cached (standard for active guilds).
+  const crossGuildResults = [];
+  try {
+    const otherGuildIds = client.guilds.cache
+      .filter(g => g.members.cache.has(userId) && g.id !== guildId)
+      .map(g => g.id);
+
+    if (otherGuildIds.length > 0) {
+      const crossFacts = await db.getServerFactsMultiGuild(otherGuildIds);
+      const queryLower  = query.toLowerCase();
+      const queryWords  = queryLower.split(/\s+/).filter(w => w.length > 2);
+      const matched = crossFacts.filter(f =>
+        queryWords.some(w => f.toLowerCase().includes(w))
+      );
+      matched.forEach(f => crossGuildResults.push(`[Cross-Server Fact] ${f}`));
+    }
+  } catch { /* non-fatal — cross-guild is best-effort */ }
+
+  // ── 4. Merge all results ─────────────────────────────────────────────────
+  const all = [...memories, ...serverFactResults, ...crossGuildResults];
   return {
-    result: memories.length > 0 ? memories.join('\n') : MSG.NO_MEMORIES_FOUND
+    result: all.length > 0 ? all.join('\n') : MSG.NO_MEMORIES_FOUND
   };
 }
 
@@ -373,7 +413,7 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId) {
             break;
 
           case FUNCTION_NAMES.MANAGE_SERVER_FACT:
-            response = await handleManageServerFact(guildId, args.action, args.info);
+            response = await handleManageServerFact(guildId, args.action, args.info, args.category);
             break;
 
           case FUNCTION_NAMES.SEARCH_MEMORY:

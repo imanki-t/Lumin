@@ -69,17 +69,20 @@ export const functionTools = [
         name:        FUNCTION_NAMES.MANAGE_SERVER_FACT,
         description: [
           'Add or remove a SHARED fact for this entire Discord server — visible to ALL members.',
-          'Use this when you learn something that is true at the server level, not just about one person.',
+          'Call this AUTOMATICALLY whenever you learn something involving multiple people or the server community.',
+          'ALWAYS provide a category for new facts so they can be grouped and retrieved correctly.',
           '',
-          'STORE as a server fact when:',
-          '  • Relationships between members ("UserA and UserB are dating/best friends/rivals")',
-          '  • Server-wide nicknames ("Everyone calls Shreyash \'Shrey\'")',
-          '  • Group activities ("They play Minecraft together every Friday")',
-          '  • Informal server roles ("Anshul is the server owner / the designated memer")',
-          '  • Events that happened in/to the server community',
+          'Categories:',
+          '  relationship — bonds between members (romantic, friendship, rivalry, family)',
+          '  nickname     — server nicknames / aliases members go by',
+          '  role         — who owns, admins, or runs things in the server',
+          '  activity     — shared games, hobbies, recurring hangouts',
+          '  event        — things that happened in/to the server community',
+          '  personal     — facts about one member that the whole server should know',
           '',
-          'Keep using manage_personal_memory for facts that belong to ONE user only.',
-          'ONLY callable when the conversation is happening in a guild (not DMs).',
+          'Include Discord user IDs in parentheses where known so facts survive username changes.',
+          'Keep using manage_personal_memory for facts about ONE user only.',
+          'ONLY callable when the conversation is in a guild channel (not DMs).',
         ].join('\n'),
         parameters: {
           type: PARAMETER_TYPES.OBJECT,
@@ -91,7 +94,12 @@ export const functionTools = [
             },
             info: {
               type:        PARAMETER_TYPES.STRING,
-              description: 'The server-level fact to store or the keyword to match for deletion'
+              description: 'The fact to store (include Discord user IDs where known) or keyword to delete'
+            },
+            category: {
+              type:        PARAMETER_TYPES.STRING,
+              enum:        ['relationship', 'nickname', 'role', 'activity', 'event', 'personal'],
+              description: 'Category classifying this fact. Required for add; ignored for remove.'
             }
           },
           required: ['action', 'info']
@@ -99,7 +107,16 @@ export const functionTools = [
       },
       {
         name:        FUNCTION_NAMES.SEARCH_MEMORY,
-        description: 'Search the database for specific past conversations or facts. ONLY call this when: (1) you genuinely lack the knowledge to answer and cannot infer it from current context, (2) user asks explicitly about a past conversation ("do you remember...", "what did I say about..."), or (3) user asks direct personal questions about themselves. Do NOT call for general chat, questions answerable from current context, or casual conversation.',
+        description: [
+          'Search past conversations AND all stored facts (user facts, server facts, cross-server facts).',
+          'Call this when:',
+          '  (1) You genuinely lack the knowledge to answer (e.g. "who is X\'s boyfriend?", "what happened with Y?")',
+          '  (2) User asks explicitly about a past conversation ("do you remember...", "what did I say about...")',
+          '  (3) User asks direct personal questions about themselves or about you',
+          '  (4) You are in a DM and the user asks about relationships, nicknames, or server events',
+          '      — server facts from other servers are searched automatically',
+          'Do NOT call for general chat or questions you can already answer from current context.',
+        ].join('\n'),
         parameters: {
           type: PARAMETER_TYPES.OBJECT,
           properties: {
