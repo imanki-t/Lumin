@@ -158,6 +158,25 @@ export class Mutex {
 export const chatHistoryLock = new Mutex();
 
 /**
+ * M-10 fix: per-historyId locks so User A's history save doesn't block User B's.
+ * The global chatHistoryLock is kept for legacy callers but new code should use
+ * getHistoryLock(historyId) for better parallelism.
+ *
+ * @type {Map<string, Mutex>}
+ */
+const historyLocks = new Map();
+
+/**
+ * Get (or lazily create) the Mutex for a specific historyId.
+ * @param {string} historyId
+ * @returns {Mutex}
+ */
+export function getHistoryLock(historyId) {
+  if (!historyLocks.has(historyId)) historyLocks.set(historyId, new Mutex());
+  return historyLocks.get(historyId);
+}
+
+/**
  * Per-user request queues — prevents two requests from the same user being
  * processed concurrently.
  *

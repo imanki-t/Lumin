@@ -198,6 +198,23 @@ export const state = new BotState();
 
 let isSaving    = false;
 let savePending = false;
+/** M-4 fix: time-based debounce — coalesces burst saves into one disk write. */
+let _saveDebounceTimer = null;
+
+/**
+ * Request a state save, coalescing burst calls into a single write.
+ * Callers that previously awaited saveStateToFile() for correctness can still
+ * call this, but routine "settings changed" triggers should prefer the debounced
+ * version which queues a save 500ms later.
+ * @returns {void}
+ */
+export function requestStateSave() {
+  if (_saveDebounceTimer) return; // already queued
+  _saveDebounceTimer = setTimeout(() => {
+    _saveDebounceTimer = null;
+    saveStateToFile().catch(err => logger.error('Debounced save failed', err));
+  }, 500);
+}
 
 /**
  * Persist all bot state to the database.
@@ -364,8 +381,10 @@ export async function loadStateFromDB(tempDir) {
   try {
     await fs.mkdir(tempDir, { recursive: true });
 
+    // L-9 fix: DON'T load all chat histories at startup.
+    // They are loaded lazily on first message (see getHistory / updateChatHistory).
+    // This makes startup O(servers) instead of O(all-time users).
     const [
-      chatHistories,
       userSettings,
       serverSettings,
       customInstructions,
@@ -385,7 +404,6 @@ export async function loadStateFromDB(tempDir) {
       realive,
       summaryUsage
     ] = await Promise.all([
-      db.getAllChatHistories(),
       db.getAllUserSettings(),
       db.getAllServerSettings(),
       db.getAllCustomInstructions(),
@@ -406,9 +424,8 @@ export async function loadStateFromDB(tempDir) {
       db.getAllSummaryUsages()
     ]);
 
-    // Assign to state — setters for imageUsage and summaryUsage also sync
-    // the QueueManager stores via the setter hooks.
-    state.chatHistories          = chatHistories          ?? {};
+    // L-9: start with empty in-memory histories; lazy-loaded on first access
+    state.chatHistories          = {};
     state.userSettings           = userSettings           ?? {};
     state.serverSettings         = serverSettings         ?? {};
     state.customInstructions     = customInstructions     ?? {};
@@ -458,7 +475,58 @@ export async function loadStateFromDB(tempDir) {
  * @param {string|null} [guildId] - Optional guild ID for server-wide history merging.
  * @returns {Array<{role:string, parts:Array<{text:string}>}>}
  */
-export function getHistory(id, guildId = null) {
+/**
+ * L-9 fix: set of history IDs currently being lazily loaded.
+ * Prevents duplicate concurrent DB fetches for the same ID.
+ * @type {Set<string>}
+ */
+const _lazyLoadingInProgress = new Set();
+
+/**
+ * Lazy-load a history from DB into state.chatHistories if not already present.
+ * L-13 fix: histories not updated in the last 90 days are treated as expired.
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+async function _ensureHistoryLoaded(id) {
+  if (state.chatHistories[id] !== undefined) return; // already in RAM
+  if (_lazyLoadingInProgress.has(id)) return;        // concurrent load in progress
+
+  _lazyLoadingInProgress.add(id);
+  try {
+    const HISTORY_TTL_MS = 90 * 24 * 60 * 60 * 1_000; // 90 days
+    const raw = await db.getChatHistory(id);
+
+    if (!raw) {
+      state.chatHistories[id] = {};
+      return;
+    }
+
+    // L-13 fix: evict stale histories to keep RAM bounded
+    const entries = Object.values(raw).flat().filter(Boolean);
+    const lastTs  = entries.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
+    if (lastTs > 0 && Date.now() - lastTs > HISTORY_TTL_MS) {
+      logger.debug(`Skipping stale history for ${id} (last activity ${Math.round((Date.now() - lastTs) / 86_400_000)}d ago)`);
+      state.chatHistories[id] = {};
+      return;
+    }
+
+    state.chatHistories[id] = raw;
+  } catch (err) {
+    logger.warn(`Lazy history load failed for ${id}`, err);
+    state.chatHistories[id] = {};
+  } finally {
+    _lazyLoadingInProgress.delete(id);
+  }
+}
+
+export async function getHistory(id, guildId = null) {
+  // L-9: lazy-load both historyIds from DB if not yet in RAM
+  await Promise.all([
+    _ensureHistoryLoaded(id),
+    guildId ? _ensureHistoryLoaded(guildId) : Promise.resolve()
+  ]);
+
   const historyObject = state.chatHistories[id] || {};
   let combined = [];
 
@@ -549,7 +617,10 @@ export function getHistory(id, guildId = null) {
  * @param {string|null} [username]   - Discord username.
  * @param {string|null} [displayName] - Discord display name.
  */
-export function updateChatHistory(id, newHistory, messagesId, username = null, displayName = null) {
+export async function updateChatHistory(id, newHistory, messagesId, username = null, displayName = null) {
+  // L-9: ensure this history is loaded from DB before we write to it
+  await _ensureHistoryLoaded(id);
+
   if (!state.chatHistories[id]) {
     state.chatHistories[id] = {};
   }

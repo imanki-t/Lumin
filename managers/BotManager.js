@@ -44,6 +44,7 @@ import {
 
 import {
   chatHistoryLock,
+  getHistoryLock,
   requestQueues,
   checkImageRateLimit,
   incrementImageUsage,
@@ -57,6 +58,7 @@ import {
 import {
   state,
   saveStateToFile,
+  requestStateSave,
   loadStateFromDB,
   getHistory,
   updateChatHistory,
@@ -381,6 +383,7 @@ export {
 
   // QueueManager
   chatHistoryLock,
+  getHistoryLock,
   requestQueues,
   checkImageRateLimit,
   incrementImageUsage,
@@ -391,6 +394,7 @@ export {
   // StateManager
   state,
   saveStateToFile,
+  requestStateSave,
   getHistory,
   updateChatHistory,
   getUserResponsePreference,
