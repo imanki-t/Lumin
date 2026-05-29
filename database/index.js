@@ -108,6 +108,8 @@ export {
   deleteUserFact,
   saveServerFact,
   getServerFacts,
+  getServerFactsCategorized,
+  getServerFactsMultiGuild,
   deleteServerFact,
   saveIndexedCount,
   getIndexedCounts
