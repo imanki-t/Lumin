@@ -202,6 +202,21 @@ client.once('clientReady', async () => {
   } catch (error) {
     logger.error('Failed to schedule weekly summary job', error);
   }
+
+  // ── Periodic GC nudge ─────────────────────────────────────────────────
+  // --expose-gc is already in package.json. Fires every 30 min but only
+  // calls gc() when heap is actually above 80%, so it's a no-op most of
+  // the time and only kicks in when we need it.
+  if (typeof global.gc === 'function') {
+    setInterval(() => {
+      const { heapUsed, heapTotal } = process.memoryUsage();
+      if (heapUsed / heapTotal > 0.80) {
+        global.gc();
+        logger.debug(`GC nudge fired — heap was ${Math.round(heapUsed / 1_048_576)}MB / ${Math.round(heapTotal / 1_048_576)}MB`);
+      }
+    }, 30 * 60 * 1_000);
+    logger.info('GC nudge scheduler active (fires when heap > 80%)');
+  }
 });
 
 /** Fires when the bot joins a new server. */
@@ -229,6 +244,9 @@ client.on('messageCreate', async (message) => {
     if (message.author.bot)                          return;
     if (message.content.startsWith('!'))             return;
     if (IGNORED_MESSAGE_TYPES.has(message.type))     return;
+
+    // ── Global lockdown: silently drop all chat messages ─────────────────
+    if (isGlobalLockdown()) return;
 
     const isDM       = message.channel.type === ChannelType.DM;
     const guildId    = message.guild?.id;
