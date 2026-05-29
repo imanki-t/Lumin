@@ -21,7 +21,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import { Client, GatewayIntentBits, Partials } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, Options } from 'discord.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -107,7 +107,57 @@ export const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages
   ],
-  partials: [Partials.Channel]
+  partials: [Partials.Channel],
+
+  // ── Heap reduction: limit discord.js internal caches ──────────────────────
+  // By default discord.js caches 200 messages/channel, all guild members,
+  // all presences, all reactions, etc.  In servers with thousands of members
+  // this becomes the #1 source of heap growth.
+  //
+  // Safe to customise: MessageManager, GuildMemberManager, UserManager,
+  //                    PresenceManager, ReactionManager, StageInstanceManager,
+  //                    ThreadManager.
+  // NOT safe to customise: GuildManager, ChannelManager, GuildChannelManager,
+  //                         RoleManager, PermissionOverwriteManager
+  //                         (discord.js will break if these are limited).
+  makeCache: Options.cacheWithLimits({
+    ...Options.DefaultMakeCacheSettings,
+
+    // Messages — default 200/channel; 50 is plenty for a chat bot
+    MessageManager: 50,
+
+    // Members — default: all; cap per-guild to avoid OOM in large servers.
+    // keepOverLimit ensures the bot's own member entry is never evicted.
+    GuildMemberManager: {
+      maxSize: 100,
+      keepOverLimit: member => member.id === member.client.user?.id
+    },
+
+    // Presences are never used by Lumin — zero them out entirely
+    PresenceManager: 0,
+
+    // Reactions not used — zero out
+    ReactionManager: 0,
+
+    // Stage instances not used — zero out
+    StageInstanceManager: 0,
+  }),
+
+  // ── Sweepers: periodically evict stale cached objects ─────────────────────
+  sweepers: {
+    messages: {
+      interval: 3600,    // run sweep every hour (seconds)
+      lifetime: 1800     // evict messages older than 30 min
+    },
+    users: {
+      interval: 3600,
+      filter: () => user => !user.bot
+    },
+    guildMembers: {
+      interval: 3600,
+      filter: () => member => member.id !== member.client.user?.id
+    }
+  }
 });
 
 // ============================================================================
