@@ -153,7 +153,8 @@ export const MAX_QUEUE_DEPTH_PER_USER       = 5;     // messages beyond this are
 export const PDF_ENABLED_FOR_GEMINI         = false; // disabled to save RAM and quota
 export const CACHE_ENABLED                  = false; // Redis L3 cache; in-memory L1/L2 always on
 export const WEEKLY_SUMMARY_ENABLED         = true;  // set false to skip weekly context summary job entirely
-export const CROSS_CONTEXT_ENABLED          = false; // set true to allow RAG to pull context across all servers + DMs (future)
+// NOTE: cross-context is a per-user setting only (state.userSettings[userId].crossContextEnabled).
+// There is no global override flag — removed to prevent confusion.
 
 // ── MEDIA PROCESSING ─────────────────────────────────────────────────────────
 // Individual toggles — set false to reject that media type before it hits the AI.
@@ -199,8 +200,8 @@ export const POLL_CONFIG = Object.freeze({
 // ── DATABASE ─────────────────────────────────────────────────────────────────
 
 export const DB_CONNECTION_CONFIG = Object.freeze({
-  MAX_POOL_SIZE:               3,  // keep low on Render free tier
-  MIN_POOL_SIZE:               1,
+  MAX_POOL_SIZE:               10,  // raised from 3 — allows parallel Track1+2+3 + background indexing
+  MIN_POOL_SIZE:               2,   // keep 2 alive to avoid cold-start latency
   SERVER_SELECTION_TIMEOUT_MS: 5_000,
   SOCKET_TIMEOUT_MS:           30_000,
   MAX_IDLE_TIME_MS:            60_000,
@@ -227,8 +228,9 @@ export const DB_VECTOR_SEARCH_CONFIG = Object.freeze({
 export const MEMORY_RECENT_WINDOW   = 10;    // messages kept in live context, not indexed
 export const MEMORY_MAX_RAG_RESULTS = 3;     // max vector hits injected per prompt
 export const MEMORY_SCORE_THRESHOLD = 0.72;  // min similarity to include a RAG result
-export const MEMORY_TIME_GAP_MS     = 30_000; // gap that inserts a TIME ELAPSED marker
-export const MEMORY_MAX_INLINE_CTX  = 1500;  // drop context blocks larger than this (chars)
+export const MEMORY_TIME_GAP_MS     = 30_000;  // gap that inserts a TIME ELAPSED marker (display only)
+export const MEMORY_RAG_CUTOFF_MS   = 300_000; // 5 min — RAG dedup: exclude memories more recent than this
+export const MEMORY_MAX_INLINE_CTX  = 6_000; // raised from 1500 — truncate gracefully instead of dropping
 
 // ── MEMORY CACHE ─────────────────────────────────────────────────────────────
 
@@ -249,7 +251,7 @@ export const MEMORY_PERSONAL_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export const CLUSTER_MAX                  = 20;
 export const CLUSTER_NUM_BASELINE         = 5;
-export const CLUSTER_MIN_MEMORIES         = 150;  // minimum entries before clustering starts
+export const CLUSTER_MIN_MEMORIES         = 30;   // was 150 — clustering now activates much earlier
 export const CLUSTER_TOP_TO_SEARCH        = 2;
 export const CLUSTER_MIN_SIMILARITY       = 0.45;
 export const CLUSTER_REINDEX_INTERVAL     = 150;
@@ -327,13 +329,13 @@ export default {
   getGenerationConfig, generationConfig,
   safetySettings,
   RAM_MEDIA_SUSPEND_THRESHOLD_MB, KEY_SWITCH_HOLD_MS, MAX_QUEUE_DEPTH_PER_USER,
-  PDF_ENABLED_FOR_GEMINI, CACHE_ENABLED, WEEKLY_SUMMARY_ENABLED, CROSS_CONTEXT_ENABLED,
+  PDF_ENABLED_FOR_GEMINI, CACHE_ENABLED, WEEKLY_SUMMARY_ENABLED,
   ENABLE_IMAGE_PROCESSING, ENABLE_VIDEO_PROCESSING, ENABLE_AUDIO_PROCESSING,
   ENABLE_FILE_PROCESSING, ENABLE_WEB_SEARCH, ENABLE_FUNCTION_CALLING,
   STATE_CONFIG, RESOURCE_CONFIG, MIGRATION_CONFIG, POLL_CONFIG,
   DB_CONNECTION_CONFIG, DB_RETRY_CONFIG, DB_VECTOR_SEARCH_CONFIG,
   MEMORY_RECENT_WINDOW, MEMORY_MAX_RAG_RESULTS, MEMORY_SCORE_THRESHOLD,
-  MEMORY_TIME_GAP_MS, MEMORY_MAX_INLINE_CTX,
+  MEMORY_TIME_GAP_MS, MEMORY_RAG_CUTOFF_MS, MEMORY_MAX_INLINE_CTX,
   MEMORY_CACHE_TTL_MS, MEMORY_CACHE_MAX_SIZE, MEMORY_CACHE_MIN_QUERY_LEN, MEMORY_CACHE_SEMANTIC_SIM,
   MEMORY_CHUNK_SIZE, MEMORY_CHUNK_OVERLAP, MEMORY_INDEX_BATCH_SIZE, MEMORY_PERSONAL_CACHE_TTL_MS,
   CLUSTER_MAX, CLUSTER_NUM_BASELINE, CLUSTER_MIN_MEMORIES, CLUSTER_TOP_TO_SEARCH,
