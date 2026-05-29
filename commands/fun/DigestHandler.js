@@ -22,7 +22,7 @@ import { Logger }                                   from '../../core/Logger.js';
 
 const logger = Logger.get('DigestHandler');
 
-const FUN_MODEL = MODELS['gemini-2.5-flash'];
+const FUN_MODEL = MODELS['gemini-3.5-flash'];
 const FALLBACK_MODEL = DEFAULT_MODEL;
 
 const COOLDOWN_DAYS          = 7;
