@@ -11,14 +11,15 @@
 // ============================================================================
 
 export const FUNCTION_NAMES = Object.freeze({
-  MANAGE_MEMORY:      'manage_personal_memory',
-  MANAGE_SERVER_FACT: 'manage_server_fact',
-  SEARCH_MEMORY:      'search_memory',
-  SET_REMINDER:       'set_reminder',
-  SET_BIRTHDAY:       'set_birthday',
-  SET_TIMEZONE:       'set_timezone',
-  CHECK_TIME:         'check_time_elapsed',
-  GET_TIMESTAMP:      'get_message_timestamp'
+  MANAGE_MEMORY:        'manage_personal_memory',
+  MANAGE_SERVER_FACT:   'manage_server_fact',
+  SEARCH_MEMORY:        'search_memory',
+  SET_REMINDER:         'set_reminder',
+  SET_BIRTHDAY:         'set_birthday',
+  SET_TIMEZONE:         'set_timezone',
+  CHECK_TIME:           'check_time_elapsed',
+  GET_TIMESTAMP:        'get_message_timestamp',
+  GET_CURRENT_DATETIME: 'get_current_datetime'
 });
 
 export const MEMORY_ACTIONS = Object.freeze({
@@ -185,6 +186,22 @@ export const functionTools = [
             }
           },
           required: ['query']
+        }
+      },
+      {
+        name: FUNCTION_NAMES.GET_CURRENT_DATETIME,
+        description: [
+          'Get the current LIVE date and time, adjusted for the user\'s saved timezone.',
+          'ALWAYS call this tool when the user asks anything about the current time or date',
+          '(e.g. "what time is it?", "what\'s today\'s date?", "what day is it?",',
+          '"is it morning/night?", "what\'s the time in my timezone?").',
+          'Do NOT guess or rely on your own training data — call this every single time',
+          'so the answer is always fresh and accurate.',
+        ].join(' '),
+        parameters: {
+          type:       PARAMETER_TYPES.OBJECT,
+          properties: {}
+          // No parameters needed — timezone is resolved server-side from the user's stored setting
         }
       }
     ]

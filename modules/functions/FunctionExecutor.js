@@ -285,6 +285,63 @@ async function handleGetMessageTimestamp(userId, guildId, historyId, query) {
   }
 }
 
+/**
+ * Handle `get_current_datetime` — return the live current date and time.
+ *
+ * Critically, `new Date()` is called at invocation time, NOT at bot startup,
+ * so the result is always fresh regardless of how long the bot has been running.
+ * The user's stored IANA timezone (if any) is applied so the response reflects
+ * their local time instead of the server's system clock.
+ *
+ * @param {string} userId
+ * @returns {{ result: string }}
+ */
+function handleGetCurrentDatetime(userId) {
+  // `state` is top-level imported — read .userTimezones at call-time, never at startup
+  const timezone = state.userTimezones?.[userId] || 'UTC';
+  const now      = new Date();  // fresh every single call, never stale from startup
+
+  let formatted, tzLabel;
+  try {
+    // Full human-readable datetime in the user's timezone
+    formatted = now.toLocaleString('en-US', {
+      timeZone:     timezone,
+      weekday:      'long',
+      year:         'numeric',
+      month:        'long',
+      day:          'numeric',
+      hour:         '2-digit',
+      minute:       '2-digit',
+      second:       '2-digit',
+      hour12:       true,
+      timeZoneName: 'short'
+    });
+
+    tzLabel = timezone === 'UTC'
+      ? 'UTC (no timezone saved — use /timezone to personalise)'
+      : timezone;
+
+  } catch {
+    // Fallback: the IANA string stored for this user is unrecognised — use server local time
+    formatted = now.toLocaleString('en-US', {
+      weekday:      'long',
+      year:         'numeric',
+      month:        'long',
+      day:          'numeric',
+      hour:         '2-digit',
+      minute:       '2-digit',
+      second:       '2-digit',
+      hour12:       true,
+      timeZoneName: 'short'
+    });
+    tzLabel = 'UTC (stored timezone was invalid — please use /timezone to fix it)';
+  }
+
+  return {
+    result: `Current date/time: ${formatted} | Timezone used: ${tzLabel}`
+  };
+}
+
 
 
 /**
@@ -341,6 +398,10 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId) {
 
           case FUNCTION_NAMES.GET_TIMESTAMP:
             response = await handleGetMessageTimestamp(userId, guildId, historyId, args.query);
+            break;
+
+          case FUNCTION_NAMES.GET_CURRENT_DATETIME:
+            response = handleGetCurrentDatetime(userId);
             break;
 
           default:
