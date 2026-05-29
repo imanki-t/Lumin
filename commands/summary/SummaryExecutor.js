@@ -31,11 +31,11 @@ import { Logger } from '../../core/Logger.js';
 const logger = Logger.get('SummaryExecutor');
 
 const SUMMARY_MODEL          = DEFAULT_MODEL;
-// Summary always uses flash-lite → 2.5-flash, never Gemma:
+// Summary always uses flash-lite → 3.5-flash, never Gemma:
 // summary needs file URI uploads and tool use that Gemma doesn't support.
 const SUMMARY_FALLBACK_CHAIN = [
-  'gemini-3.1-flash-lite-preview',
-  'gemini-2.5-flash'
+  'gemini-3.1-flash-lite',
+  'gemini-3.5-flash'
 ];
 const MAX_RETRY_ATTEMPTS     = 3;
 const MAX_UPLOAD_RETRIES     = 3;

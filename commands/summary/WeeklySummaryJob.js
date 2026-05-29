@@ -39,7 +39,7 @@ const logger = Logger.get('WeeklySummaryJob');
 // CONSTANTS
 // ============================================================================
 
-const SUMMARY_MODEL          = 'gemini-3.1-flash-lite-preview';
+const SUMMARY_MODEL          = 'gemini-3.1-flash-lite';
 const REDIS_SUMMARY_TTL      = 7 * 24 * 60 * 60;   // 7 days in seconds
 const REDIS_KEY_PREFIX       = 'lumin:weekly:';
 const MAX_FACTS_PER_USER     = 30;
