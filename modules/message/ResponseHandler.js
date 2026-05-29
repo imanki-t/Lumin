@@ -583,7 +583,7 @@ export async function handleModelResponse(
 
             // Gemini 3: pass thought_signature + id back exactly as received (required).
             // Gemma: no thought_signature ever — pass parts as-is.
-            // Other Gemini (e.g. 2.5-flash): strip BOTH thought_signature AND id —
+            // Other Gemini (e.g. 3.5-flash): strip BOTH thought_signature AND id —
             //   sending either triggers "context circulation not enabled" 400 error.
             const sanitizedFcParts = (isGemini3(modelName) && !isGemma(modelName))
               ? functionCallParts

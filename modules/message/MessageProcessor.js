@@ -58,7 +58,7 @@ const CONTEXT_MARKERS = Object.freeze({
 // - functionDeclarations → Lumin's custom tools (memory, reminders, etc.)
 //
 // NOTE: tool combinations are Preview, Gemini 3 models only. The fallback
-// model (gemini-2.5-flash) does NOT support mixing built-in tools with
+// model (gemini-3.5-flash) does NOT support mixing built-in tools with
 // functionDeclarations — ResponseHandler strips them dynamically per-model.
 const ALL_TOOLS = Object.freeze([
   { googleSearch:  {} },
