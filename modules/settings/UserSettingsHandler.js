@@ -17,10 +17,9 @@ import {
 } from '../../managers/BotManager.js';
 import * as db     from '../../database.js';
 import { Logger }  from '../../core/Logger.js';
-import { Embeds }  from '../shared/embedBuilder.js';
 
 const logger = Logger.get('UserSettings');
-// Embed color fallback uses BOT_CONFIG.HEX_COLOUR ('#5B7C99') for brand consistency.
+const THEME_COLOR = '#09090B'; // Matte black brand fallback
 
 // ============================================================================
 // PERSIST HELPERS
@@ -85,8 +84,7 @@ export async function showMainSettings(interaction, isUpdate = false) {
       ? interaction.member.permissions.has(0x20n) // ManageGuild
       : false;
 
-    const defaultColor = parseInt(BOT_CONFIG.HEX_COLOUR.replace('#', ''), 16);
-    let embedColor = defaultColor;
+    let embedColor = THEME_COLOR;
     if (guildId && state.serverSettings[guildId]?.embedColor) {
       embedColor = state.serverSettings[guildId].embedColor;
     } else if (state.userSettings[userId]?.embedColor) {
@@ -94,12 +92,14 @@ export async function showMainSettings(interaction, isUpdate = false) {
     }
 
     const userBtn = new ButtonBuilder()
-      .setCustomId('user_settings').setLabel('User Settings')
-      .setEmoji('👤').setStyle(ButtonStyle.Primary);
+      .setCustomId('user_settings')
+      .setLabel('User Settings')
+      .setStyle(ButtonStyle.Primary);
 
     const serverBtn = new ButtonBuilder()
-      .setCustomId('server_settings').setLabel('Server Settings')
-      .setEmoji('🏰').setStyle(ButtonStyle.Success);
+      .setCustomId('server_settings')
+      .setLabel('Server Settings')
+      .setStyle(ButtonStyle.Success);
 
     const components = canManage
       ? [new ActionRowBuilder().addComponents(userBtn, serverBtn)]
@@ -107,14 +107,14 @@ export async function showMainSettings(interaction, isUpdate = false) {
 
     const embed = new EmbedBuilder()
       .setColor(embedColor)
-      .setTitle('⚙️ Settings Dashboard')
-      .setDescription('**Configure your bot experience**\n\nSelect a category below to customize your preferences.')
-      .addFields({ name: '👤 User Settings', value: '> Personal preferences, models, appearance, and data management', inline: false })
-      .setFooter({ text: 'Settings Menu • Changes save automatically' })
+      .setTitle('Settings Dashboard')
+      .setDescription('Select a configuration tier below to customize preferences.')
+      .addFields({ name: 'User Settings', value: 'Personal defaults, response formats, and privacy', inline: false })
+      .setFooter({ text: 'Changes are automatically saved.' })
       .setTimestamp();
 
     if (canManage) {
-      embed.addFields({ name: '🏰 Server Settings', value: '> Server-wide configuration, channels, overrides, and moderation', inline: false });
+      embed.addFields({ name: 'Server Settings', value: 'Server-wide logic, override rules, and channels', inline: false });
     }
 
     const payload = { embeds: [embed], components, flags: MessageFlags.Ephemeral };
@@ -143,12 +143,9 @@ export async function showUserSettings(interaction, isUpdate = false) {
     if (ss.overrideUserSettings) {
       interaction.user.send({
         embeds: [new EmbedBuilder()
-          .setColor(0xFFAA00)
-          .setTitle('🔒 Server Override Active')
-          .setDescription(
-            `The settings on **${interaction.guild.name}** are overridden by server admins.\n\n` +
-            'Your personal settings still apply in DMs and other servers.'
-          )
+          .setColor('#09090B')
+          .setTitle('Server Override Active')
+          .setDescription(`The settings on ${interaction.guild.name} are locked by server administrators. Your personal settings will still apply in DMs or other guilds.`)
         ]
       }).catch(() => {});
     }
@@ -157,45 +154,61 @@ export async function showUserSettings(interaction, isUpdate = false) {
   const selectedModel     = userSettings.selectedModel    || DEFAULT_USER_SETTINGS.selectedModel;
   const responseFormat    = userSettings.responseFormat   || DEFAULT_USER_SETTINGS.responseFormat;
   const showActionButtons = userSettings.showActionButtons ?? DEFAULT_USER_SETTINGS.showActionButtons;
-  const embedColor        = userSettings.embedColor       || BOT_CONFIG.HEX_COLOUR;
+  const embedColor        = userSettings.embedColor       || THEME_COLOR;
 
   const responseFormatSelect = new StringSelectMenuBuilder()
-    .setCustomId('user_response_format').setPlaceholder('Response Format')
+    .setCustomId('user_response_format')
+    .setPlaceholder('Response Format')
     .addOptions(
       new StringSelectMenuOptionBuilder()
-        .setLabel('Normal').setDescription('Plain text responses')
-        .setValue('Normal').setEmoji('📝').setDefault(responseFormat === 'Normal'),
+        .setLabel('Normal Format')
+        .setDescription('Plain text responses')
+        .setValue('Normal')
+        .setDefault(responseFormat === 'Normal'),
       new StringSelectMenuOptionBuilder()
-        .setLabel('Embedded').setDescription('Rich embed responses')
-        .setValue('Embedded').setEmoji('📊').setDefault(responseFormat === 'Embedded')
+        .setLabel('Embedded Format')
+        .setDescription('Rich embed responses')
+        .setValue('Embedded')
+        .setDefault(responseFormat === 'Embedded')
     );
 
   const actionButtonsSelect = new StringSelectMenuBuilder()
-    .setCustomId('user_action_buttons').setPlaceholder('Action Buttons')
+    .setCustomId('user_action_buttons')
+    .setPlaceholder('Action Buttons')
     .addOptions(
       new StringSelectMenuOptionBuilder()
-        .setLabel('Show Buttons').setDescription('Display Stop/Save/Delete buttons')
-        .setValue('show').setEmoji('✅').setDefault(showActionButtons),
+        .setLabel('Show Buttons')
+        .setDescription('Enable standard message actions')
+        .setValue('show')
+        .setDefault(showActionButtons),
       new StringSelectMenuOptionBuilder()
-        .setLabel('Hide Buttons').setDescription('Hide action buttons')
-        .setValue('hide').setEmoji('❌').setDefault(!showActionButtons)
+        .setLabel('Hide Buttons')
+        .setDescription('Disable standard message actions')
+        .setValue('hide')
+        .setDefault(!showActionButtons)
     );
 
   const backBtn = new ButtonBuilder()
-    .setCustomId('back_to_main').setLabel('Back to Menu').setEmoji('◀️').setStyle(ButtonStyle.Secondary);
+    .setCustomId('back_to_main')
+    .setLabel('← Menu')
+    .setStyle(ButtonStyle.Secondary);
+
   const nextBtn = new ButtonBuilder()
-    .setCustomId('user_settings_page2').setLabel('Next Page').setEmoji('▶️').setStyle(ButtonStyle.Primary);
+    .setCustomId('user_settings_page2')
+    .setLabel('Next Page →')
+    .setStyle(ButtonStyle.Primary);
 
   const embed = new EmbedBuilder()
     .setColor(embedColor)
-    .setTitle('👤 User Settings')
-    .setDescription('**Page 1 of 3** • Core Preferences\n\nConfigure your personal AI response settings.')
+    .setTitle('User Settings')
+    .setDescription('Configure your personal conversation preferences.')
     .addFields(
-      { name: '🤖 AI Model',        value: `\`${selectedModel}\``,                        inline: true },
-      { name: '📋 Response Format', value: `\`${responseFormat}\``,                       inline: true },
-      { name: '🔘 Action Buttons',  value: `\`${showActionButtons ? 'Visible' : 'Hidden'}\``, inline: true }
+      { name: 'AI Model',        value: `\`${selectedModel}\``,                        inline: true },
+      { name: 'Response Format', value: `\`${responseFormat}\``,                       inline: true },
+      { name: 'Action Buttons',  value: `\`${showActionButtons ? 'Visible' : 'Hidden'}\``, inline: true }
     )
-    .setFooter({ text: 'Page 1 of 3 • Core Preferences' }).setTimestamp();
+    .setFooter({ text: 'Page 1 of 3' })
+    .setTimestamp();
 
   const payload = {
     embeds: [embed],
@@ -222,54 +235,79 @@ export async function showUserSettingsPage2(interaction, isUpdate = false) {
   const userSettings = state.userSettings[userId] || {};
   const continuousReply       = userSettings.continuousReply       ?? true;
   const crossContextEnabled   = userSettings.crossContextEnabled   ?? false;
-  const embedColor            = userSettings.embedColor || BOT_CONFIG.HEX_COLOUR;
+  const embedColor            = userSettings.embedColor || THEME_COLOR;
   const hasPersonality        = !!userSettings.customPersonality;
 
   const continuousReplySelect = new StringSelectMenuBuilder()
-    .setCustomId('user_continuous_reply').setPlaceholder('Continuous Reply')
+    .setCustomId('user_continuous_reply')
+    .setPlaceholder('Continuous Reply')
     .addOptions(
       new StringSelectMenuOptionBuilder()
-        .setLabel('Enabled').setDescription('Bot replies without mentions')
-        .setValue('enabled').setEmoji('🔄').setDefault(continuousReply),
+        .setLabel('Enabled')
+        .setDescription('Respond to consecutive messages without mentions')
+        .setValue('enabled')
+        .setDefault(continuousReply),
       new StringSelectMenuOptionBuilder()
-        .setLabel('Disabled').setDescription('Bot requires mentions')
-        .setValue('disabled').setEmoji('⏸️').setDefault(!continuousReply)
+        .setLabel('Disabled')
+        .setDescription('Require mentions for every transaction')
+        .setValue('disabled')
+        .setDefault(!continuousReply)
     );
 
   const crossContextSelect = new StringSelectMenuBuilder()
-    .setCustomId('user_cross_context').setPlaceholder('Cross-Context Memory')
+    .setCustomId('user_cross_context')
+    .setPlaceholder('Cross-Context Memory')
     .addOptions(
       new StringSelectMenuOptionBuilder()
-        .setLabel('Disabled').setDescription('Only search current conversation memory (default)')
-        .setValue('disabled').setEmoji('🔒').setDefault(!crossContextEnabled),
+        .setLabel('Disabled')
+        .setDescription('Isolate conversation lookup to current context')
+        .setValue('disabled')
+        .setDefault(!crossContextEnabled),
       new StringSelectMenuOptionBuilder()
-        .setLabel('Enabled').setDescription('Search your memory across all servers and DMs')
-        .setValue('enabled').setEmoji('🌐').setDefault(crossContextEnabled)
+        .setLabel('Enabled')
+        .setDescription('Utilize memory spanning across servers and DMs')
+        .setValue('enabled')
+        .setDefault(crossContextEnabled)
     );
 
   const colorBtn = new ButtonBuilder()
-    .setCustomId('user_embed_color').setLabel('Embed Color').setEmoji('🎨').setStyle(ButtonStyle.Secondary);
+    .setCustomId('user_embed_color')
+    .setLabel('Set Color')
+    .setStyle(ButtonStyle.Secondary);
+
   const personalityBtn = new ButtonBuilder()
-    .setCustomId('user_custom_personality').setLabel('Set Personality').setEmoji('🎭').setStyle(ButtonStyle.Primary);
+    .setCustomId('user_custom_personality')
+    .setLabel('Set Personality')
+    .setStyle(ButtonStyle.Primary);
+
   const removePersonalityBtn = new ButtonBuilder()
-    .setCustomId('user_remove_personality').setLabel('Reset').setEmoji('🗑️')
-    .setStyle(ButtonStyle.Danger).setDisabled(!hasPersonality);
+    .setCustomId('user_remove_personality')
+    .setLabel('Reset')
+    .setStyle(ButtonStyle.Danger)
+    .setDisabled(!hasPersonality);
+
   const backBtn = new ButtonBuilder()
-    .setCustomId('user_settings_p1').setLabel('Previous').setEmoji('◀️').setStyle(ButtonStyle.Secondary);
+    .setCustomId('user_settings_p1')
+    .setLabel('← Back')
+    .setStyle(ButtonStyle.Secondary);
+
   const nextBtn = new ButtonBuilder()
-    .setCustomId('user_settings_page3').setLabel('Next Page').setEmoji('▶️').setStyle(ButtonStyle.Primary);
+    .setCustomId('user_settings_page3')
+    .setLabel('Next Page →')
+    .setStyle(ButtonStyle.Primary);
 
   const embed = new EmbedBuilder()
     .setColor(embedColor)
-    .setTitle('👤 User Settings')
-    .setDescription('**Page 2 of 3** • Behavior & Appearance\n\nCustomize how the bot responds and looks.')
+    .setTitle('User Settings')
+    .setDescription('Personal behavior, aesthetic theme, and database rules.')
     .addFields(
-      { name: '🔄 Continuous Reply',   value: `\`${continuousReply ? 'Enabled' : 'Disabled'}\``,       inline: true },
-      { name: '🎨 Embed Color',        value: `\`${embedColor}\``,                                       inline: true },
-      { name: '🎭 Custom Personality', value: `\`${hasPersonality ? 'Active' : 'Default'}\``,            inline: true },
-      { name: '🌐 Cross-Context Memory', value: `\`${crossContextEnabled ? 'Enabled' : 'Disabled'}\`\n> When enabled, the bot searches your memory across all servers and DMs`, inline: false }
+      { name: 'Continuous Reply',   value: `\`${continuousReply ? 'Enabled' : 'Disabled'}\``,       inline: true },
+      { name: 'Embed Color',        value: `\`${embedColor}\``,                                       inline: true },
+      { name: 'Custom Personality', value: `\`${hasPersonality ? 'Active' : 'Default'}\``,            inline: true },
+      { name: 'Cross-Context Memory', value: `\`${crossContextEnabled ? 'Enabled' : 'Disabled'}\`\nQuery personal memories globally across servers/DMs.`, inline: false }
     )
-    .setFooter({ text: 'Page 2 of 3 • Behavior & Appearance' }).setTimestamp();
+    .setFooter({ text: 'Page 2 of 3' })
+    .setTimestamp();
 
   const payload = {
     embeds: [embed],
@@ -293,26 +331,38 @@ export async function showUserSettingsPage2(interaction, isUpdate = false) {
 export async function showUserSettingsPage3(interaction, isUpdate = false) {
   const userId      = interaction.user.id;
   const userSettings = state.userSettings[userId] || {};
-  const embedColor   = userSettings.embedColor || BOT_CONFIG.HEX_COLOUR;
+  const embedColor   = userSettings.embedColor || THEME_COLOR;
 
   const clearMemBtn = new ButtonBuilder()
-    .setCustomId('clear_user_memory').setLabel('Clear Memory').setEmoji('🧹').setStyle(ButtonStyle.Danger);
+    .setCustomId('clear_user_memory')
+    .setLabel('Clear Memory')
+    .setStyle(ButtonStyle.Danger);
+
   const downloadBtn = new ButtonBuilder()
-    .setCustomId('download_user_conversation').setLabel('Download History').setEmoji('💾').setStyle(ButtonStyle.Success);
+    .setCustomId('download_user_conversation')
+    .setLabel('Export History')
+    .setStyle(ButtonStyle.Success);
+
   const backBtn = new ButtonBuilder()
-    .setCustomId('back_to_user_p2').setLabel('Previous').setEmoji('◀️').setStyle(ButtonStyle.Secondary);
+    .setCustomId('back_to_user_p2')
+    .setLabel('← Back')
+    .setStyle(ButtonStyle.Secondary);
+
   const mainBtn = new ButtonBuilder()
-    .setCustomId('back_to_main').setLabel('Main Menu').setEmoji('🏠').setStyle(ButtonStyle.Primary);
+    .setCustomId('back_to_main')
+    .setLabel('← Main Menu')
+    .setStyle(ButtonStyle.Primary);
 
   const embed = new EmbedBuilder()
     .setColor(embedColor)
-    .setTitle('👤 User Settings')
-    .setDescription('**Page 3 of 3** • Data Management\n\nManage your conversation data and history.')
+    .setTitle('User Settings')
+    .setDescription('Clear or export personal conversation storage logs.')
     .addFields(
-      { name: '🧹 Clear Memory',      value: 'Delete all conversation history and start fresh', inline: false },
-      { name: '💾 Download History',  value: 'Export your chat log as a text file',             inline: false }
+      { name: 'Clear Memory',      value: 'Erase all personal conversation storage.', inline: false },
+      { name: 'Export History',  value: 'Download your personal chat log history as a text file.',             inline: false }
     )
-    .setFooter({ text: 'Page 3 of 3 • Data Management' }).setTimestamp();
+    .setFooter({ text: 'Page 3 of 3' })
+    .setTimestamp();
 
   const payload = {
     embeds: [embed],
@@ -336,7 +386,11 @@ export async function clearUserMemory(interaction) {
   state.chatHistories[userId] = {};
   await persistChatHistory(userId);
   await interaction.reply({
-    embeds: [Embeds.success('✅ Memory Cleared', 'Your chat history has been cleared successfully!')],
+    embeds: [new EmbedBuilder()
+      .setColor('#09090B')
+      .setTitle('Memory Cleared')
+      .setDescription('Your personal chat history has been cleared.')
+    ],
     flags: MessageFlags.Ephemeral
   });
 }
@@ -347,12 +401,15 @@ export async function downloadUserConversation(interaction) {
 
   if (!conversationHistory?.length) {
     return interaction.reply({
-      embeds: [Embeds.error('❌ No History Found', "You don't have any conversation history to download.")],
+      embeds: [new EmbedBuilder()
+        .setColor('#09090B')
+        .setTitle('No History Found')
+        .setDescription('There is no personal chat logs recorded under your profile.')
+      ],
       flags: MessageFlags.Ephemeral
     });
   }
 
-  // entry.content is the canonical field; entry.parts is the legacy shape — handle both.
   const conversationText = conversationHistory.map(entry => {
     const role    = entry.role === 'user' ? '[User]' : '[Model]';
     const content = (entry.content || entry.parts || [])
@@ -375,28 +432,34 @@ export async function downloadUserConversation(interaction) {
         files:   [new AttachmentBuilder(tempFile, { name: 'conversation_history.txt' })]
       });
       await interaction.reply({
-        embeds: [Embeds.success('✅ History Sent', 'Your conversation history has been sent to your DMs!')],
+        embeds: [new EmbedBuilder()
+          .setColor('#09090B')
+          .setTitle('History Sent')
+          .setDescription('Your complete conversation history has been sent to your DMs!')
+        ],
         flags: MessageFlags.Ephemeral
       });
       fileSent = true;
     } catch (err) {
       logger.error('DM send failed for history download', err);
       fallback = new EmbedBuilder()
-        .setColor(0xFFAA00).setTitle('❌ DM Failed')
-        .setDescription('Could not send via DM. Attempting external upload.');
+        .setColor('#09090B')
+        .setTitle('DM Failed')
+        .setDescription('Could not deliver history to DMs. Attempting direct upload.');
     }
   } else {
     fallback = new EmbedBuilder()
-      .setColor(0xFFAA00).setTitle('🔗 History Too Large')
-      .setDescription(`History is ${sizeMB.toFixed(2)} MB — uploading to external site.`);
+      .setColor('#09090B')
+      .setTitle('History Too Large')
+      .setDescription(`The personal chat history is too large (${sizeMB.toFixed(2)} MB). Transferring to a secure external link.`);
   }
 
   if (!fileSent) {
     const { uploadText } = await import('../../utils.js');
     const urlText = await uploadText(conversationText);
     const url     = urlText.match(/🔗 URL: (.+)/)?.[1] || 'URL generation failed.';
-    const embed   = (fallback || new EmbedBuilder().setColor(0xFFAA00).setTitle('🔗 History Upload'))
-      .addFields({ name: 'External Link', value: `[View History Content](${url})`, inline: false });
+    const embed   = (fallback || new EmbedBuilder().setColor('#09090B').setTitle('History Exported'))
+      .addFields({ name: 'Archive Link', value: `[View Saved Logs](${url})`, inline: false });
     await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 
@@ -413,15 +476,16 @@ export async function showUserPersonalityModal(interaction) {
 
   const input = new TextInputBuilder()
     .setCustomId('personality_input')
-    .setLabel("What should the bot's personality be like?")
+    .setLabel("Define the bot's user personality")
     .setStyle(TextInputStyle.Paragraph)
-    .setPlaceholder('Enter your custom personality instructions…')
+    .setPlaceholder('Enter your custom personality instructions...')
     .setMinLength(10).setMaxLength(4000);
   if (existing) input.setValue(existing);
 
   await interaction.showModal(
     new ModalBuilder()
-      .setCustomId('user_personality_modal').setTitle('Custom Personality')
+      .setCustomId('user_personality_modal')
+      .setTitle('Custom Personality')
       .addComponents(new ActionRowBuilder().addComponents(input))
   );
 }
@@ -432,7 +496,11 @@ export async function removeUserPersonality(interaction) {
   if (state.customInstructions?.[userId]) delete state.customInstructions[userId];
   await Promise.all([persistUser(userId), persistInstructions(userId, null)]);
   await interaction.reply({
-    embeds: [Embeds.success('✅ Personality Removed', 'Your custom personality has been removed!')],
+    embeds: [new EmbedBuilder()
+      .setColor('#09090B')
+      .setTitle('Personality Removed')
+      .setDescription('Your custom personality instructions have been reset to default.')
+    ],
     flags: MessageFlags.Ephemeral
   });
 }
@@ -442,17 +510,19 @@ export async function showUserEmbedColorModal(interaction) {
   const existing = (state.userSettings[userId] || {}).embedColor || BOT_CONFIG.HEX_COLOUR;
 
   const input = new TextInputBuilder()
-    .setCustomId('color_input').setLabel('Enter Hex Color Code')
-    .setStyle(TextInputStyle.Short).setPlaceholder('#FF5733 or FF5733')
+    .setCustomId('color_input')
+    .setLabel('Hex Color Code')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('#FF5733 or FF5733')
     .setMinLength(6).setMaxLength(7);
   if (existing) input.setValue(existing);
 
   await interaction.showModal(
     new ModalBuilder()
-      .setCustomId('user_embed_color_modal').setTitle('Embed Color Customization')
+      .setCustomId('user_embed_color_modal')
+      .setTitle('Theme Color Customization')
       .addComponents(new ActionRowBuilder().addComponents(input))
   );
 }
 
-// Export persist helpers for ActionHandlers
 export { persistUser, persistInstructions };
