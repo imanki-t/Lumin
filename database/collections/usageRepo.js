@@ -176,4 +176,43 @@ export async function deleteUserFact(userId, factKeyword) {
   }
 }
 
+// ============================================================================
+// INDEXED COUNTS (background RAG indexing state persistence)
+// Survives bot restarts so MemoryStore doesn't re-index everything from scratch.
+// ============================================================================
 
+/**
+ * Persist how many messages have been indexed for a given historyId.
+ * Uses upsert so it is safe to call on a new historyId.
+ * @param {string} historyId
+ * @param {number} count
+ * @returns {Promise<void>}
+ */
+export async function saveIndexedCount(historyId, count) {
+  try {
+    await getCollection(COLLECTIONS.INDEXED_COUNTS).updateOne(
+      { historyId },
+      { $set: { historyId, count, updatedAt: new Date() } },
+      { upsert: true }
+    );
+  } catch (error) {
+    logger.error('Error saving indexed count', error);
+    throw error;
+  }
+}
+
+/**
+ * Load all persisted indexing states so MemoryStore can restore its
+ * `lastIndexedCount` map on startup.
+ * @returns {Promise<{ historyId: string, count: number }[]>}
+ */
+export async function getIndexedCounts() {
+  try {
+    return await getCollection(COLLECTIONS.INDEXED_COUNTS)
+      .find({}, { projection: { historyId: 1, count: 1, _id: 0 } })
+      .toArray();
+  } catch (error) {
+    logger.error('Error getting indexed counts', error);
+    return [];
+  }
+}
