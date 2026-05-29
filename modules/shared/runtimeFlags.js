@@ -27,6 +27,7 @@ const RUNTIME_CONFIG_PATH = path.resolve(
 
 // Static defaults — used when the JSON file is missing or a flag is not set
 const STATIC_DEFAULTS = {
+  ENABLE_RAG:              false,
   CROSS_CONTEXT_ENABLED:   STATIC_CROSS_CONTEXT_ENABLED  ?? false,
   CACHE_ENABLED:           STATIC_CACHE_ENABLED           ?? false,
   WEEKLY_SUMMARY_ENABLED:  STATIC_WEEKLY_SUMMARY_ENABLED  ?? true,
