@@ -482,6 +482,28 @@ export async function loadStateFromDB(tempDir) {
  */
 const _lazyLoadingInProgress = new Set();
 
+// ── Idle eviction ──────────────────────────────────────────────────────────
+// chatHistories are lazy-loaded from MongoDB on first access and stay in RAM
+// until the process restarts — the primary driver of heap growth on Render.
+// This Map tracks the last time each historyId was read or written; the sweep
+// below unloads any entry idle for more than 2 hours. The history is still in
+// MongoDB and will be re-lazy-loaded transparently on next access.
+const _historyLastAccess = new Map();
+const HISTORY_IDLE_EVICT_MS = 2 * 60 * 60 * 1_000; // 2 hours
+
+setInterval(() => {
+  const now     = Date.now();
+  let   evicted = 0;
+  for (const [id, lastAccess] of _historyLastAccess.entries()) {
+    if (now - lastAccess > HISTORY_IDLE_EVICT_MS && state.chatHistories[id] !== undefined) {
+      delete state.chatHistories[id];
+      _historyLastAccess.delete(id);
+      evicted++;
+    }
+  }
+  if (evicted > 0) logger.info(`History idle eviction: ${evicted} histories unloaded from RAM`);
+}, 60 * 60 * 1_000); // sweep every hour
+
 /**
  * Lazy-load a history from DB into state.chatHistories if not already present.
  * L-13 fix: histories not updated in the last 90 days are treated as expired.
@@ -489,7 +511,10 @@ const _lazyLoadingInProgress = new Set();
  * @returns {Promise<void>}
  */
 async function _ensureHistoryLoaded(id) {
-  if (state.chatHistories[id] !== undefined) return; // already in RAM
+  if (state.chatHistories[id] !== undefined) {
+    _historyLastAccess.set(id, Date.now()); // refresh on every access
+    return;
+  }
   if (_lazyLoadingInProgress.has(id)) return;        // concurrent load in progress
 
   _lazyLoadingInProgress.add(id);
@@ -512,6 +537,7 @@ async function _ensureHistoryLoaded(id) {
     }
 
     state.chatHistories[id] = raw;
+    _historyLastAccess.set(id, Date.now());
   } catch (err) {
     logger.warn(`Lazy history load failed for ${id}`, err);
     state.chatHistories[id] = {};
@@ -620,6 +646,7 @@ export async function getHistory(id, guildId = null) {
 export async function updateChatHistory(id, newHistory, messagesId, username = null, displayName = null) {
   // L-9: ensure this history is loaded from DB before we write to it
   await _ensureHistoryLoaded(id);
+  _historyLastAccess.set(id, Date.now()); // keep alive while actively chatting
 
   if (!state.chatHistories[id]) {
     state.chatHistories[id] = {};
