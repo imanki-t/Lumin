@@ -266,7 +266,7 @@ export const CLUSTER_EMBEDDING_LIMITS = Object.freeze({
 
 // ── EMBEDDING SERVICE ────────────────────────────────────────────────────────
 
-export const EMBEDDING_MODEL            = 'gemini-embedding-2-preview';
+export const EMBEDDING_MODEL            = 'gemini-embedding-2';
 export const EMBEDDING_CACHE_MAX_SIZE   = 50;
 export const EMBEDDING_MAX_CONCURRENT   = 3;
 export const EMBEDDING_DIM              = 768;
