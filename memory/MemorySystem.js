@@ -102,136 +102,247 @@ class MemorySystem {
   // ==========================================================================
 
   /**
-   * Search memory — looks in BOTH vector RAG memories AND stored user facts,
-   * merges results by relevance, and deduplicates.
-   * 
-   * Called by the `search_memory` function tool. Returns a flat array of strings
-   * ready to be joined and returned to the LLM.
+   * Search memory — fully parallel execution across all memory stores.
+   *
+   * Always searches:
+   *   • Vector RAG memories         (embedding-based cosine similarity)
+   *   • User personal facts         (keyword overlap scoring)
+   *   • Personal data blob          (timezone, birthday, reminders…)
+   *   • Current server facts        (keyword overlap, guild context only)
+   *
+   * When options.crossContextEnabled + options.otherGuildIds are set:
+   *   • Cross-server / DM RAG       (other histories this user appears in)
+   *   • Other-server facts          (facts from guilds the user is also in)
+   *
+   * Architecture:
+   *   Phase 1 — all non-embedding DB queries fire immediately (no blocking).
+   *   Phase 2 — embedding generation runs concurrently with Phase 1.
+   *   Phase 3 — embedding-dependent RAG queries start the moment the
+   *              embedding resolves; no waiting for Phase 1 to finish.
+   *   Phase 4 — single Promise.all awaits every outstanding promise together.
+   *   Phase 5 — results are typed, scored, sorted, and deduplicated.
+   *
+   * Every individual query is wrapped in .catch(() => fallback) so one slow
+   * or failing DB call never aborts the entire search. Per-query timeouts
+   * (SEARCH_QUERY_TIMEOUT_MS) prevent a single stalled DB op from blocking
+   * the response under high load (100 k+ concurrent users).
    *
    * @param {string}      userId
    * @param {string|null} guildId
-   * @param {string}      historyId  - Correct historyId from the calling context
+   * @param {string}      historyId         - Correct historyId from calling context
    * @param {string}      query
+   * @param {object}      [options={}]
+   * @param {boolean}     [options.crossContextEnabled=false]
+   * @param {string[]}    [options.otherGuildIds=[]]         - Pre-resolved by caller
    * @returns {Promise<string[]>}
    */
-  async searchMemory(userId, guildId, historyId, query) {
+  async searchMemory(userId, guildId, historyId, query, options = {}) {
     if (!query?.trim()) return [];
 
     try {
+      const {
+        crossContextEnabled = false,
+        otherGuildIds       = []
+      } = options;
+
       const searchId   = historyId || guildId || userId;
       const queryLower = query.toLowerCase();
       const queryWords = queryLower.split(/\s+/).filter(w => w.length > 2);
 
-      // ── 1. Vector RAG search ─────────────────────────────────────────────
-      let ragResults = [];
-      const queryEmbedding = await embeddingService.generateEmbedding(query, 'RETRIEVAL_QUERY');
+      // ── Utility: per-query timeout guard (prevents stalled ops at scale) ─
+      const QUERY_TIMEOUT_MS = 3000;
+      const withTimeout = (promise, fallback = []) =>
+        Promise.race([
+          promise,
+          new Promise(resolve => setTimeout(() => resolve(fallback), QUERY_TIMEOUT_MS))
+        ]);
+
+      // ── Utility: score a text block by query-word coverage (0–1) ─────────
+      const scoreText = (text) => {
+        if (!queryWords.length || !text) return 0;
+        const lower = text.toLowerCase();
+        return queryWords.reduce((n, w) => n + (lower.includes(w) ? 1 : 0), 0) / queryWords.length;
+      };
+
+      // ── Phase 1: launch ALL non-embedding DB queries immediately ──────────
+      // These run while the embedding model is still computing — zero idle time.
+      const userFactsP   = withTimeout(db.getUserFacts(userId).catch(() => []), []);
+      const personalP    = withTimeout(memoryStore.getUserPersonalData(userId).catch(() => null), null);
+      const serverFactsP = guildId
+        ? withTimeout(db.getServerFacts(guildId).catch(() => []), [])
+        : Promise.resolve([]);
+      const crossFactsP  = crossContextEnabled && otherGuildIds.length > 0
+        ? withTimeout(db.getServerFactsMultiGuild(otherGuildIds).catch(() => []), [])
+        : Promise.resolve([]);
+
+      // ── Phase 2: embedding generation (concurrent with Phase 1) ──────────
+      const queryEmbedding = await embeddingService
+        .generateEmbedding(query, 'RETRIEVAL_QUERY')
+        .catch(() => null);
+
+      // ── Phase 3: embedding-dependent RAG searches ─────────────────────────
+      // These fire the instant the embedding is ready — Phase 1 queries are
+      // already in flight so there is no sequential penalty here.
+      let ragP      = Promise.resolve([]);
+      let crossRAGP = Promise.resolve([]);
 
       if (queryEmbedding) {
-        // Try cache first, fall back to direct DB search
-        let dbResults = null;
-
+        // L1 exact → L2 semantic cache check before touching the DB
+        let cachedResults = null;
         if (CACHE_ENABLED) {
-          const exact = memoryCache.getCachedQueryResults(searchId, query, userId, guildId);
-          if (exact) {
-            dbResults = exact;
-          } else {
-            const semantic = memoryCache.getSemanticallyCachedResults(searchId, queryEmbedding, userId, guildId);
-            if (semantic) dbResults = semantic;
-          }
+          cachedResults =
+            memoryCache.getCachedQueryResults(searchId, query, userId, guildId) ??
+            memoryCache.getSemanticallyCachedResults(searchId, queryEmbedding, userId, guildId);
         }
 
-        if (!dbResults) {
-          const raw = CACHE_ENABLED
-            ? await clusterEngine.clusterSearch(searchId, queryEmbedding, 0)
-            : await db.findSimilarMemories(searchId, queryEmbedding, MAX_RAG_RESULTS * 3);
-
-          dbResults = (raw || []).filter(e => (e.score ?? 0) >= MIN_SIMILARITY_THRESHOLD);
-          if (CACHE_ENABLED && dbResults.length) {
-            memoryCache.cacheQueryResults(searchId, query, dbResults, userId, guildId, queryEmbedding);
-          }
+        if (cachedResults) {
+          ragP = Promise.resolve(cachedResults);
+        } else {
+          ragP = withTimeout(
+            (CACHE_ENABLED
+              ? clusterEngine.clusterSearch(searchId, queryEmbedding, 0)
+              : db.findSimilarMemories(searchId, queryEmbedding, MAX_RAG_RESULTS * 3)
+            ).then(raw => {
+              const filtered = (raw || []).filter(e => (e.score ?? 0) >= MIN_SIMILARITY_THRESHOLD);
+              if (CACHE_ENABLED && filtered.length) {
+                memoryCache.cacheQueryResults(searchId, query, filtered, userId, guildId, queryEmbedding);
+              }
+              return filtered;
+            }).catch(() => [])
+          );
         }
 
-        ragResults = (dbResults || [])
-          .slice(0, MAX_RAG_RESULTS)
-          .map(entry => {
-            const text = entry.messages
-              ?.map(m => extractTextFromMessage(m))
-              .filter(t => t.length > 0)
-              .join(' ')
-              .slice(0, 400)
-              || extractTextFromMessage({ content: entry.messages?.[0]?.content });
-            return {
-              type:  'memory',
-              text:  text.trim(),
-              score: entry.score ?? 0,
-              ts:    entry.timestamp ?? 0
-            };
-          })
-          .filter(r => r.text.length > 5);
+        // Cross-context RAG: other servers + DMs this user appears in
+        if (crossContextEnabled && userId) {
+          crossRAGP = withTimeout(
+            db.findSimilarMemoriesByUser(userId, queryEmbedding, MAX_RAG_RESULTS, historyId)
+              .then(r => (r || []).filter(e => (e.score ?? 0) >= MIN_SIMILARITY_THRESHOLD))
+              .catch(() => [])
+          );
+        }
       }
 
-      // ── 2. User facts search (always runs — zero embedding cost) ─────────
-      const [userFacts, personalData] = await Promise.all([
-        db.getUserFacts(userId).catch(() => []),
-        memoryStore.getUserPersonalData(userId).catch(() => null)
+      // ── Phase 4: single await for every outstanding promise ───────────────
+      const [
+        ragRaw,
+        userFacts,
+        personalData,
+        serverFacts,
+        crossServerFacts,
+        crossRAGRaw
+      ] = await Promise.all([
+        ragP,
+        userFactsP,
+        personalP,
+        serverFactsP,
+        crossFactsP,
+        crossRAGP
       ]);
 
-      // Score facts by query-word overlap
-      const factResults = (userFacts || [])
-        .map(fact => {
-          const fl    = fact.toLowerCase();
-          const hits  = queryWords.filter(w => fl.includes(w)).length;
-          const score = queryWords.length > 0 ? hits / queryWords.length : 0;
-          return { type: 'fact', text: fact, score, ts: 0 };
-        })
-        .filter(r => r.score > 0);
+      // ── Phase 5a: build typed result objects ──────────────────────────────
+      const results = [];
 
-      // Also check personal data blob (timezone, birthday, reminders, etc.)
-      const personalResults = [];
-      if (personalData?.text) {
-        const pl   = personalData.text.toLowerCase();
-        const hits = queryWords.filter(w => pl.includes(w)).length;
-        if (hits > 0 && queryWords.length > 0) {
-          const score = hits / queryWords.length;
-          // Extract only the relevant lines from the personal data block
-          const relevantLines = personalData.text
-            .split('\n')
-            .filter(line => queryWords.some(w => line.toLowerCase().includes(w)))
-            .slice(0, 3);
-          if (relevantLines.length > 0) {
-            personalResults.push({ type: 'personal', text: relevantLines.join('\n'), score, ts: 0 });
+      // — Conversation RAG memories —
+      for (const entry of (ragRaw || []).slice(0, MAX_RAG_RESULTS)) {
+        const text = (entry.messages || [])
+          .map(m => extractTextFromMessage(m))
+          .filter(t => t.length > 0)
+          .join(' ')
+          .slice(0, 400);
+        if (text.trim().length > 5) {
+          results.push({ label: '[Conversation Memory]', text: text.trim(), score: entry.score ?? 0 });
+        }
+      }
+
+      // — Cross-context RAG: other-server + DM memories —
+      if (crossContextEnabled) {
+        for (const entry of (crossRAGRaw || []).slice(0, Math.ceil(MAX_RAG_RESULTS / 2))) {
+          const text = (entry.messages || [])
+            .map(m => extractTextFromMessage(m))
+            .filter(t => t.length > 0)
+            .join(' ')
+            .slice(0, 400);
+          if (text.trim().length > 5) {
+            const isDM  = !entry.metadata?.guildId;
+            results.push({
+              label: isDM ? '[DM Memory]' : '[Cross-Server Memory]',
+              text:  text.trim(),
+              score: (entry.score ?? 0) * 0.80  // slight discount vs. current-context
+            });
           }
         }
       }
 
-      // ── 3. Merge, deduplicate, sort by score ──────────────────────────────
-      const all = [...ragResults, ...factResults, ...personalResults];
-      all.sort((a, b) => b.score - a.score);
+      // — User personal facts —
+      for (const fact of (userFacts || [])) {
+        const score = scoreText(fact);
+        if (score > 0) results.push({ label: '[Stored Fact]', text: fact, score });
+      }
 
-      // Deduplicate by text similarity (skip if > 80% of words overlap with a prior result)
-      const seen   = [];
-      const unique = [];
-      for (const r of all) {
-        const rWords = new Set(r.text.toLowerCase().split(/\s+/).filter(w => w.length > 3));
-        const isDup  = seen.some(prev => {
-          const pWords = new Set(prev.toLowerCase().split(/\s+/).filter(w => w.length > 3));
-          if (pWords.size === 0) return false;
-          const overlap = [...rWords].filter(w => pWords.has(w)).length;
-          return overlap / pWords.size > 0.8;
-        });
-        if (!isDup) {
-          unique.push(r);
-          seen.push(r.text);
+      // — Personal data block (timezone, birthday, reminders, etc.) —
+      if (personalData?.text) {
+        const relevantLines = personalData.text
+          .split('\n')
+          .filter(line => scoreText(line) > 0)
+          .slice(0, 3);
+        if (relevantLines.length > 0) {
+          results.push({
+            label: '[Personal Info]',
+            text:  relevantLines.join('\n'),
+            score: scoreText(relevantLines.join('\n'))
+          });
         }
       }
 
-      // ── 4. Format output strings for the LLM ─────────────────────────────
-      return unique.map(r => {
-        const label = r.type === 'fact'     ? '[Stored Fact]'
-                    : r.type === 'personal' ? '[Personal Info]'
-                    :                         '[Conversation Memory]';
-        return `${label} ${r.text}`;
-      });
+      // — Current server facts (always when in a guild) —
+      for (const fact of (serverFacts || [])) {
+        const score = scoreText(fact);
+        if (score > 0) results.push({ label: '[Server Fact]', text: fact, score });
+      }
+
+      // — Other-server facts (cross-context only) —
+      if (crossContextEnabled) {
+        for (const fact of (crossServerFacts || [])) {
+          const score = scoreText(fact);
+          if (score > 0) results.push({ label: '[Cross-Server Fact]', text: fact, score: score * 0.85 });
+        }
+      }
+
+      // ── Phase 5b: sort descending by relevance score ──────────────────────
+      results.sort((a, b) => b.score - a.score);
+
+      // ── Phase 5c: deduplicate — fingerprint (O(1)) + word-overlap (O(k)) ─
+      // Using a Set of short fingerprints for instant exact-duplicate rejection,
+      // then a word-overlap check against accepted entries for near-duplicate
+      // rejection. seenWordSets stores pre-built Sets so the inner loop is O(k)
+      // per pair (has() on a Set) rather than O(k²) from array indexOf.
+      const seenFps      = new Set();
+      const seenWordSets = [];
+      const unique       = [];
+
+      for (const r of results) {
+        const norm  = r.text.toLowerCase().replace(/\s+/g, ' ');
+        const fp    = norm.slice(0, 80);
+
+        if (seenFps.has(fp)) continue;  // exact fingerprint hit — skip
+
+        const rWords = new Set(norm.split(' ').filter(w => w.length > 3));
+        let isDup = false;
+        for (const prevSet of seenWordSets) {
+          if (prevSet.size === 0) continue;
+          let overlap = 0;
+          for (const w of rWords) { if (prevSet.has(w)) overlap++; }
+          if (overlap / prevSet.size > 0.8) { isDup = true; break; }
+        }
+
+        if (!isDup) {
+          unique.push(r);
+          seenFps.add(fp);
+          seenWordSets.push(rWords);
+        }
+      }
+
+      return unique.map(r => `${r.label} ${r.text}`);
 
     } catch (error) {
       logger.error('searchMemory failed', error);
