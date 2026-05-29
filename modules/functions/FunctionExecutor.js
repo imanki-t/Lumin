@@ -45,9 +45,9 @@ function padDateComponent(value, padLength) {
   return String(value).padStart(padLength, '0');
 }
 
-/** Generate a timestamp-based reminder ID. */
+/** M-11 fix: generate collision-safe reminder ID (timestamp + random suffix). */
 function generateReminderId() {
-  return Date.now().toString();
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /**
@@ -80,6 +80,8 @@ function initializeUserReminders(userId) {
 
 /**
  * Build the birthday data object for DB persistence.
+ * Stores month/day as zero-padded strings for consistent DB format.
+ * L-16 fix: document that month/day must be parsed with parseInt when read back.
  * @param {number}      month
  * @param {number}      day
  * @param {string|null} guildId
@@ -87,8 +89,8 @@ function initializeUserReminders(userId) {
  */
 function createBirthdayData(month, day, guildId) {
   return {
-    month:      padDateComponent(month, 2),
-    day:        padDateComponent(day, 2),
+    month:      padDateComponent(parseInt(month, 10), 2),  // L-16: ensure int before padding
+    day:        padDateComponent(parseInt(day, 10), 2),
     nameType:   'self',
     preference: 'both',
     guildId
@@ -117,13 +119,15 @@ async function handleManageMemory(userId, action, info) {
 
 /**
  * Handle `search_memory` — vector-search past conversations.
+ * C-3 fix: accept historyId from caller so the correct memory bucket is searched.
  * @param {string}      userId
  * @param {string|null} guildId
+ * @param {string}      historyId
  * @param {string}      query
  * @returns {Promise<{ result: string }>}
  */
-async function handleSearchMemory(userId, guildId, query) {
-  const memories = await memorySystem.searchMemory(userId, guildId, query);
+async function handleSearchMemory(userId, guildId, historyId, query) {
+  const memories = await memorySystem.searchMemory(userId, guildId, historyId, query);
   return {
     result: memories.length > 0 ? memories.join('\n') : MSG.NO_MEMORIES_FOUND
   };
@@ -143,8 +147,8 @@ async function handleSetReminder(userId, message, timeRelative) {
   initializeUserReminders(userId);
   state.reminders[userId].push(reminder);
 
+  // L-15 fix: only save the specific reminder — no need for full saveStateToFile()
   await db.saveReminder(userId, reminder);
-  await saveStateToFile();
 
   scheduleReminder(client, reminder);
   memorySystem.invalidatePersonalDataCache(userId);
@@ -285,7 +289,7 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId) {
             break;
 
           case FUNCTION_NAMES.SEARCH_MEMORY:
-            response = await handleSearchMemory(userId, guildId, args.query);
+            response = await handleSearchMemory(userId, guildId, historyId, args.query);
             break;
 
           case FUNCTION_NAMES.SET_REMINDER:
