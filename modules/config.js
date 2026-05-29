@@ -83,8 +83,8 @@ export function isGemmaModel(modelName) {
 
 // Models tried in order when rate limits are hit.
 export const MODEL_FALLBACK_CHAIN = [
-  'gemini-3.1-flash-lite-preview',
-  'gemini-2.5-flash'
+  'gemini-3.1-flash-lite',
+  'gemini-3.5-flash'
 ];
 
 // After this many successful calls on a model, proactively rotate to the next.
