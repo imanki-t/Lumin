@@ -105,7 +105,9 @@ export {
   getAllSummaryUsages,
   saveUserFact,
   getUserFacts,
-  deleteUserFact
+  deleteUserFact,
+  saveIndexedCount,
+  getIndexedCounts
 } from './collections/usageRepo.js';
 
 // ── Batch helper ──────────────────────────────────────────────────────────

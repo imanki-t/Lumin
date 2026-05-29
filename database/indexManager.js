@@ -57,6 +57,9 @@ export async function createIndexes() {
 
       // ── Daily message usage ───────────────────────────────────────────────
       { col: COLLECTIONS.DAILY_MSG_USAGE,     idx: { date: 1 },                        opts: { unique: true } },
+
+      // ── Background indexing state ─────────────────────────────────────────
+      { col: COLLECTIONS.INDEXED_COUNTS,      idx: { historyId: 1 },                   opts: { unique: true } },
     ];
 
     await Promise.all(

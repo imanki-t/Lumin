@@ -76,7 +76,8 @@ export const COLLECTIONS = Object.freeze({
   QUOTE_USAGE:          'quoteUsage',
   USER_FACTS:           'userFacts',
   WEEKLY_SUMMARIES:     'weeklySummaries',
-  DAILY_MSG_USAGE:      'dailyMsgUsage'
+  DAILY_MSG_USAGE:      'dailyMsgUsage',
+  INDEXED_COUNTS:       'indexedCounts'
 });
 
 // ============================================================================
