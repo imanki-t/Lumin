@@ -41,10 +41,21 @@ class ClusterEngine {
     this.lastClusterUpdate    = new Map();
     /** @type {Map<string, boolean>} historyId → background rebuild in progress */
     this.clusteringInProgress = new Map();
-    /** @type {LRUCache<string, { entries: Array, fetchedAt: number }>} historyId → lean embedding docs
-     *  max: 15 — each entry ≈ 3.7 MB (300 embeddings × 12 KB). 15 users ≈ 55 MB total.
-     *  ⚠️ DO NOT raise this without understanding the RAM budget. Old value of 200 caused OOM. */
-    this.embeddingsCache      = new LRUCache({ max: 15 });
+    /**
+     * H-7 fix: size-based LRU instead of count-based (old max:15 caused 100% miss rate
+     * for >15 users). Budget: 60 MB total. Each entry ≈ 300 embeddings × 768-dim × 4B ≈ 921 KB;
+     * use 1 MB as the sizeCalculation estimate to be conservative.
+     * @type {LRUCache<string, { entries: Array, fetchedAt: number }>}
+     */
+    this.embeddingsCache = new LRUCache({
+      maxSize: 60 * 1024 * 1024,  // 60 MB hard cap
+      sizeCalculation: (entry) => {
+        // ~3100 bytes per 768-dim float32 embedding
+        return Math.max(1, (entry.entries?.length || 0) * 3100);
+      },
+      ttl: EMBEDDINGS_CACHE_TTL_MS,
+      updateAgeOnGet: true
+    });
   }
 
   // ==========================================================================

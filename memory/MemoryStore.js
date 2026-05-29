@@ -4,10 +4,12 @@
  * @module memory/MemoryStore
  */
 
+import { LRUCache } from 'lru-cache';
 import * as db from '../database/index.js';
 import { Logger } from '../core/Logger.js';
 import { embeddingService } from './EmbeddingService.js';
 import { clusterEngine } from './ClusterEngine.js';
+import { extractTextFromMessage } from './memoryUtils.js';
 import {
   MEMORY_RECENT_WINDOW       as RECENT_MESSAGE_WINDOW,
   MEMORY_CHUNK_SIZE           as CHUNK_SIZE,
@@ -18,32 +20,59 @@ import {
 
 const logger = Logger.get('MemoryStore');
 
-// Extract plain text from a history message entry. Supports `content` and `parts` shapes.
-function extractTextFromMessage(message) {
-  if (!message || (!message.content && !message.parts)) return '';
-  const parts = message.content || message.parts;
-  if (!Array.isArray(parts)) return '';
-  return parts.filter(p => p?.text).map(p => p.text).join(' ').trim();
-}
-
 // ============================================================================
 // MEMORY STORE
 // ============================================================================
 
 class MemoryStore {
   constructor() {
-    /** @type {Map<string, number>} historyId → count of already-indexed messages */
-    this.lastIndexedCount  = new Map();
-    /** @type {Map<string, object>} userId → { text, embedding, timestamp } */
-    this.personalDataCache = new Map();
+    /**
+     * historyId → count of already-indexed messages.
+     * Persisted to DB on update to survive restarts (C-5).
+     * @type {Map<string, number>}
+     */
+    this.lastIndexedCount = new Map();
 
-    // ── Render free tier: nudge GC every 10 min to reclaim old buffers ────────
-    // --expose-gc is set in package.json start script.
-    setInterval(() => {
-      if (typeof global.gc === 'function') global.gc();
-      // Cap personalDataCache to prevent unbounded growth
-      if (this.personalDataCache.size > 50) this.personalDataCache.clear();
-    }, 10 * 60 * 1_000).unref(); // .unref() = won't block process exit
+    /**
+     * LRU cache for personal data — evicts LRU entry when full instead of
+     * wiping all 50 entries at once (C-6 fix).
+     * TTL is enforced manually on read (consistent with original behaviour).
+     * @type {LRUCache<string, object>}
+     */
+    this.personalDataCache = new LRUCache({
+      max: 100,
+      ttl: PERSONAL_DATA_CACHE_TTL_MS,
+      updateAgeOnGet: false
+    });
+
+    /** @type {Set<string>} historyIds currently being indexed (H-9 race guard) */
+    this.indexingInProgress = new Set();
+  }
+
+  // ==========================================================================
+  // STARTUP
+  // ==========================================================================
+
+  /**
+   * Load persisted indexing state from the DB so restarts don't re-index
+   * everything from scratch (C-5 fix).
+   * @returns {Promise<void>}
+   */
+  async loadIndexedCounts() {
+    try {
+      const docs = await db.getIndexedCounts();
+      if (Array.isArray(docs)) {
+        for (const d of docs) {
+          if (d?.historyId && typeof d.count === 'number') {
+            this.lastIndexedCount.set(d.historyId, d.count);
+          }
+        }
+        logger.debug(`Loaded ${this.lastIndexedCount.size} persisted indexing states`);
+      }
+    } catch (err) {
+      // Non-fatal — worst case we re-index some chunks on this restart
+      logger.warn('Could not load indexed counts from DB', err);
+    }
   }
 
   // ==========================================================================
@@ -99,6 +128,8 @@ class MemoryStore {
   /**
    * Incrementally index old messages into the vector store.
    * Called fire-and-forget from MemorySystem.getOptimizedHistory — never awaited.
+   * Guards against concurrent indexing for the same historyId (H-9).
+   *
    * @param {string}      historyId
    * @param {object}      allHistory  - { [messagesId]: message[] }
    * @param {string|null} [userId]
@@ -106,10 +137,18 @@ class MemoryStore {
    * @returns {Promise<void>}
    */
   async checkAndIndexMessages(historyId, allHistory, userId = null, guildId = null) {
+    // H-9: prevent concurrent indexing for the same historyId
+    if (this.indexingInProgress.has(historyId)) return;
+    this.indexingInProgress.add(historyId);
+
     try {
       const historyArray = [];
+      // M-6: avoid O(n²) push spread — iterate instead
       for (const key of Object.keys(allHistory)) {
-        historyArray.push(...(allHistory[key] || []));
+        const msgs = allHistory[key];
+        if (Array.isArray(msgs)) {
+          for (const m of msgs) historyArray.push(m);
+        }
       }
 
       const currentCount = historyArray.length;
@@ -141,8 +180,14 @@ class MemoryStore {
       }
 
       this.lastIndexedCount.set(historyId, oldMessages.length);
+      // C-5: persist so restarts don't re-index everything
+      db.saveIndexedCount(historyId, oldMessages.length).catch(() => {});
+
     } catch (error) {
       logger.error('Auto-indexing check failed', error);
+    } finally {
+      // H-9: always release the guard
+      this.indexingInProgress.delete(historyId);
     }
   }
 
@@ -199,8 +244,9 @@ class MemoryStore {
    * @returns {Promise<{ text: string, embedding: number[]|null, timestamp: number }|null>}
    */
   async getUserPersonalData(userId) {
+    // LRUCache handles TTL automatically (configured in constructor)
     const cached = this.personalDataCache.get(userId);
-    if (cached && (Date.now() - cached.timestamp) < PERSONAL_DATA_CACHE_TTL_MS) return cached;
+    if (cached) return cached;
 
     try {
       // All DB lookups in parallel
@@ -227,7 +273,12 @@ class MemoryStore {
           'January','February','March','April','May','June',
           'July','August','September','October','November','December'
         ];
-        facts.push(`User's birthday: ${monthNames[birthday.month]} ${birthday.day}`);
+        // C-4 fix: birthday.month is stored as zero-padded string e.g. "01".
+        // Parse to int then subtract 1 for the zero-based monthNames index.
+        const monthIndex = parseInt(birthday.month, 10) - 1;
+        const dayNum     = parseInt(birthday.day, 10);
+        const monthName  = monthNames[monthIndex] ?? `Month ${birthday.month}`;
+        facts.push(`User's birthday: ${monthName} ${dayNum}`);
       }
 
       if (reminders?.length > 0) {
@@ -283,8 +334,12 @@ class MemoryStore {
       if (!allHistory) return { success: false, message: 'No history found' };
 
       const historyArray = [];
+      // M-6: avoid O(n²) push spread
       for (const key of Object.keys(allHistory)) {
-        historyArray.push(...(allHistory[key] || []));
+        const msgs = allHistory[key];
+        if (Array.isArray(msgs)) {
+          for (const m of msgs) historyArray.push(m);
+        }
       }
 
       const oldMessages = historyArray.slice(0, -RECENT_MESSAGE_WINDOW);
@@ -310,6 +365,7 @@ class MemoryStore {
       }
 
       this.lastIndexedCount.set(historyId, oldMessages.length);
+      db.saveIndexedCount(historyId, oldMessages.length).catch(() => {});
 
       return {
         success:       true,

@@ -8,8 +8,9 @@
  * @module memory/EmbeddingService
  */
 
-import { genAI }      from '../managers/BotManager.js';
-import { Logger }     from '../core/Logger.js';
+import { genAI }             from '../managers/BotManager.js';
+import { Logger }            from '../core/Logger.js';
+import { executeWithRetry }  from '../modules/shared/retryUtils.js';
 import { redisCache } from './RedisCache.js';
 import {
   EMBEDDING_MODEL,
@@ -104,9 +105,9 @@ function safeImages(images) {
   if (valid.length > LIMIT_IMAGE_MAX_COUNT) {
     logger.warn(
       `${valid.length} images supplied — exceeds limit of ${LIMIT_IMAGE_MAX_COUNT}. ` +
-      `Only the first 5 images will be used.`
+      `Only the first ${LIMIT_IMAGE_MAX_COUNT} images will be used.`
     );
-    return valid.slice(0, 5); // clamp to 5 when over-limit
+    return valid.slice(0, LIMIT_IMAGE_MAX_COUNT); // L-3 fix: use the constant, not hardcoded 5
   }
 
   return valid;
@@ -220,6 +221,13 @@ class EmbeddingService {
      * @type {Map<string, number[]>}
      */
     this.embeddingCache = new Map();
+
+    /**
+     * L-14 fix: in-flight deduplication map.
+     * Two identical concurrent requests share one API call instead of making two.
+     * @type {Map<string, Promise<number[]|null>>}
+     */
+    this._pendingEmbeddings = new Map();
   }
 
   // ── Cache key ─────────────────────────────────────────────────────────────
@@ -288,12 +296,31 @@ class EmbeddingService {
     const cached   = await this._cacheGet(cacheKey);
     if (cached) return cached;
 
+    // L-14 fix: deduplicate concurrent identical requests
+    const pendingKey = `${taskType}:${text.slice(0, 100)}`;
+    if (this._pendingEmbeddings.has(pendingKey)) {
+      return this._pendingEmbeddings.get(pendingKey);
+    }
+
+    const promise = this._generateEmbeddingInternal(text, taskType, cacheKey)
+      .finally(() => this._pendingEmbeddings.delete(pendingKey));
+
+    this._pendingEmbeddings.set(pendingKey, promise);
+    return promise;
+  }
+
+  /** @private */
+  async _generateEmbeddingInternal(text, taskType, cacheKey) {
     try {
-      const result = await genAI.models.embedContent({
-        model:    EMBEDDING_MODEL,
-        contents: text,
-        config:   { taskType, outputDimensionality: EMBEDDING_DIM }
-      });
+      // H-3 fix: use executeWithRetry for 429/quota resilience with exponential backoff
+      const result = await executeWithRetry(
+        () => genAI.models.embedContent({
+          model:    EMBEDDING_MODEL,
+          contents: text,
+          config:   { taskType, outputDimensionality: EMBEDDING_DIM }
+        }),
+        { maxAttempts: 3, initialDelayMs: 1_000, maxDelayMs: 8_000, modelName: EMBEDDING_MODEL }
+      );
 
       const embedding = result.embeddings?.[0]?.values;
       if (!embedding || !Array.isArray(embedding)) return null;
@@ -301,7 +328,7 @@ class EmbeddingService {
       this._cacheSet(cacheKey, embedding);
       return embedding;
     } catch (error) {
-      logger.error('Embedding generation failed', error);
+      logger.error('Embedding generation failed after retries', error);
       return null;
     }
   }

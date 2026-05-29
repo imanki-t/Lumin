@@ -24,6 +24,12 @@ class MemoryCache {
      * queryHash → cached retrieval result + embedding for semantic lookup
      */
     this.queryCache = new Map();
+    /**
+     * M-7 fix: secondary index so getSemanticallyCachedResults only scans
+     * entries for the relevant historyId instead of all 200 entries.
+     * @type {Map<string, Set<string>>} historyId → Set of queryHash keys
+     */
+    this.byHistoryId = new Map();
   }
 
   // ── Cosine similarity (inline — avoids circular import with EmbeddingService) ──
@@ -109,16 +115,26 @@ class MemoryCache {
   getSemanticallyCachedResults(historyId, queryEmbedding, userId = null, guildId = null) {
     if (!queryEmbedding?.length) return null;
 
+    // M-7 fix: only scan entries for this historyId instead of all 200
+    const candidates = this.byHistoryId.get(historyId);
+    if (!candidates?.size) return null;
+
     const now = Date.now();
 
-    for (const [hash, entry] of this.queryCache.entries()) {
-      // Only consider entries for the same history/user/guild context
-      if (entry.historyId !== historyId) continue;
+    for (const hash of candidates) {
+      const entry = this.queryCache.get(hash);
+      if (!entry) {
+        candidates.delete(hash); // clean up stale reference
+        continue;
+      }
+
       if (entry.userId !== (userId ?? '') || entry.guildId !== (guildId ?? '')) continue;
 
-      // Evict expired entries opportunistically during scan
+      // Evict expired entries opportunistically
       if (now - entry.timestamp > QUERY_CACHE_TTL_MS) {
         this.queryCache.delete(hash);
+        candidates.delete(hash);
+        if (candidates.size === 0) this.byHistoryId.delete(historyId);
         continue;
       }
 
@@ -157,9 +173,23 @@ class MemoryCache {
       queryEmbedding: queryEmbedding ?? null
     });
 
+    // M-7: maintain historyId index for O(k) semantic scan where k = entries for this history
+    if (!this.byHistoryId.has(historyId)) this.byHistoryId.set(historyId, new Set());
+    this.byHistoryId.get(historyId).add(hash);
+
     // LRU eviction — Map preserves insertion order
     if (this.queryCache.size > MAX_QUERY_CACHE_SIZE) {
-      this.queryCache.delete(this.queryCache.keys().next().value);
+      const oldest = this.queryCache.keys().next().value;
+      const oldEntry = this.queryCache.get(oldest);
+      this.queryCache.delete(oldest);
+      // Remove from byHistoryId index
+      if (oldEntry?.historyId) {
+        const set = this.byHistoryId.get(oldEntry.historyId);
+        if (set) {
+          set.delete(oldest);
+          if (set.size === 0) this.byHistoryId.delete(oldEntry.historyId);
+        }
+      }
     }
   }
 
@@ -170,14 +200,17 @@ class MemoryCache {
    * @param {string} historyId
    */
   invalidateQueryCache(historyId) {
-    for (const [hash, data] of this.queryCache.entries()) {
-      if (data.historyId === historyId) this.queryCache.delete(hash);
+    const hashes = this.byHistoryId.get(historyId);
+    if (hashes) {
+      for (const hash of hashes) this.queryCache.delete(hash);
+      this.byHistoryId.delete(historyId);
     }
   }
 
   /** Clear the entire query cache. */
   clearCache() {
     this.queryCache.clear();
+    this.byHistoryId.clear();
   }
 }
 

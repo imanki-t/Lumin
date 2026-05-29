@@ -11,6 +11,7 @@ import { memoryCache }      from './MemoryCache.js';
 import { clusterEngine }    from './ClusterEngine.js';
 import { memoryStore }      from './MemoryStore.js';
 import { redisCache }       from './RedisCache.js';
+import { extractTextFromMessage } from './memoryUtils.js';
 import { formatDuration }   from '../modules/shared/messageFormatter.js';
 import { state }            from '../managers/StateManager.js';
 import {
@@ -20,18 +21,11 @@ import {
   MEMORY_MAX_RAG_RESULTS  as MAX_RAG_RESULTS,
   MEMORY_SCORE_THRESHOLD  as MIN_SIMILARITY_THRESHOLD,
   MEMORY_TIME_GAP_MS      as TIME_GAP_THRESHOLD_MS,
+  MEMORY_RAG_CUTOFF_MS    as RAG_CUTOFF_MS,
   MEMORY_MAX_INLINE_CTX   as MAX_INLINE_CONTEXT_SIZE
 } from './config.js';
 
 const logger = Logger.get('MemorySystem');
-
-// Extract plain text from a history message entry. Supports `content` and `parts` shapes.
-function extractTextFromMessage(message) {
-  if (!message || (!message.content && !message.parts)) return '';
-  const parts = message.content || message.parts;
-  if (!Array.isArray(parts)) return '';
-  return parts.filter(p => p?.text).map(p => p.text).join(' ').trim();
-}
 
 // ============================================================================
 // MEMORY SYSTEM FACADE
@@ -49,41 +43,29 @@ class MemorySystem {
    * @returns {Promise<void>}
    */
   async init() {
-    // Redis cache is optional — controlled by CACHE_ENABLED in modules/config.js.
-    // When disabled, the in-memory L1/L2 cache (MemoryCache) still works fine.
     if (CACHE_ENABLED) {
       await redisCache.connect();
     }
+    // C-5: restore persisted indexing state so restarts don't re-index everything
+    await memoryStore.loadIndexedCounts();
   }
 
-  /**
-   * Add a fact to a user's personal memory.
-   * @see MemoryStore.addPersonalData
-   */
+  /** @see MemoryStore.addPersonalData */
   addPersonalData(userId, fact) {
     return memoryStore.addPersonalData(userId, fact);
   }
 
-  /**
-   * Remove a fact from a user's personal memory.
-   * @see MemoryStore.removePersonalData
-   */
+  /** @see MemoryStore.removePersonalData */
   removePersonalData(userId, factKeyword) {
     return memoryStore.removePersonalData(userId, factKeyword);
   }
 
-  /**
-   * Retrieve user personal data context object.
-   * @see MemoryStore.getUserPersonalData
-   */
+  /** @see MemoryStore.getUserPersonalData */
   getUserPersonalData(userId) {
     return memoryStore.getUserPersonalData(userId);
   }
 
-  /**
-   * Invalidate cached personal data for a user.
-   * @see MemoryStore.invalidatePersonalDataCache
-   */
+  /** @see MemoryStore.invalidatePersonalDataCache */
   invalidatePersonalDataCache(userId) {
     return memoryStore.invalidatePersonalDataCache(userId);
   }
@@ -120,57 +102,139 @@ class MemorySystem {
   // ==========================================================================
 
   /**
-   * Simple text-based memory search — used by function tools to answer
-   * "do you remember X?" style queries.
+   * Search memory — looks in BOTH vector RAG memories AND stored user facts,
+   * merges results by relevance, and deduplicates.
+   * 
+   * Called by the `search_memory` function tool. Returns a flat array of strings
+   * ready to be joined and returned to the LLM.
    *
    * @param {string}      userId
    * @param {string|null} guildId
+   * @param {string}      historyId  - Correct historyId from the calling context
    * @param {string}      query
    * @returns {Promise<string[]>}
    */
-  async searchMemory(userId, guildId, query) {
+  async searchMemory(userId, guildId, historyId, query) {
+    if (!query?.trim()) return [];
+
     try {
-      const historyId = guildId || userId;
+      const searchId   = historyId || guildId || userId;
+      const queryLower = query.toLowerCase();
+      const queryWords = queryLower.split(/\s+/).filter(w => w.length > 2);
 
-      // When cache is disabled, go straight to Atlas $vectorSearch
-      if (!CACHE_ENABLED) {
-        const queryEmbedding = await embeddingService.generateEmbedding(query, 'RETRIEVAL_QUERY');
-        if (!queryEmbedding) return [];
-        const results = await db.findSimilarMemories(historyId, queryEmbedding, MAX_RAG_RESULTS * 2);
-        return (results || [])
-          .filter(e => e.score >= MIN_SIMILARITY_THRESHOLD)
-          .slice(0, MAX_RAG_RESULTS)
-          .map(entry => `[Memory] ${extractTextFromMessage({ content: entry.messages[0]?.content })}`);
-      }
-
-      // Cache enabled: check L1/L2 first
-      const exact = memoryCache.getCachedQueryResults(historyId, query, userId, guildId);
-      if (exact) {
-        return exact.map(entry =>
-          `[Memory] ${extractTextFromMessage({ content: entry.messages[0]?.content })}`
-        );
-      }
-
+      // ── 1. Vector RAG search ─────────────────────────────────────────────
+      let ragResults = [];
       const queryEmbedding = await embeddingService.generateEmbedding(query, 'RETRIEVAL_QUERY');
-      if (!queryEmbedding) return [];
 
-      const semantic = memoryCache.getSemanticallyCachedResults(historyId, queryEmbedding, userId, guildId);
-      if (semantic) {
-        return semantic.map(entry =>
-          `[Memory] ${extractTextFromMessage({ content: entry.messages[0]?.content })}`
-        );
+      if (queryEmbedding) {
+        // Try cache first, fall back to direct DB search
+        let dbResults = null;
+
+        if (CACHE_ENABLED) {
+          const exact = memoryCache.getCachedQueryResults(searchId, query, userId, guildId);
+          if (exact) {
+            dbResults = exact;
+          } else {
+            const semantic = memoryCache.getSemanticallyCachedResults(searchId, queryEmbedding, userId, guildId);
+            if (semantic) dbResults = semantic;
+          }
+        }
+
+        if (!dbResults) {
+          const raw = CACHE_ENABLED
+            ? await clusterEngine.clusterSearch(searchId, queryEmbedding, 0)
+            : await db.findSimilarMemories(searchId, queryEmbedding, MAX_RAG_RESULTS * 3);
+
+          dbResults = (raw || []).filter(e => (e.score ?? 0) >= MIN_SIMILARITY_THRESHOLD);
+          if (CACHE_ENABLED && dbResults.length) {
+            memoryCache.cacheQueryResults(searchId, query, dbResults, userId, guildId, queryEmbedding);
+          }
+        }
+
+        ragResults = (dbResults || [])
+          .slice(0, MAX_RAG_RESULTS)
+          .map(entry => {
+            const text = entry.messages
+              ?.map(m => extractTextFromMessage(m))
+              .filter(t => t.length > 0)
+              .join(' ')
+              .slice(0, 400)
+              || extractTextFromMessage({ content: entry.messages?.[0]?.content });
+            return {
+              type:  'memory',
+              text:  text.trim(),
+              score: entry.score ?? 0,
+              ts:    entry.timestamp ?? 0
+            };
+          })
+          .filter(r => r.text.length > 5);
       }
 
-      const results = await clusterEngine.clusterSearch(historyId, queryEmbedding, Date.now());
-      if (!results?.length) return [];
+      // ── 2. User facts search (always runs — zero embedding cost) ─────────
+      const [userFacts, personalData] = await Promise.all([
+        db.getUserFacts(userId).catch(() => []),
+        memoryStore.getUserPersonalData(userId).catch(() => null)
+      ]);
 
-      memoryCache.cacheQueryResults(historyId, query, results, userId, guildId, queryEmbedding);
+      // Score facts by query-word overlap
+      const factResults = (userFacts || [])
+        .map(fact => {
+          const fl    = fact.toLowerCase();
+          const hits  = queryWords.filter(w => fl.includes(w)).length;
+          const score = queryWords.length > 0 ? hits / queryWords.length : 0;
+          return { type: 'fact', text: fact, score, ts: 0 };
+        })
+        .filter(r => r.score > 0);
 
-      return results.map(entry =>
-        `[Memory] ${extractTextFromMessage({ content: entry.messages[0]?.content })}`
-      );
+      // Also check personal data blob (timezone, birthday, reminders, etc.)
+      const personalResults = [];
+      if (personalData?.text) {
+        const pl   = personalData.text.toLowerCase();
+        const hits = queryWords.filter(w => pl.includes(w)).length;
+        if (hits > 0 && queryWords.length > 0) {
+          const score = hits / queryWords.length;
+          // Extract only the relevant lines from the personal data block
+          const relevantLines = personalData.text
+            .split('\n')
+            .filter(line => queryWords.some(w => line.toLowerCase().includes(w)))
+            .slice(0, 3);
+          if (relevantLines.length > 0) {
+            personalResults.push({ type: 'personal', text: relevantLines.join('\n'), score, ts: 0 });
+          }
+        }
+      }
+
+      // ── 3. Merge, deduplicate, sort by score ──────────────────────────────
+      const all = [...ragResults, ...factResults, ...personalResults];
+      all.sort((a, b) => b.score - a.score);
+
+      // Deduplicate by text similarity (skip if > 80% of words overlap with a prior result)
+      const seen   = [];
+      const unique = [];
+      for (const r of all) {
+        const rWords = new Set(r.text.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+        const isDup  = seen.some(prev => {
+          const pWords = new Set(prev.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+          if (pWords.size === 0) return false;
+          const overlap = [...rWords].filter(w => pWords.has(w)).length;
+          return overlap / pWords.size > 0.8;
+        });
+        if (!isDup) {
+          unique.push(r);
+          seen.push(r.text);
+        }
+      }
+
+      // ── 4. Format output strings for the LLM ─────────────────────────────
+      return unique.map(r => {
+        const label = r.type === 'fact'     ? '[Stored Fact]'
+                    : r.type === 'personal' ? '[Personal Info]'
+                    :                         '[Conversation Memory]';
+        return `${label} ${r.text}`;
+      });
+
     } catch (error) {
-      logger.error('Memory search failed', error);
+      logger.error('searchMemory failed', error);
       return [];
     }
   }
@@ -182,40 +246,24 @@ class MemorySystem {
   /**
    * Retrieve relevant historical context for the current query via RAG.
    *
-   * TWO CODE PATHS — controlled by CACHE_ENABLED in modules/config.js:
-   *
-   *   CACHE_ENABLED = false  →  _directVectorSearch()
-   *     Skips ALL cache layers (L1/L2/L3) and the ClusterEngine entirely.
-   *     Every call goes directly to MongoDB Atlas $vectorSearch.
-   *     Zero local RAM used for embeddings — Atlas does all computation.
-   *     Best for: budget deployments, 512 MB RAM, 10k users.
-   *
-   *   CACHE_ENABLED = true  →  full L1 → L2 → L3 → ClusterEngine pipeline
-   *     L1: exact in-memory hit     (<0.1 ms, free)
-   *     L2: semantic in-memory hit  (<1 ms, free)
-   *     L3: Redis hit               (~1-2 ms, survives restarts)
-   *     L4: ClusterEngine + Atlas   (full RAG, ~50-200 ms)
-   *     Best for: dedicated servers with ≥2 GB RAM.
-   *
    * @param {string}      historyId
    * @param {string}      currentQuery
    * @param {number[]}    recentMessageTimestamps
    * @param {string|null} [userId]
    * @param {string|null} [guildId]
-   * @returns {Promise<{ messages: object[], personalData: object|null }>}
+   * @returns {Promise<{ messages: object[], personalData: object|null, queryEmbedding: number[]|null }>}
    */
   async getRelevantContext(historyId, currentQuery, recentMessageTimestamps, userId = null, guildId = null) {
     try {
       if (!currentQuery?.trim()) return { messages: [], personalData: null, queryEmbedding: null };
 
-      // ── CACHE DISABLED: direct Atlas $vectorSearch, zero local RAM ───────────
       if (!CACHE_ENABLED) {
         return await this._directVectorSearch(
           historyId, currentQuery, recentMessageTimestamps, userId, guildId
         );
       }
 
-      // ── L1: Exact in-memory hit (free, <0.1ms) ───────────────────────────────
+      // ── L1: Exact in-memory hit ───────────────────────────────────────────
       const exactCached = memoryCache.getCachedQueryResults(historyId, currentQuery, userId, guildId);
       if (exactCached) {
         const personalData = userId ? await memoryStore.getUserPersonalData(userId) : null;
@@ -229,11 +277,11 @@ class MemorySystem {
 
       if (!queryEmbedding) return { messages: [], personalData, queryEmbedding: null };
 
-      // ── L2: Semantic in-memory hit (free, <1ms) ──────────────────────────────
+      // ── L2: Semantic in-memory hit ────────────────────────────────────────
       const semanticCached = memoryCache.getSemanticallyCachedResults(historyId, queryEmbedding, userId, guildId);
       if (semanticCached) return { messages: semanticCached, personalData, queryEmbedding };
 
-      // ── L3: Redis hit (~1-2ms, survives restarts) ─────────────────────────────
+      // ── L3: Redis hit ─────────────────────────────────────────────────────
       const queryHash   = memoryCache.generateQueryHash(historyId, currentQuery, userId, guildId);
       const redisCached = await redisCache.get(historyId, queryHash);
       if (redisCached) {
@@ -241,10 +289,15 @@ class MemorySystem {
         return { messages: redisCached, personalData, queryEmbedding };
       }
 
-      // ── L4: ClusterEngine + Atlas full RAG ───────────────────────────────────
-      const cutoffTimestamp     = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
+      // ── L4: ClusterEngine + Atlas full RAG ───────────────────────────────
+      // H-4 fix: use RAG_CUTOFF_MS (5 min) for dedup, not TIME_GAP_THRESHOLD_MS (30s)
+      const maxTs = recentMessageTimestamps.length
+        ? recentMessageTimestamps.reduce((a, b) => Math.max(a, b))
+        : Date.now();
+      const cutoffTimestamp = maxTs - RAG_CUTOFF_MS;
+
       const crossContextEnabled = userId
-        ? (state.userSettings[userId]?.crossContextEnabled ?? false)
+        ? (state.userSettings?.[userId]?.crossContextEnabled ?? false)
         : false;
 
       const searchPromises = [
@@ -252,8 +305,6 @@ class MemorySystem {
       ];
 
       if (crossContextEnabled && userId) {
-        // Track X (cross-context ON): entire user footprint — all servers + DMs.
-        // Replaces Track 2 & 3 with a single broader query.
         searchPromises.push(
           db.findSimilarMemoriesByUser(userId, queryEmbedding, MAX_RAG_RESULTS, historyId)
             .then(results => (results || [])
@@ -267,7 +318,6 @@ class MemorySystem {
             ).catch(() => [])
         );
       } else {
-        // Track 2 (default): in a DM — also search current server history for this user
         if (userId && guildId && historyId !== guildId) {
           searchPromises.push(
             db.findSimilarMemoriesWithFilter(guildId, queryEmbedding, 1, { userId })
@@ -277,8 +327,6 @@ class MemorySystem {
               ).catch(() => [])
           );
         }
-
-        // Track 3 (default): in a server — also search this user's DM history
         if (guildId && historyId === guildId && userId) {
           searchPromises.push(
             clusterEngine.clusterSearch(userId, queryEmbedding, cutoffTimestamp)
@@ -293,7 +341,6 @@ class MemorySystem {
       allResults.sort((a, b) => b.score - a.score);
       const topResults = allResults.slice(0, MAX_RAG_RESULTS);
 
-      // Write-back to L1 + L3 (Redis is fire-and-forget)
       memoryCache.cacheQueryResults(historyId, currentQuery, topResults, userId, guildId, queryEmbedding);
       redisCache.set(historyId, queryHash, topResults);
 
@@ -307,29 +354,17 @@ class MemorySystem {
 
   /**
    * Direct MongoDB Atlas $vectorSearch — the CACHE_ENABLED=false fast path.
-   *
-   * All tracks fire as parallel Atlas aggregations.
-   * No local embeddings held in RAM. No LRU. No ClusterEngine.
-   *
-   * Cross-context behaviour is controlled by the CROSS_CONTEXT_ENABLED runtime
-   * flag (togglable live from the dashboard, no restart required):
-   *
-   *   OFF (default):
-   *     Track 1 — current historyId (main conversation)
-   *     Track 2 — DM→server bridge: if in a DM, also search current server history
-   *     Track 3 — server→DM bridge: if in a server, also search user's DM history
-   *
-   *   ON:
-   *     Track 1 — current historyId (main conversation)
-   *     Track X — full user-wide search: every server + DMs, all at once.
-   *               Replaces Track 2 & 3 with a single broader Atlas query.
-   *
    * @private
    */
   async _directVectorSearch(historyId, currentQuery, recentMessageTimestamps, userId, guildId) {
-    const cutoffTimestamp     = Math.max(...recentMessageTimestamps) - TIME_GAP_THRESHOLD_MS;
+    // H-4 + M-3 fix: use RAG_CUTOFF_MS and guard against empty array
+    const maxTs = recentMessageTimestamps.length
+      ? recentMessageTimestamps.reduce((a, b) => Math.max(a, b))
+      : Date.now();
+    const cutoffTimestamp = maxTs - RAG_CUTOFF_MS;
+
     const crossContextEnabled = userId
-      ? (state.userSettings[userId]?.crossContextEnabled ?? false)
+      ? (state.userSettings?.[userId]?.crossContextEnabled ?? false)
       : false;
 
     const [queryEmbedding, personalData] = await Promise.all([
@@ -340,7 +375,6 @@ class MemorySystem {
     if (!queryEmbedding) return { messages: [], personalData, queryEmbedding: null };
 
     const searchPromises = [
-      // Track 1: current conversation history (always runs)
       db.findSimilarMemories(historyId, queryEmbedding, MAX_RAG_RESULTS * 2)
         .then(results => (results || [])
           .filter(e => (e.timestamp || 0) < cutoffTimestamp && e.score >= MIN_SIMILARITY_THRESHOLD)
@@ -349,8 +383,6 @@ class MemorySystem {
     ];
 
     if (crossContextEnabled && userId) {
-      // Track X (cross-context ON): search entire user footprint — all servers + DMs.
-      // Replaces Track 2 & 3 with a single broader query.
       searchPromises.push(
         db.findSimilarMemoriesByUser(userId, queryEmbedding, MAX_RAG_RESULTS, historyId)
           .then(results => (results || [])
@@ -364,7 +396,6 @@ class MemorySystem {
           ).catch(() => [])
       );
     } else {
-      // Track 2 (default): in a DM — also search the current server's history for this user
       if (userId && guildId && historyId !== guildId) {
         searchPromises.push(
           db.findSimilarMemoriesWithFilter(guildId, queryEmbedding, 1, { userId })
@@ -374,8 +405,6 @@ class MemorySystem {
             ).catch(() => [])
         );
       }
-
-      // Track 3 (default): in a server — also search this user's DM history
       if (guildId && historyId === guildId && userId) {
         searchPromises.push(
           db.findSimilarMemories(userId, queryEmbedding, 2)
@@ -392,36 +421,32 @@ class MemorySystem {
     return { messages: allResults.slice(0, MAX_RAG_RESULTS), personalData, queryEmbedding };
   }
 
-    // ==========================================================================
+  // ==========================================================================
   // MAIN ENTRY POINT
   // ==========================================================================
 
   /**
    * Get the fully optimised conversation history for the Gemini API.
    *
-   * Pipeline:
-   *   1. Fetch + sort full history from DB
-   *   2. Fire-and-forget background indexing
-   *   3. Retrieve RAG context + personal data in parallel
-   *   4. Assemble context sections (old-message sample, RAG hits, personal data)
-   *   5. Return [contextMessage?, ...recentMessages] as Gemini contents array
-   *
    * @param {string}      historyId
    * @param {string}      currentQuery
-   * @param {string}      model         - passed for API compat; not used internally
+   * @param {string}      model
    * @param {string|null} [userId]
    * @param {string|null} [guildId]
-   * @returns {Promise<object[]>}       - Gemini `contents` array
+   * @returns {Promise<object[]>}
    */
   async getOptimizedHistory(historyId, currentQuery, model, userId = null, guildId = null) {
     try {
       const allHistory = await db.getChatHistory(historyId);
       if (!allHistory) return [];
 
-      // Flatten all history buckets into a single chronological array.
+      // M-6: avoid O(n²) push spread — iterate instead
       const historyArray = [];
       for (const key of Object.keys(allHistory)) {
-        historyArray.push(...(allHistory[key] || []));
+        const msgs = allHistory[key];
+        if (Array.isArray(msgs)) {
+          for (const m of msgs) historyArray.push(m);
+        }
       }
 
       if (historyArray.length === 0) return [];
@@ -441,13 +466,19 @@ class MemorySystem {
         return this.formatHistoryForAPI(recentMessages);
       }
 
-      // RAG disabled — let the AI use the search_memory tool only when needed.
-      // This avoids 3 extra embed API calls per message.
+      // H-2 fix: inject personal data even when RAG is disabled
       if (!ENABLE_RAG) {
-        return this.formatHistoryForAPI(recentMessages);
+        const personal = userId ? await memoryStore.getUserPersonalData(userId) : null;
+        const formatted = this.formatHistoryForAPI(recentMessages);
+        if (personal?.text) {
+          const personalBlock = { role: 'user', parts: [{ text: `[Your Stored Profile]\n${personal.text}` }] };
+          const bridge = [{ role: 'model', parts: [{ text: '[Profile noted]' }] }];
+          return [...formatted, ...bridge, personalBlock, { role: 'model', parts: [{ text: '[Noted]' }] }];
+        }
+        return formatted;
       }
 
-      // Fetch RAG context (no summary — see JSDoc above)
+      // RAG enabled path
       const ragResults = await this.getRelevantContext(
         historyId, currentQuery, recentTimestamps, userId, guildId
       );
@@ -480,10 +511,10 @@ class MemorySystem {
         });
       }
 
-      // Personal data (only if semantically relevant to this query)
+      // C-1 Step 3 / H-2: lower personal data similarity gate from 0.3 → 0.15
       if (personalData?.embedding && queryEmbedding) {
         const sim = embeddingService.cosineSimilarity(queryEmbedding, personalData.embedding);
-        if (sim >= 0.3) {
+        if (sim >= 0.15) {
           contextSections.push({
             type:      'personal-data',
             content:   personalData.text,
@@ -491,6 +522,13 @@ class MemorySystem {
             timestamp: Date.now()
           });
         }
+      } else if (personalData?.text) {
+        // Include personal data even without similarity check when no queryEmbedding
+        contextSections.push({
+          type:      'personal-data',
+          content:   personalData.text,
+          timestamp: Date.now()
+        });
       }
 
       const formattedContext = this.buildContextMessage(contextSections);
@@ -498,8 +536,6 @@ class MemorySystem {
 
       if (!formattedContext) return formattedRecent;
 
-      // If formattedRecent starts with 'user', prepend a model ack so the
-      // context user-block and the first real user turn don't collide.
       const needsBridge = formattedRecent.length > 0 && formattedRecent[0].role === 'user';
       const bridge = needsBridge
         ? [{ role: 'model', parts: [{ text: '[Context noted]' }] }]
@@ -509,6 +545,23 @@ class MemorySystem {
 
     } catch (error) {
       logger.error('History optimization failed', error);
+      // H-10 fix: fall back to in-memory state rather than returning empty
+      try {
+        const fallback = state.chatHistories?.[historyId];
+        if (fallback) {
+          const msgs = [];
+          for (const key of Object.keys(fallback)) {
+            const entries = fallback[key];
+            if (Array.isArray(entries)) {
+              for (const m of entries) msgs.push(m);
+            }
+          }
+          if (msgs.length > 0) {
+            msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+            return this.formatHistoryForAPI(msgs.slice(-RECENT_MESSAGE_WINDOW));
+          }
+        }
+      } catch { /* swallow fallback errors */ }
       return [];
     }
   }
@@ -519,7 +572,7 @@ class MemorySystem {
 
   /**
    * Build a single Gemini `contents` entry from context sections.
-   * Returns null if the assembled context exceeds MAX_INLINE_CONTEXT_SIZE.
+   * H-5 fix: truncates gracefully instead of returning null when over the limit.
    *
    * @param {Array<{ type: string, content: string, score?: number, clusterId?: number }>} sections
    * @returns {{ role: string, parts: object[] }|null}
@@ -536,16 +589,18 @@ class MemorySystem {
       text += `[${label}${scoreText}${clusterText}]\n${section.content}\n\n`;
     }
 
-    if (text.length > MAX_INLINE_CONTEXT_SIZE) return null;
+    // H-5 fix: truncate gracefully instead of silently dropping the whole block
+    if (text.length > MAX_INLINE_CONTEXT_SIZE) {
+      const truncated = text.slice(0, MAX_INLINE_CONTEXT_SIZE - 60) +
+        '\n\n[...context truncated for length]';
+      return { role: 'user', parts: [{ text: truncated.trim() }] };
+    }
 
     return { role: 'user', parts: [{ text: text.trim() }] };
   }
 
   /**
    * Human-readable label for a context section type.
-   *
-   * NOTE: 'summary' label removed — generateSummary has been removed entirely.
-   *
    * @param {string} type
    * @returns {string}
    */
@@ -591,11 +646,12 @@ class MemorySystem {
       }
       prevTimestamp = entry.timestamp;
 
+      // L-12 fix: only set userInfoAdded after a real text part is processed
       let userInfoAdded = false;
       for (const part of (entry.content || entry.parts || [])) {
         if (part.text !== undefined && part.text !== '') {
           let text = part.text;
-          // Prefix first user text part with display name
+          // L-12 fix: prefix username only on the first real text part
           if (!userInfoAdded && entry.role === 'user' && entry.username && entry.displayName) {
             text = `[${entry.displayName} (@${entry.username})]: ${text}`;
             userInfoAdded = true;
@@ -610,7 +666,12 @@ class MemorySystem {
         }
       }
 
-      if (apiEntry.parts.length > 0) formatted.push(apiEntry);
+      // M-14 fix: preserve media-only messages with a placeholder so alternation isn't broken
+      if (apiEntry.parts.length === 0) {
+        apiEntry.parts.push({ text: '[media-only message]' });
+      }
+
+      formatted.push(apiEntry);
     }
 
     return this.sanitizeHistory(formatted);
@@ -618,9 +679,7 @@ class MemorySystem {
 
   /**
    * Enforce strict user→model alternation required by the Gemini API.
-   * Merges consecutive same-role entries, drops leading model turns,
-   * and drops a trailing user turn (prevents double-user collision with
-   * the live message that follows).
+   * M-8 fix: only drop trailing user entry if history has more than 1 entry.
    *
    * @param {object[]} entries
    * @returns {object[]}
@@ -642,8 +701,8 @@ class MemorySystem {
     // History must start with 'user'
     while (merged.length > 0 && merged[0].role !== 'user') merged.shift();
 
-    // Drop unpaired trailing 'user' — live message supplies the next user turn
-    if (merged.length > 0 && merged[merged.length - 1].role === 'user') merged.pop();
+    // M-8 fix: only pop trailing user if length > 1 (avoids emptying 2-entry histories)
+    if (merged.length > 1 && merged[merged.length - 1].role === 'user') merged.pop();
 
     return merged;
   }
@@ -652,12 +711,6 @@ class MemorySystem {
   // STATUS & DEBUG
   // ==========================================================================
 
-  /**
-   * Return serialisable status across all memory subsystems.
-   * Called by the `/status` admin command.
-   *
-   * @returns {object}
-   */
   getQueueStatus() {
     return {
       embeddingCacheSize:           embeddingService.embeddingCache.size,
@@ -679,6 +732,7 @@ class MemorySystem {
         clusterCacheTTL:      CACHE_ENABLED ? '15m' : 'n/a',
         personalDataCacheTTL: '5m',
         timeGapThreshold:     '30s',
+        ragCutoff:            '5min',
         backgroundClustering: CACHE_ENABLED ? 'enabled' : 'disabled',
         redisCache:           CACHE_ENABLED ? (redisCache.isAvailable ? 'connected' : 'disconnected') : 'disabled'
       },
@@ -689,12 +743,6 @@ class MemorySystem {
     };
   }
 
-  /**
-   * Clear all caches across every memory subsystem.
-   * Admin/debug only.
-   *
-   * @returns {{ success: boolean, message: string }}
-   */
   clearAllCaches() {
     embeddingService.clearCache();
     memoryCache.clearCache();
@@ -705,7 +753,7 @@ class MemorySystem {
 }
 
 // ============================================================================
-// EXPORT SINGLETON — preserves the same export shape as the original
+// EXPORT SINGLETON
 // ============================================================================
 
 export const memorySystem = new MemorySystem();
