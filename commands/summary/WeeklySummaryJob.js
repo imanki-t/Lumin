@@ -269,9 +269,8 @@ export async function runWeeklySummaryJob() {
   logger.info('Weekly summary job starting…');
 
   try {
-    // L-8 fix: only process users active in the last 14 days.
-    // Join with memory_entries (recent activity) to filter cold users.
-    const ACTIVITY_CUTOFF_MS = 14 * 24 * 60 * 60 * 1_000;
+    // L-8 fix: only process users active in the last 7 days (current week).
+    const ACTIVITY_CUTOFF_MS = 7 * 24 * 60 * 60 * 1_000;
     const cutoffDate = new Date(Date.now() - ACTIVITY_CUTOFF_MS);
 
     // Get users that have BOTH stored facts AND a recent memory entry
@@ -285,10 +284,28 @@ export async function runWeeklySummaryJob() {
     const allFactUserIds = new Set(
       await getCollection(COLLECTIONS.USER_FACTS).distinct('userId')
     );
-    const userIds = activeUserIds.filter(id => allFactUserIds.has(id));
+    const eligibleIds = activeUserIds.filter(id => allFactUserIds.has(id));
+
+    if (!eligibleIds.length) {
+      logger.info('Weekly summary job: no active users with facts found');
+      return;
+    }
+
+    // Week-freshness dedup: skip users who already have a summary for this week.
+    // Prevents duplicate generation if the bot restarts mid-week or the job is
+    // somehow triggered more than once in the same week.
+    const currentWeek = _weekLabel();
+    const alreadyDoneThisWeek = new Set(
+      (await getCollection(COLLECTIONS.WEEKLY_SUMMARIES)
+        .find({ weekOf: currentWeek }, { projection: { userId: 1, _id: 0 } })
+        .toArray()
+      ).map(d => d.userId)
+    );
+
+    const userIds = eligibleIds.filter(id => !alreadyDoneThisWeek.has(id));
 
     if (!userIds.length) {
-      logger.info('Weekly summary job: no active users with facts found');
+      logger.info('Weekly summary job: all active users already have a fresh summary for this week');
       return;
     }
 
@@ -296,7 +313,7 @@ export async function runWeeklySummaryJob() {
     const { getApiKeyCount } = await import('../../managers/ApiKeyManager.js');
     const batchSize = Math.max(1, getApiKeyCount());
 
-    logger.info(`Weekly summary job: ${userIds.length} users, batch size ${batchSize}`);
+    logger.info(`Weekly summary job: ${userIds.length} users to process (${alreadyDoneThisWeek.size} already done this week), batch size ${batchSize}`);
 
     let successCount = 0;
     let failCount    = 0;
@@ -345,11 +362,20 @@ export function scheduleWeeklySummaryJob() {
 
 function _msUntilNextSunday2AM() {
   const now = new Date();
-  const next = new Date(Date.UTC(
+
+  // Build a candidate: today at 02:00 UTC
+  const candidate = new Date(Date.UTC(
     now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 2, 0, 0, 0
   ));
-  // Advance to next Sunday
-  const daysUntilSunday = (7 - now.getUTCDay()) % 7 || 7;
-  next.setUTCDate(next.getUTCDate() + daysUntilSunday);
-  return Math.max(next.getTime() - now.getTime(), 60_000); // min 1 min
+
+  // If today IS Sunday and 02:00 UTC hasn't passed yet — run later today.
+  // (The original code always added 7 days on Sunday, missing the same-day slot.)
+  if (now.getUTCDay() === 0 && now.getTime() < candidate.getTime()) {
+    return Math.max(candidate.getTime() - now.getTime(), 60_000);
+  }
+
+  // Otherwise advance to the NEXT Sunday at 02:00 UTC.
+  const daysUntilNextSunday = (7 - now.getUTCDay()) % 7 || 7;
+  candidate.setUTCDate(candidate.getUTCDate() + daysUntilNextSunday);
+  return Math.max(candidate.getTime() - now.getTime(), 60_000); // min 1 min
 }
