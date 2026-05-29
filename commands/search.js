@@ -152,7 +152,7 @@ function errorEmbed(color, title, description) {
  * - Gemini models: googleSearch + urlContext, plus codeExecution when no media attached.
  *
  * NOTE: dynamicRetrievalConfig / dynamicThreshold only works on old Gemini 1.5 models
- * via the deprecated googleSearchRetrieval tool. Current models (2.5-flash, 3.x) use
+ * via the deprecated googleSearchRetrieval tool. Current models (3.5-flash, 3.x) use
  * plain { googleSearch: {} } — there is no API-level parameter to force search on every
  * call. The system prompt instruction is the only lever available for current models.
  *
@@ -322,7 +322,7 @@ async function sendSearchResponse(
  *   uses the global MODEL_FALLBACK_CHAIN for internal model switching.  When
  *   ENABLE_GEMMA=true that chain is replaced with Gemma-only models, so a rate
  *   limit on gemini-3.1-flash-lite causes withRetryPerModel to jump
- *   straight to Gemma — silently skipping gemini-2.5-flash — before the
+ *   straight to Gemma — silently skipping gemini-3.5-flash — before the
  *   searchFallbackChain loop in executeSearchInteraction ever sees the error.
  *
  *   By calling getCurrentClient() directly, rate-limit errors propagate as real
@@ -555,8 +555,8 @@ export async function executeSearchInteraction(interaction) {
     //                                      by ENABLE_GEMMA; Gemma 4 supports
     //                                      googleSearch for /search purposes)
     //
-    // gemini-2.5-flash removed: it was burning quota as a mid-tier fallback
-    // that users never asked for.  Gemma 4 is the intended second tier.
+    // gemini-3.5-flash not used as a mid-tier fallback here — it was
+    // burning quota without user benefit.  Gemma 4 is the intended second tier.
     // ENABLE_GEMMA flag intentionally ignored here — /search always falls
     // back to Gemma 4 regardless of the global chat routing setting.
     const searchFallbackChain = [
