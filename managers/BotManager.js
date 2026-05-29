@@ -184,7 +184,7 @@ export const client = new Client({
  * Called inside the proxy callback every time ApiKeyManager picks a model.
  * Without this, toolConfig.includeServerSideToolInvocations and built-in tools
  * (urlContext, codeExecution) stay in the request after a fallback, causing
- * 400 INVALID_ARGUMENT on gemini-2.5-flash — retried 90× burning all quota.
+ * 400 INVALID_ARGUMENT on gemini-3.5-flash — retried 90× burning all quota.
  *
  * @param {object} request - Mutated in place.
  * @param {string} modelName - The model ApiKeyManager is about to call.
