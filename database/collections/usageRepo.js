@@ -177,6 +177,67 @@ export async function deleteUserFact(userId, factKeyword) {
 }
 
 // ============================================================================
+// SERVER FACTS (shared guild-scoped memory — visible to all users in a server)
+// ============================================================================
+
+/**
+ * Store a shared fact at the guild level.
+ * Server facts are visible to all users in the same server — use for
+ * relationship info, group decisions, or other inter-member context.
+ * @param {string} guildId
+ * @param {string} fact
+ */
+export async function saveServerFact(guildId, fact) {
+  try {
+    await getCollection(COLLECTIONS.SERVER_FACTS).insertOne({
+      guildId, fact, createdAt: new Date()
+    });
+  } catch (error) {
+    logger.error('Error saving server fact', error);
+    throw error;
+  }
+}
+
+/**
+ * Retrieve up to 30 most-recent server-level facts for a guild.
+ * @param {string} guildId
+ * @returns {Promise<string[]>}
+ */
+export async function getServerFacts(guildId) {
+  try {
+    const docs = await getCollection(COLLECTIONS.SERVER_FACTS)
+      .find({ guildId })
+      .sort({ createdAt: -1 })
+      .limit(30)
+      .toArray();
+    return docs.map(d => d.fact);
+  } catch (error) {
+    logger.error('Error getting server facts', error);
+    return [];
+  }
+}
+
+/**
+ * Delete server facts matching a keyword (case-insensitive, regex-safe).
+ * @param {string} guildId
+ * @param {string} factKeyword
+ * @returns {Promise<number>} Count of deleted documents
+ */
+export async function deleteServerFact(guildId, factKeyword) {
+  try {
+    const safePattern = escapeRegex(String(factKeyword));
+    const result = await getCollection(COLLECTIONS.SERVER_FACTS).deleteMany({
+      guildId,
+      fact: { $regex: safePattern, $options: 'i' }
+    });
+    return result.deletedCount;
+  } catch (error) {
+    logger.error('Error deleting server fact', error);
+    return 0;
+  }
+}
+
+// ============================================================================
 // INDEXED COUNTS (background RAG indexing state persistence)
 // Survives bot restarts so MemoryStore doesn't re-index everything from scratch.
 // ============================================================================
