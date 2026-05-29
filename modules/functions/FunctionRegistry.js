@@ -11,13 +11,14 @@
 // ============================================================================
 
 export const FUNCTION_NAMES = Object.freeze({
-  MANAGE_MEMORY: 'manage_personal_memory',
-  SEARCH_MEMORY: 'search_memory',
-  SET_REMINDER:  'set_reminder',
-  SET_BIRTHDAY:  'set_birthday',
-  SET_TIMEZONE:  'set_timezone',
-  CHECK_TIME:    'check_time_elapsed',
-  GET_TIMESTAMP: 'get_message_timestamp'
+  MANAGE_MEMORY:      'manage_personal_memory',
+  MANAGE_SERVER_FACT: 'manage_server_fact',
+  SEARCH_MEMORY:      'search_memory',
+  SET_REMINDER:       'set_reminder',
+  SET_BIRTHDAY:       'set_birthday',
+  SET_TIMEZONE:       'set_timezone',
+  CHECK_TIME:         'check_time_elapsed',
+  GET_TIMESTAMP:      'get_message_timestamp'
 });
 
 export const MEMORY_ACTIONS = Object.freeze({
@@ -46,7 +47,7 @@ export const functionTools = [
     functionDeclarations: [
       {
         name:        FUNCTION_NAMES.MANAGE_MEMORY,
-        description: 'Add or remove permanent facts/memories about the user (e.g., likes, dislikes, pets).',
+        description: 'Add or remove permanent facts/memories about the CURRENT USER ONLY (their personal likes, dislikes, pets, preferences). Do NOT use this for facts involving other server members or group relationships — use manage_server_fact for those instead.',
         parameters: {
           type: PARAMETER_TYPES.OBJECT,
           properties: {
@@ -58,6 +59,38 @@ export const functionTools = [
             info: {
               type:        PARAMETER_TYPES.STRING,
               description: 'The fact or information to store/delete'
+            }
+          },
+          required: ['action', 'info']
+        }
+      },
+      {
+        name:        FUNCTION_NAMES.MANAGE_SERVER_FACT,
+        description: [
+          'Add or remove a SHARED fact for this entire Discord server — visible to ALL members.',
+          'Use this when you learn something that is true at the server level, not just about one person.',
+          '',
+          'STORE as a server fact when:',
+          '  • Relationships between members ("UserA and UserB are dating/best friends/rivals")',
+          '  • Server-wide nicknames ("Everyone calls Shreyash \'Shrey\'")',
+          '  • Group activities ("They play Minecraft together every Friday")',
+          '  • Informal server roles ("Priti is the server owner / the designated memer")',
+          '  • Events that happened in/to the server community',
+          '',
+          'Keep using manage_personal_memory for facts that belong to ONE user only.',
+          'ONLY callable when the conversation is happening in a guild (not DMs).',
+        ].join('\n'),
+        parameters: {
+          type: PARAMETER_TYPES.OBJECT,
+          properties: {
+            action: {
+              type:        PARAMETER_TYPES.STRING,
+              enum:        [MEMORY_ACTIONS.ADD, MEMORY_ACTIONS.REMOVE],
+              description: 'add — store a new server fact; remove — delete facts matching the keyword'
+            },
+            info: {
+              type:        PARAMETER_TYPES.STRING,
+              description: 'The server-level fact to store or the keyword to match for deletion'
             }
           },
           required: ['action', 'info']

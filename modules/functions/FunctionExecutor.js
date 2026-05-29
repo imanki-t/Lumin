@@ -118,6 +118,33 @@ async function handleManageMemory(userId, action, info) {
 }
 
 /**
+ * Handle `manage_server_fact` — add or remove a guild-scoped shared fact.
+ * These facts are visible to ALL users in the server, making it possible
+ * to give consistent answers about inter-member relationships and server context.
+ *
+ * @param {string|null} guildId
+ * @param {string}      action  - 'add' | 'remove'
+ * @param {string}      info
+ * @returns {Promise<{ result: string }>}
+ */
+async function handleManageServerFact(guildId, action, info) {
+  if (!guildId) {
+    return { result: 'Server facts are only available in guild (server) channels, not DMs.' };
+  }
+  try {
+    if (action === MEMORY_ACTIONS.ADD) {
+      await db.saveServerFact(guildId, info);
+      return { result: `Server fact saved: ${info}` };
+    }
+    const deleted = await db.deleteServerFact(guildId, info);
+    return { result: deleted > 0 ? `Server fact removed (${deleted} entries)` : 'No matching server fact found.' };
+  } catch (error) {
+    logger.error('handleManageServerFact failed', error);
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+/**
  * Handle `search_memory` — vector-search past conversations.
  * C-3 fix: accept historyId from caller so the correct memory bucket is searched.
  * @param {string}      userId
@@ -286,6 +313,10 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId) {
         switch (call.name) {
           case FUNCTION_NAMES.MANAGE_MEMORY:
             response = await handleManageMemory(userId, args.action, args.info);
+            break;
+
+          case FUNCTION_NAMES.MANAGE_SERVER_FACT:
+            response = await handleManageServerFact(guildId, args.action, args.info);
             break;
 
           case FUNCTION_NAMES.SEARCH_MEMORY:
