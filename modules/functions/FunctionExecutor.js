@@ -146,9 +146,21 @@ async function handleManageServerFact(guildId, action, info, category = 'general
 }
 
 /**
- * Handle `search_memory` — vector-search past conversations + stored facts.
- * Also searches server facts for the current guild AND cross-server facts if the
- * user is a member of other guilds the bot is in.
+ * Handle `search_memory` — unified parallel search across all memory stores.
+ *
+ * Resolves cross-context parameters from the Discord client here so that
+ * MemorySystem.searchMemory() remains framework-agnostic.  All actual search
+ * logic, parallelism, timeouts, and deduplication live in searchMemory().
+ *
+ * Standard search (always):
+ *   • Vector RAG memories (current context)
+ *   • User personal facts
+ *   • Personal data (timezone, birthday, etc.)
+ *   • Current server facts
+ *
+ * Cross-context search (crossContextEnabled only):
+ *   • RAG memories from other servers / DMs this user appears in
+ *   • Server facts from other guilds the user is in
  *
  * @param {string}      userId
  * @param {string|null} guildId
@@ -157,46 +169,31 @@ async function handleManageServerFact(guildId, action, info, category = 'general
  * @returns {Promise<{ result: string }>}
  */
 async function handleSearchMemory(userId, guildId, historyId, query) {
-  // ── 1. Core RAG + user facts search ─────────────────────────────────────
-  const memories = await memorySystem.searchMemory(userId, guildId, historyId, query);
+  // ── Resolve cross-context settings ───────────────────────────────────────
+  const crossContextEnabled = state.userSettings?.[userId]?.crossContextEnabled ?? false;
 
-  // ── 2. Current guild server facts (keyword match) ────────────────────────
-  const serverFactResults = [];
-  if (guildId) {
+  // Pre-compute other guild IDs from the Discord client cache.
+  // Only pay this cost when cross-context is actually on; skipped entirely otherwise.
+  let otherGuildIds = [];
+  if (crossContextEnabled && userId) {
     try {
-      const serverFacts = await db.getServerFacts(guildId);
-      const queryLower  = query.toLowerCase();
-      const queryWords  = queryLower.split(/\s+/).filter(w => w.length > 2);
-      const matched = serverFacts.filter(f =>
-        queryWords.some(w => f.toLowerCase().includes(w))
-      );
-      matched.forEach(f => serverFactResults.push(`[Server Fact] ${f}`));
-    } catch { /* non-fatal */ }
+      otherGuildIds = client.guilds.cache
+        .filter(g => g.members.cache.has(userId) && g.id !== guildId)
+        .map(g => g.id);
+    } catch { /* non-fatal — cross-guild is best-effort */ }
   }
 
-  // ── 3. Cross-guild server facts (other servers this user is in) ──────────
-  // Works when guild members are cached (standard for active guilds).
-  const crossGuildResults = [];
-  try {
-    const otherGuildIds = client.guilds.cache
-      .filter(g => g.members.cache.has(userId) && g.id !== guildId)
-      .map(g => g.id);
+  // ── Delegate to fully parallel searchMemory ───────────────────────────────
+  const results = await memorySystem.searchMemory(
+    userId,
+    guildId,
+    historyId,
+    query,
+    { crossContextEnabled, otherGuildIds }
+  );
 
-    if (otherGuildIds.length > 0) {
-      const crossFacts = await db.getServerFactsMultiGuild(otherGuildIds);
-      const queryLower  = query.toLowerCase();
-      const queryWords  = queryLower.split(/\s+/).filter(w => w.length > 2);
-      const matched = crossFacts.filter(f =>
-        queryWords.some(w => f.toLowerCase().includes(w))
-      );
-      matched.forEach(f => crossGuildResults.push(`[Cross-Server Fact] ${f}`));
-    }
-  } catch { /* non-fatal — cross-guild is best-effort */ }
-
-  // ── 4. Merge all results ─────────────────────────────────────────────────
-  const all = [...memories, ...serverFactResults, ...crossGuildResults];
   return {
-    result: all.length > 0 ? all.join('\n') : MSG.NO_MEMORIES_FOUND
+    result: results.length > 0 ? results.join('\n') : MSG.NO_MEMORIES_FOUND
   };
 }
 
