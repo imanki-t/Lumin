@@ -129,9 +129,22 @@ async function getSummaryFromDB(userId) {
   } catch { return null; }
 }
 
+/**
+ * L-18 fix: compute the correct ISO 8601 week number.
+ * The old Math.ceil(day/7) formula was wrong (it gives 1–5, not 1–53,
+ * and snaps at month boundaries rather than real weeks).
+ * @returns {string} e.g. "2025-W21"
+ */
 function _weekLabel() {
   const d = new Date();
-  return `${d.getUTCFullYear()}-W${String(Math.ceil(d.getUTCDate() / 7)).padStart(2, '0')}`;
+  // ISO week: Thursday of the current week must be in the given year.
+  // Algorithm from https://www.epochconverter.com/weeknumbers
+  const dayOfWeek = d.getUTCDay() || 7; // 1=Mon … 7=Sun
+  const thursday  = new Date(d);
+  thursday.setUTCDate(d.getUTCDate() + 4 - dayOfWeek); // the Thursday of this week
+  const yearStart = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 1));
+  const weekNo    = Math.ceil(((thursday - yearStart) / 86_400_000 + 1) / 7);
+  return `${thursday.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
 }
 
 // ============================================================================
@@ -256,10 +269,26 @@ export async function runWeeklySummaryJob() {
   logger.info('Weekly summary job starting…');
 
   try {
-    const userIds = await getCollection(COLLECTIONS.USER_FACTS).distinct('userId');
+    // L-8 fix: only process users active in the last 14 days.
+    // Join with memory_entries (recent activity) to filter cold users.
+    const ACTIVITY_CUTOFF_MS = 14 * 24 * 60 * 60 * 1_000;
+    const cutoffDate = new Date(Date.now() - ACTIVITY_CUTOFF_MS);
+
+    // Get users that have BOTH stored facts AND a recent memory entry
+    const activeUserIds = await getCollection(COLLECTIONS.MEMORY_ENTRIES)
+      .distinct('metadata.userId', {
+        'metadata.userId': { $exists: true, $ne: null },
+        timestamp: { $gte: cutoffDate.getTime() }
+      });
+
+    // Intersect with users who actually have facts (no point summarising if no facts)
+    const allFactUserIds = new Set(
+      await getCollection(COLLECTIONS.USER_FACTS).distinct('userId')
+    );
+    const userIds = activeUserIds.filter(id => allFactUserIds.has(id));
 
     if (!userIds.length) {
-      logger.info('Weekly summary job: no users with facts found');
+      logger.info('Weekly summary job: no active users with facts found');
       return;
     }
 
