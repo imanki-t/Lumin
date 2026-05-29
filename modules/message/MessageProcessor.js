@@ -206,14 +206,18 @@ async function buildSystemInstruction(message, effectiveSettings, serverSettings
   // ── Server facts: guild-scoped shared memory (visible to ALL server users) ─
   // Injected unconditionally in guild context so the bot can give consistent
   // answers about inter-member relationships from any user's perspective.
+  // Facts are grouped by category for clearer LLM parsing.
   if (guildId) {
     try {
-      const { default: db } = await import('../../database/index.js');
-      const serverFacts = await db.getServerFacts(guildId);
-      if (serverFacts?.length > 0) {
-        instructions += `\n\n## Shared Server Knowledge (visible to all users in this server)\n`;
-        instructions += serverFacts.map(f => `- ${f}`).join('\n');
-        instructions += `\n\n> These facts apply to all members. Use them to give consistent answers regardless of who is asking.`;
+      const { default: db2 } = await import('../../database/index.js');
+      const grouped = await db2.getServerFactsCategorized(guildId);
+      if (grouped.size > 0) {
+        instructions += `\n\n## Shared Server Knowledge (visible to all members — use for consistent answers)\n`;
+        for (const [label, facts] of grouped) {
+          instructions += `\n### ${label}\n`;
+          instructions += facts.map(f => `- ${f}`).join('\n');
+        }
+        instructions += `\n\n> When any user asks about these facts (relationships, nicknames, roles, etc.) answer from this knowledge directly — never say you don't know.`;
       }
     } catch { /* non-fatal */ }
   }
