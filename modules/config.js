@@ -34,12 +34,10 @@ export const MODELS = {
   'gemini-3.1-pro':        'gemini-3.1-pro-preview',      // most capable, agentic
   'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite', // fastest / cheapest Gemini 3
   'gemini-3-flash':        'gemini-3-flash-preview',      // frontier-class, fraction of cost
-  'gemini-3.5-flash':        'gemini-3.5-flash',
+  'gemini-3.5-flash':      'gemini-3.5-flash',            // speed + quality balance
 
   // ── Gemini 2.5 series ──────────────────────────────────────────────────────
   'gemini-2.5-pro':        'gemini-2.5-pro',              // best reasoning + coding
-  'gemini-2.5-flash':      'gemini-2.5-flash',            // best price-performance
-  'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite',       // fastest / cheapest 2.5
 
   // ── Gemma 4 (confirmed on Gemini API) ─────────────────────────────────────
   'gemma-4-26b':           'gemma-4-26b-a4b-it',   // MoE 26B active params
@@ -55,7 +53,7 @@ export const MODELS = {
 
 export const GEMINI_3_MODELS = [
   'gemini-3.1-pro-preview',
-  'gemini-3.1-flash-lite-preview',
+  'gemini-3.1-flash-lite',
   'gemini-3-flash-preview',
 ];
 
@@ -89,7 +87,7 @@ export const MODEL_FALLBACK_CHAIN = [
 
 // After this many successful calls on a model, proactively rotate to the next.
 export const MODEL_CALL_THRESHOLDS = {
-  'gemini-3.1-flash-lite-preview': 500
+  'gemini-3.1-flash-lite': 500
 };
 
 export const RATE_LIMIT_ERRORS = [429, 'RESOURCE_EXHAUSTED', 'RATE_LIMIT_EXCEEDED', 'QUOTA_EXCEEDED'];
@@ -153,8 +151,7 @@ export const MAX_QUEUE_DEPTH_PER_USER       = 5;     // messages beyond this are
 export const PDF_ENABLED_FOR_GEMINI         = false; // disabled to save RAM and quota
 export const CACHE_ENABLED                  = false; // Redis L3 cache; in-memory L1/L2 always on
 export const WEEKLY_SUMMARY_ENABLED         = true;  // set false to skip weekly context summary job entirely
-// NOTE: cross-context is a per-user setting only (state.userSettings[userId].crossContextEnabled).
-// There is no global override flag — removed to prevent confusion.
+export const CROSS_CONTEXT_ENABLED          = false; // global default; overridden per-user via userSettings
 
 // ── MEDIA PROCESSING ─────────────────────────────────────────────────────────
 // Individual toggles — set false to reject that media type before it hits the AI.
