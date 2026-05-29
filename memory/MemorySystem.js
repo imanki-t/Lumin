@@ -16,7 +16,6 @@ import { formatDuration }   from '../modules/shared/messageFormatter.js';
 import { state }            from '../managers/StateManager.js';
 import {
   CACHE_ENABLED,
-  ENABLE_RAG,
   MEMORY_RECENT_WINDOW    as RECENT_MESSAGE_WINDOW,
   MEMORY_MAX_RAG_RESULTS  as MAX_RAG_RESULTS,
   MEMORY_SCORE_THRESHOLD  as MIN_SIMILARITY_THRESHOLD,
@@ -24,6 +23,7 @@ import {
   MEMORY_RAG_CUTOFF_MS    as RAG_CUTOFF_MS,
   MEMORY_MAX_INLINE_CTX   as MAX_INLINE_CONTEXT_SIZE
 } from './config.js';
+import { getFlag } from '../modules/shared/runtimeFlags.js';
 
 const logger = Logger.get('MemorySystem');
 
@@ -467,7 +467,7 @@ class MemorySystem {
       }
 
       // H-2 fix: inject personal data even when RAG is disabled
-      if (!ENABLE_RAG) {
+      if (!getFlag('ENABLE_RAG')) {
         const personal = userId ? await memoryStore.getUserPersonalData(userId) : null;
         const formatted = this.formatHistoryForAPI(recentMessages);
         if (personal?.text) {
