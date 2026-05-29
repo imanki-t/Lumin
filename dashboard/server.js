@@ -1253,7 +1253,7 @@ router.get('/api/config/rate-limits', authenticate, (req, res) => {
       WINDOW_DURATION_MS:  60_000,
       COOLDOWN_DURATION_MS: 60_000,
       MODEL_REQUESTS_PER_MINUTE: {
-        'gemini-3.1-flash-lite-preview': null  // null = Infinity / unlimited
+        'gemini-3.1-flash-lite': null  // null = Infinity / unlimited
       },
       RETRY_DELAYS: {
         FORBIDDEN:    3_000,
