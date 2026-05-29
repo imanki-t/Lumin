@@ -4,7 +4,7 @@
  * @module modules/message/HistoryManager
  */
 
-import { chatHistoryLock, updateChatHistory, state } from '../../managers/BotManager.js';
+import { getHistoryLock, updateChatHistory, state } from '../../managers/BotManager.js';
 import * as db        from '../../database.js';
 import { memorySystem } from '../../memory/MemorySystem.js';
 import { Logger }      from '../../core/Logger.js';
@@ -46,8 +46,9 @@ export async function saveMessageHistory({
   originalMessage,
   preparedMessages = null
 }) {
-  // Run inside the global history lock to prevent concurrent corruption
-  await chatHistoryLock.runExclusive(async () => {
+  // M-10 fix: per-historyId lock — User A's save no longer blocks User B's
+  const lock = getHistoryLock(historyId);
+  await lock.runExclusive(async () => {
     try {
       if (preparedMessages?.length > 1) {
         // ── Batched turn: persist each user message individually ─────────
@@ -103,9 +104,12 @@ export async function saveMessageHistory({
         .storeMemoryWithEmbedding(historyId, newHistory, userId, guildId)
         .catch(err => logger.error('Background memory indexing failed', err));
 
-      // Targeted DB save — only this conversation's history, not all state
-      db.saveChatHistory(historyId, state.chatHistories[historyId])
-        .catch(err => logger.error(`Failed to save chat history for ${historyId}`, err));
+      // L-7 fix: guard against saving undefined history (uninitialized historyId)
+      const historyToSave = state.chatHistories[historyId];
+      if (historyToSave) {
+        db.saveChatHistory(historyId, historyToSave)
+          .catch(err => logger.error(`Failed to save chat history for ${historyId}`, err));
+      }
 
     } catch (err) {
       logger.error('Error inside history save lock', err);

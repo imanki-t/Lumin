@@ -48,27 +48,44 @@ const SUMMARY_PATTERNS = [
 
 const DISCORD_LINK_REGEX = /https?:\/\/(?:www\.)?discord\.com\/channels\/\d+\/\d+\/\d+/g;
 
+// M-1 fix: cache the bot mention regex at module level, computed once after client is ready.
+// Avoids recompiling on every single message.
+let _botMentionRegex = null;
+function getBotMentionRegex() {
+  if (!_botMentionRegex && client?.user?.id) {
+    _botMentionRegex = new RegExp(`<@!?${client.user.id}>`, 'g');
+  }
+  return _botMentionRegex || /<@!?\d+>/g; // fallback before ready
+}
+
 // ============================================================================
 // MENTION REPLACEMENT
 // ============================================================================
 
+// M-2 fix: collect all IDs first, then fetch in parallel instead of sequentially
 async function replaceUserMentions(content, message) {
-  const regex = /<@!?(\d+)>/g;
-  let match;
-  const replacements = new Map();
-  const userIds      = [];
+  const matches = [...content.matchAll(/<@!?(\d+)>/g)];
+  if (matches.length === 0) return content;
 
-  while ((match = regex.exec(content)) !== null) {
-    const uid = match[1];
-    if (replacements.has(uid)) continue;
-    const user = await client.users.fetch(uid).catch(() => null);
+  // Deduplicate IDs
+  const uniqueIds = [...new Set(matches.map(m => m[1]))];
+
+  // Fetch all users in parallel
+  const fetched = await Promise.allSettled(
+    uniqueIds.map(id => client.users.fetch(id).catch(() => null))
+  );
+
+  const replacements = new Map();
+  const userIds = [];
+  uniqueIds.forEach((uid, i) => {
+    const user = fetched[i].status === 'fulfilled' ? fetched[i].value : null;
     if (user) {
       replacements.set(uid, `@${user.username} (ID: ${uid})`);
       userIds.push({ username: user.username, id: uid });
     } else {
-      replacements.set(uid, match[0]);
+      replacements.set(uid, `<@${uid}>`);
     }
-  }
+  });
 
   let result = content;
   for (const [uid, name] of replacements) {
@@ -85,16 +102,21 @@ async function replaceUserMentions(content, message) {
 }
 
 async function replaceChannelMentions(content, message) {
-  const regex = /<#(\d+)>/g;
-  let match;
-  const replacements = new Map();
+  const matches = [...content.matchAll(/<#(\d+)>/g)];
+  if (matches.length === 0) return content;
 
-  while ((match = regex.exec(content)) !== null) {
-    const cid = match[1];
-    if (replacements.has(cid)) continue;
-    const channel = await client.channels.fetch(cid).catch(() => null);
-    replacements.set(cid, channel?.name ? `#${channel.name}` : match[0]);
-  }
+  const uniqueIds = [...new Set(matches.map(m => m[1]))];
+
+  // M-2 fix: fetch all channels in parallel
+  const fetched = await Promise.allSettled(
+    uniqueIds.map(id => client.channels.fetch(id).catch(() => null))
+  );
+
+  const replacements = new Map();
+  uniqueIds.forEach((cid, i) => {
+    const channel = fetched[i].status === 'fulfilled' ? fetched[i].value : null;
+    replacements.set(cid, channel?.name ? `#${channel.name}` : `<#${cid}>`);
+  });
 
   let result = content;
   for (const [cid, name] of replacements) {
@@ -104,19 +126,23 @@ async function replaceChannelMentions(content, message) {
 }
 
 async function replaceRoleMentions(content, message) {
-  const regex = /<@&(\d+)>/g;
-  let match;
-  const replacements = new Map();
+  const matches = [...content.matchAll(/<@&(\d+)>/g)];
+  if (matches.length === 0) return content;
 
-  while ((match = regex.exec(content)) !== null) {
-    const rid = match[1];
-    if (replacements.has(rid)) continue;
-    let name = match[0];
-    if (message.guild) {
-      const role = await message.guild.roles.fetch(rid).catch(() => null);
-      if (role?.name) name = `@${role.name}`;
-    }
-    replacements.set(rid, name);
+  const uniqueIds = [...new Set(matches.map(m => m[1]))];
+
+  // M-2 fix: fetch all roles in parallel if in a guild
+  let replacements = new Map();
+  if (message.guild) {
+    const fetched = await Promise.allSettled(
+      uniqueIds.map(id => message.guild.roles.fetch(id).catch(() => null))
+    );
+    uniqueIds.forEach((rid, i) => {
+      const role = fetched[i].status === 'fulfilled' ? fetched[i].value : null;
+      replacements.set(rid, role?.name ? `@${role.name}` : `<@&${rid}>`);
+    });
+  } else {
+    uniqueIds.forEach(rid => replacements.set(rid, `<@&${rid}>`));
   }
 
   let result = content;
@@ -155,7 +181,12 @@ export async function extractForwardedContent(message) {
     return { forwardedText: '', forwardedAttachments: [], forwardedStickers: [] };
   }
 
+  // L-4 fix: first() can return undefined if the collection is empty despite size > 0
   const snapshot = message.messageSnapshots.first();
+  if (!snapshot) {
+    return { forwardedText: '', forwardedAttachments: [], forwardedStickers: [] };
+  }
+
   let forwardedText = '';
 
   if (snapshot.content) {
@@ -326,9 +357,10 @@ export async function extractFileText(message, messageContent) {
  * }>}
  */
 export async function prepareMessageContent(message) {
-  const botId = client.user.id;
+  // M-1 fix: use module-level cached regex instead of rebuilding on every message
+  const botMentionRe = getBotMentionRegex();
 
-  let messageContent = message.content.replace(new RegExp(`<@!?${botId}>`), '').trim();
+  let messageContent = message.content.replace(botMentionRe, '').trim();
   messageContent = await replaceAllMentions(messageContent, message);
 
   // Wait for Tenor/Giphy embeds to load if the link is bare in the message
@@ -337,7 +369,7 @@ export async function prepareMessageContent(message) {
     await new Promise(resolve => setTimeout(resolve, GIF_EMBED_DELAY_MS));
     try {
       message = await message.channel.messages.fetch(message.id);
-      messageContent = message.content.replace(new RegExp(`<@!?${botId}>`), '').trim();
+      messageContent = message.content.replace(botMentionRe, '').trim();
       messageContent = await replaceAllMentions(messageContent, message);
     } catch { /* best-effort refetch */ }
   }

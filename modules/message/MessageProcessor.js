@@ -42,7 +42,7 @@ const logger = Logger.get('MessageProcessor');
 const COLORS = Object.freeze({ ERROR: 0xFF0000, INFO: 0x5865F2 });
 
 /** Maximum time (ms) a single queue item may run before it is forcibly cancelled. */
-const PROCESSING_TIMEOUT_MS = 6 * 60 * 1_000; // 6 minutes
+const PROCESSING_TIMEOUT_MS = 90_000; // 90 seconds — generous but not 6 minutes
 
 const CONTEXT_MARKERS = Object.freeze({
   QUEUED_MESSAGE: '[QUEUED MESSAGE',
@@ -111,9 +111,15 @@ function filterAttachments(attachments, modelName) {
  * @returns {{ userSettings, serverSettings, effectiveSettings, historyId, modelName }}
  */
 function resolveMessageContext(userId, guildId, channelId) {
-  const userSettings   = state.userSettings[userId]    || {};
-  const serverSettings = guildId ? (state.serverSettings[guildId] || {}) : {};
-  const effectiveSettings = serverSettings.overrideUserSettings ? serverSettings : userSettings;
+  const userSettings   = (state.userSettings   || {})[userId]  || {};
+  const serverSettings = guildId ? ((state.serverSettings || {})[guildId] || {}) : {};
+
+  // L-10 fix: if the user has crossContextEnabled, their own settings always
+  // take precedence even when the server has overrideUserSettings = true.
+  const userCrossContext = userSettings.crossContextEnabled ?? false;
+  const effectiveSettings = (serverSettings.overrideUserSettings && !userCrossContext)
+    ? serverSettings
+    : userSettings;
 
   const isServerHistory  = guildId ? (serverSettings.serverChatHistory  ?? DEFAULT_SERVER_SETTINGS.serverChatHistory) : false;
   const isChannelHistory = guildId ? !!state.channelWideChatHistory[channelId] : false;
@@ -176,9 +182,28 @@ async function buildSystemInstruction(message, effectiveSettings, serverSettings
     instructions += `\n## Current User Information\n${userInfo}`;
   }
 
-  // ── Weekly summary injection (Redis L1 ~1ms — zero RAG cost) ───────────────
-  // Gives Lumin persistent baseline knowledge about the user so it never needs
-  // to run RAG just to recall basic facts. Falls through silently if not ready.
+  // C-2 fix: inject server/channel awareness unconditionally
+  if (guildId && message.channel) {
+    const channelName = message.channel.name || 'unknown';
+    const serverName  = message.guild?.name || 'this server';
+    instructions += `\n\nYou are talking in #${channelName} in ${serverName}. ` +
+      `If the user refers to "this server", "here", or "this channel", ` +
+      `they mean ${serverName} > #${channelName}.`;
+  }
+
+  // ── C-1 fix: Always inject stored userFacts directly into system prompt ──
+  // Single indexed DB read (~1ms), zero embedding API calls, zero delay.
+  // This fires every message so the bot always knows name, facts, preferences.
+  try {
+    const { default: db } = await import('../../database/index.js');
+    const userFacts = await db.getUserFacts(message.author.id);
+    if (userFacts?.length > 0) {
+      instructions += `\n\n## Stored Facts About This User\n`;
+      instructions += userFacts.map(f => `- ${f}`).join('\n');
+    }
+  } catch { /* non-fatal */ }
+
+  // ── Weekly summary injection (Redis L1 ~1ms — zero RAG cost) ─────────────
   if (WEEKLY_SUMMARY_ENABLED) {
     try {
       const weeklySummary = await getWeeklySummary(message.author.id);

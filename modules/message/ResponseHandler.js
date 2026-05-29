@@ -68,9 +68,19 @@ export function updateEmbed(
     const showMetadata    = effectiveSettings.responseFormat === 'Embedded';
     const isGuild         = originalMessage.guild !== null;
 
+    // M-5 fix: append truncation notice instead of silently cutting off
+    let embedDescription;
+    if (finalResponse.length > EMBED_DESCRIPTION_MAX) {
+      const truncateAt = EMBED_DESCRIPTION_MAX - 80;
+      embedDescription = finalResponse.slice(0, truncateAt) +
+        `\n\n*[Response truncated — ${finalResponse.length} chars total. Use /summary for long context.]*`;
+    } else {
+      embedDescription = finalResponse;
+    }
+
     const embed = new EmbedBuilder()
       .setColor(embedColor)
-      .setDescription(finalResponse.slice(0, EMBED_DESCRIPTION_MAX))
+      .setDescription(embedDescription)
       .setTimestamp();
 
     if (!continuousReply) {
@@ -119,9 +129,19 @@ export function updateEmbedForInteraction(
     const showMetadata = effectiveSettings.responseFormat === 'Embedded';
     const isGuild      = interaction.guild !== null;
 
+    // M-5 fix: append truncation notice instead of silently cutting off
+    let interactionDesc;
+    if (finalResponse.length > EMBED_DESCRIPTION_MAX) {
+      const truncateAt = EMBED_DESCRIPTION_MAX - 80;
+      interactionDesc = finalResponse.slice(0, truncateAt) +
+        `\n\n*[Response truncated — ${finalResponse.length} chars total. Use /summary for long context.]*`;
+    } else {
+      interactionDesc = finalResponse;
+    }
+
     const embed = new EmbedBuilder()
       .setColor(embedColor)
-      .setDescription(finalResponse.slice(0, EMBED_DESCRIPTION_MAX))
+      .setDescription(interactionDesc)
       .setTimestamp()
       .setAuthor({
         name:    `To ${interaction.user.displayName}`,
@@ -620,10 +640,15 @@ export async function handleModelResponse(
           if (!isLargeRef.value && responseFormat === 'Embedded') {
             updateEmbed(botMessage, finalResponse, originalMessage, groundingMetadata, urlContextMetadata, effectiveSettings);
           } else if (!isLargeRef.value && !wasShortResponse) {
-            await botMessage.edit({
-              content: finalResponse.slice(0, CHARACTER_LIMITS.DISCORD_MAX),
-              embeds:  []
-            }).catch(() => {});
+            // Fix: if Normal-mode response exceeds Discord's 2000-char hard limit, send as file
+            if (finalResponse.length > CHARACTER_LIMITS.DISCORD_MAX) {
+              isLargeRef.value = true;
+            } else {
+              await botMessage.edit({
+                content: finalResponse,
+                embeds:  []
+              }).catch(() => {});
+            }
           }
         }
 

@@ -327,12 +327,13 @@ export function classifyAttachments(attachments, modelName) {
  * @returns {Promise<object[]>}
  */
 export async function processPromptAndMediaAttachments(prompt, message, attachments = null, modelName = '') {
-  const all = (attachments || Array.from(message.attachments.values()))
-    .slice(0, ATTACHMENT_LIMITS.MAX_ATTACHMENTS);
+  // M-13 fix: short-circuit immediately for text-only messages
+  const allAttachments = attachments || Array.from(message.attachments?.values() || []);
+  if (!allAttachments.length) return [{ text: prompt }];
+
+  const all = allAttachments.slice(0, ATTACHMENT_LIMITS.MAX_ATTACHMENTS);
 
   const parts = [{ text: prompt }];
-
-  if (!all.length) return parts;
 
   const processed = await Promise.all(
     all.map(async (attachment) => {
