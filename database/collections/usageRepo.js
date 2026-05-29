@@ -180,17 +180,27 @@ export async function deleteUserFact(userId, factKeyword) {
 // SERVER FACTS (shared guild-scoped memory — visible to all users in a server)
 // ============================================================================
 
+// Human-readable labels for each category (used in system-prompt grouping)
+const CATEGORY_LABELS = Object.freeze({
+  relationship: 'Relationships & Bonds',
+  nickname:     'Nicknames & Aliases',
+  role:         'Roles & Positions',
+  activity:     'Shared Activities',
+  event:        'Server Events & History',
+  personal:     'Member Facts',
+  general:      'General Facts'
+});
+
 /**
  * Store a shared fact at the guild level.
- * Server facts are visible to all users in the same server — use for
- * relationship info, group decisions, or other inter-member context.
  * @param {string} guildId
  * @param {string} fact
+ * @param {string} [category='general'] - relationship|nickname|role|activity|event|personal
  */
-export async function saveServerFact(guildId, fact) {
+export async function saveServerFact(guildId, fact, category = 'general') {
   try {
     await getCollection(COLLECTIONS.SERVER_FACTS).insertOne({
-      guildId, fact, createdAt: new Date()
+      guildId, fact, category, createdAt: new Date()
     });
   } catch (error) {
     logger.error('Error saving server fact', error);
@@ -199,7 +209,8 @@ export async function saveServerFact(guildId, fact) {
 }
 
 /**
- * Retrieve up to 30 most-recent server-level facts for a guild.
+ * Retrieve up to 50 server-level facts for a guild as plain strings.
+ * Older facts (no category) are returned as-is; newer facts get a category prefix.
  * @param {string} guildId
  * @returns {Promise<string[]>}
  */
@@ -208,11 +219,67 @@ export async function getServerFacts(guildId) {
     const docs = await getCollection(COLLECTIONS.SERVER_FACTS)
       .find({ guildId })
       .sort({ createdAt: -1 })
-      .limit(30)
+      .limit(50)
       .toArray();
-    return docs.map(d => d.fact);
+    return docs.map(d => d.category && d.category !== 'general'
+      ? `[${d.category}] ${d.fact}`
+      : d.fact
+    );
   } catch (error) {
     logger.error('Error getting server facts', error);
+    return [];
+  }
+}
+
+/**
+ * Retrieve server facts grouped by category for display in system prompts.
+ * Returns a Map<categoryLabel, string[]> for structured rendering.
+ * @param {string} guildId
+ * @returns {Promise<Map<string, string[]>>}
+ */
+export async function getServerFactsCategorized(guildId) {
+  try {
+    const docs = await getCollection(COLLECTIONS.SERVER_FACTS)
+      .find({ guildId })
+      .sort({ category: 1, createdAt: -1 })
+      .limit(50)
+      .toArray();
+
+    const grouped = new Map();
+    for (const doc of docs) {
+      const label = CATEGORY_LABELS[doc.category] || CATEGORY_LABELS.general;
+      if (!grouped.has(label)) grouped.set(label, []);
+      grouped.get(label).push(doc.fact);
+    }
+    return grouped;
+  } catch (error) {
+    logger.error('Error getting categorized server facts', error);
+    return new Map();
+  }
+}
+
+/**
+ * Retrieve server facts from multiple guilds at once (cross-context search).
+ * Returns a flat array of labelled strings: "[GuildId | category] fact"
+ * @param {string[]} guildIds
+ * @returns {Promise<string[]>}
+ */
+export async function getServerFactsMultiGuild(guildIds) {
+  if (!guildIds?.length) return [];
+  try {
+    const docs = await getCollection(COLLECTIONS.SERVER_FACTS)
+      .find({ guildId: { $in: guildIds } })
+      .sort({ createdAt: -1 })
+      .limit(80)
+      .toArray();
+    return docs.map(d => {
+      const catLabel = d.category && d.category !== 'general' ? d.category : null;
+      return catLabel
+        ? `[${catLabel} | server:${d.guildId}] ${d.fact}`
+        : `[server:${d.guildId}] ${d.fact}`;
+    });
+  } catch (error) {
+    logger.error('Error getting multi-guild server facts', error);
     return [];
   }
 }
