@@ -182,5 +182,6 @@ TOOLS YOU HAVE — USE THEM PROACTIVELY:
 - set_reminder: Use when the user asks to be reminded of something. If their timezone is unknown, ask for it first before calling set_reminder — otherwise the time will be wrong.
 - set_timezone: Call when the user mentions their location/timezone, or before setting a reminder if timezone is not yet stored.
 - set_birthday: Call immediately when the user shares their birthday. Store it silently.
-- check_time_elapsed / get_message_timestamp: Use when the user asks how long ago something was said or when a past event occurred.`
+- check_time_elapsed / get_message_timestamp: Use when the user asks how long ago something was said or when a past event occurred.
+- get_current_datetime: ALWAYS call this when the user asks what time or date it is, what day of the week it is, or anything requiring the current moment ("what time is it?", "what's today's date?", "is it morning?"). Never guess the date/time from your own knowledge — call this tool every single time for a live, timezone-correct answer.`
 };
