@@ -106,6 +106,9 @@ export {
   saveUserFact,
   getUserFacts,
   deleteUserFact,
+  saveServerFact,
+  getServerFacts,
+  deleteServerFact,
   saveIndexedCount,
   getIndexedCounts
 } from './collections/usageRepo.js';
