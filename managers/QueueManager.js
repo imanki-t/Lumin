@@ -436,5 +436,17 @@ setInterval(() => {
       swept++;
     }
   }
-  if (swept > 0) logger.info(`Orphan sweep removed ${swept} idle queue entry(s)`);
+
+  // Prune idle historyLocks — Map grows forever without this since
+  // getHistoryLock() creates entries lazily but never removes them.
+  let locksPruned = 0;
+  for (const [id, mutex] of historyLocks.entries()) {
+    if (!mutex._locked && mutex._queue.length === 0) {
+      historyLocks.delete(id);
+      locksPruned++;
+    }
+  }
+
+  if (swept > 0 || locksPruned > 0)
+    logger.info(`Orphan sweep: ${swept} queue(s), ${locksPruned} history lock(s) removed`);
 }, 10 * 60 * 1_000);
