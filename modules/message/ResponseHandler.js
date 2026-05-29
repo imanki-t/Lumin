@@ -548,7 +548,12 @@ export async function handleModelResponse(
         const stream = await genAI.models.generateContentStream(request);
         if (!stream) throw new Error('API returned undefined — check API keys');
 
-        typingManager.stop(channelId);
+        // NOTE: do NOT stop the typing indicator here. The stream object is
+        // obtained before any tokens are generated. Stopping typing now causes
+        // a visible 2–3 s gap where typing has disappeared but no Discord
+        // message exists yet. Typing will stop automatically when the first
+        // reply is posted (Discord clears it on message send) and is cleaned
+        // up unconditionally in the finally-block cleanup() call.
 
         let functionCallParts = [];  // now stores raw Part objects {functionCall, id?, thought_signature?}
         const onFunctionCall  = (parts) => functionCallParts.push(...parts);
