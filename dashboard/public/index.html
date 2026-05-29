@@ -389,7 +389,7 @@
           </div>
           <div class="form-g" style="margin-top:8px">
             <label class="form-l">Per-Model RPM Overrides <span style="font-size:10px;color:var(--text3)">(JSON — null = Infinity)</span></label>
-            <textarea class="cfg-ed" id="rl-model-overrides" rows="4" spellcheck="false" placeholder='{"gemini-3.1-flash-lite-preview": null}'></textarea>
+            <textarea class="cfg-ed" id="rl-model-overrides" rows="4" spellcheck="false" placeholder='{"gemini-3.1-flash-lite": null}'></textarea>
           </div>
           <button class="btn btn-accent" style="margin-top:8px;width:100%" onclick="window._saveRateLimits()">Save Rate Limits</button>
           <div id="rl-result" class="result-box hidden"></div>
@@ -571,7 +571,7 @@
         <div id="cfg-runtime-pane">
           <div class="panel" style="margin-bottom:10px">
             <div class="panel-h">Runtime Config <span style="font-size:10px;font-weight:400;color:var(--text3)">(persists across restarts — saved to dashboard/runtime-config.json)</span></div>
-            <div class="form-g"><label class="form-l">Active Model Override</label><input class="form-i" id="rt-model" placeholder="e.g. gemini-2.5-flash"/></div>
+            <div class="form-g"><label class="form-l">Active Model Override</label><input class="form-i" id="rt-model" placeholder="e.g. gemini-3.5-flash"/></div>
             <div class="form-g"><label class="form-l">Global Embed Color</label><input class="form-i" id="rt-color" placeholder="#6D5AE6"/></div>
             <div class="cfg-acts">
               <button class="btn btn-accent" onclick="window._saveRuntimeConfig()">Save</button>
