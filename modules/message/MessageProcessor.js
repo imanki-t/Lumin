@@ -203,6 +203,46 @@ async function buildSystemInstruction(message, effectiveSettings, serverSettings
     }
   } catch { /* non-fatal */ }
 
+  // ── Server facts: guild-scoped shared memory (visible to ALL server users) ─
+  // Injected unconditionally in guild context so the bot can give consistent
+  // answers about inter-member relationships from any user's perspective.
+  if (guildId) {
+    try {
+      const { default: db } = await import('../../database/index.js');
+      const serverFacts = await db.getServerFacts(guildId);
+      if (serverFacts?.length > 0) {
+        instructions += `\n\n## Shared Server Knowledge (visible to all users in this server)\n`;
+        instructions += serverFacts.map(f => `- ${f}`).join('\n');
+        instructions += `\n\n> These facts apply to all members. Use them to give consistent answers regardless of who is asking.`;
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  // ── Cross-context status ────────────────────────────────────────────────
+  // Tell the AI whether cross-context memory is active so it can surface it
+  // in conversation when relevant (e.g. "I remember you mentioned this in DMs").
+  const userId2 = message.author.id;
+  const crossContextOn = state.userSettings?.[userId2]?.crossContextEnabled ?? false;
+  if (guildId) {
+    if (crossContextOn) {
+      instructions += `\n\n## Cross-Context Memory: ENABLED\n` +
+        `You have access to this user's memories from their DMs with you AND from other servers they share with you. ` +
+        `When relevant, you may recall information across these contexts (e.g. "I remember you mentioned X in our DMs"). ` +
+        `Label the source subtly so the user knows why you remembered it.`;
+    } else {
+      instructions += `\n\n## Cross-Context Memory: DISABLED\n` +
+        `Memory retrieval is limited to this server's conversation history only. ` +
+        `Do NOT reference facts from this user's DMs or other servers.`;
+    }
+  } else {
+    // DM context — cross-context means server memories bleed into DMs
+    if (crossContextOn) {
+      instructions += `\n\n## Cross-Context Memory: ENABLED\n` +
+        `You have access to this user's memories from servers they are in with you, in addition to these DMs. ` +
+        `When relevant, you may recall information across contexts.`;
+    }
+  }
+
   // ── Weekly summary injection (Redis L1 ~1ms — zero RAG cost) ─────────────
   if (WEEKLY_SUMMARY_ENABLED) {
     try {
