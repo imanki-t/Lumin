@@ -75,7 +75,7 @@ export const functionTools = [
           '  • Relationships between members ("UserA and UserB are dating/best friends/rivals")',
           '  • Server-wide nicknames ("Everyone calls Shreyash \'Shrey\'")',
           '  • Group activities ("They play Minecraft together every Friday")',
-          '  • Informal server roles ("Priti is the server owner / the designated memer")',
+          '  • Informal server roles ("Anshul is the server owner / the designated memer")',
           '  • Events that happened in/to the server community',
           '',
           'Keep using manage_personal_memory for facts that belong to ONE user only.',
