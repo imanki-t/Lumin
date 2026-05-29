@@ -9,7 +9,7 @@
 
 import { EmbedBuilder } from 'discord.js';
 
-import { state, saveStateToFile }  from '../../managers/BotManager.js';
+import { state }  from '../../managers/BotManager.js';
 import { memorySystem }             from '../../memory/MemorySystem.js';
 import * as db                      from '../../database/index.js';
 import { getUserTime }               from '../timezone.js';
@@ -45,6 +45,7 @@ export function scheduleReminder(client, reminder) {
 
 /**
  * Re-register all active reminders from state on bot startup.
+ * L-19 fix: past-due `once` reminders fire immediately instead of being silently skipped.
  * Called once from commands/index.js → initializeScheduledTasks.
  *
  * @param {import('discord.js').Client} client
@@ -52,17 +53,38 @@ export function scheduleReminder(client, reminder) {
 export function initializeReminders(client) {
   if (!state.reminders) return;
 
-  let count = 0;
+  let scheduled = 0;
+  let firedNow  = 0;
+
   for (const userId of Object.keys(state.reminders)) {
     for (const reminder of state.reminders[userId]) {
-      if (reminder.active) {
-        scheduleReminder(client, reminder);
-        count++;
+      if (!reminder.active) continue;
+
+      // L-19 fix: if a `once` reminder's target time has already passed (bot was
+      // offline), fire it immediately rather than waiting 45 s for the interval.
+      if (reminder.type === 'once') {
+        const targetMs = typeof reminder.time === 'number'
+          ? reminder.time
+          : (reminder.time?.timestamp ?? 0);
+
+        if (targetMs && Date.now() >= targetMs) {
+          // Fire async, don't await startup on it
+          setImmediate(() =>
+            sendReminder(client, reminder)
+              .then(() => cleanupOnceReminder(client, reminder, userId))
+              .catch(err => logger.error(`Past-due reminder fire failed for ${reminder.id}`, err))
+          );
+          firedNow++;
+          continue;
+        }
       }
+
+      scheduleReminder(client, reminder);
+      scheduled++;
     }
   }
 
-  logger.info(`Reminder scheduler started — ${count} active reminder(s) registered`);
+  logger.info(`Reminder scheduler started — ${scheduled} scheduled, ${firedNow} fired immediately (past-due)`);
 }
 
 // ============================================================================
@@ -80,7 +102,8 @@ async function checkAndTrigger(client, reminder) {
   if (!reminder.active) return;
 
   try {
-    const userId  = reminder.id.split('_')[0];
+    // L-19 fix: use reminder.userId directly; the old id.split('_')[0] was fragile
+    const userId  = reminder.userId || reminder.id.split('_')[0];
     const userNow = getUserTime(userId);
 
     if (!shouldTrigger(reminder, userNow)) return;
@@ -89,22 +112,34 @@ async function checkAndTrigger(client, reminder) {
 
     // One-time reminders: hard-delete after firing
     if (reminder.type === 'once') {
-      const idx = state.reminders[userId]?.findIndex(r => r.id === reminder.id) ?? -1;
-      if (idx !== -1) state.reminders[userId].splice(idx, 1);
-
-      await db.deleteReminder(reminder.id);
-      await saveStateToFile();
-
-      if (client.reminderIntervals?.has(reminder.id)) {
-        clearInterval(client.reminderIntervals.get(reminder.id));
-        client.reminderIntervals.delete(reminder.id);
-      }
-
-      memorySystem.invalidatePersonalDataCache(userId);
+      await cleanupOnceReminder(client, reminder, userId);
     }
   } catch (error) {
     logger.error(`checkAndTrigger failed for reminder ${reminder.id}`, error);
   }
+}
+
+/**
+ * Clean up a one-time reminder after it fires.
+ * Extracted as a shared helper used by both checkAndTrigger and initializeReminders.
+ * @param {import('discord.js').Client} client
+ * @param {object} reminder
+ * @param {string} userId
+ */
+async function cleanupOnceReminder(client, reminder, userId) {
+  reminder.active = false;
+
+  const idx = state.reminders[userId]?.findIndex(r => r.id === reminder.id) ?? -1;
+  if (idx !== -1) state.reminders[userId].splice(idx, 1);
+
+  await db.deleteReminder(reminder.id);
+
+  if (client.reminderIntervals?.has(reminder.id)) {
+    clearInterval(client.reminderIntervals.get(reminder.id));
+    client.reminderIntervals.delete(reminder.id);
+  }
+
+  memorySystem.invalidatePersonalDataCache(userId);
 }
 
 /**
