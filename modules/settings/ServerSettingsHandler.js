@@ -129,7 +129,7 @@ function buildServerNavRow(page) {
 function toggleBtn(customId, isEnabled) {
   return new ButtonBuilder()
     .setCustomId(customId)
-    .setLabel(isEnabled ? 'On' : 'Off')
+    .setLabel(isEnabled ? 'Enabled' : 'Disabled')
     .setStyle(isEnabled ? ButtonStyle.Success : ButtonStyle.Danger);
 }
 
