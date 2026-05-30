@@ -1,6 +1,6 @@
 /**
  * @fileoverview /birthday command — add, remove and list birthday reminders.
- *               Opens an interactive action picker; scheduling lives in BirthdayScheduler.js.
+ *               Pure interaction handler; scheduling lives in BirthdayScheduler.js.
  * @module commands/birthday/BirthdayHandler
  */
 
@@ -33,11 +33,24 @@ const MENU_EXPIRY_MS         = 5 * 60 * 1000;
 
 export const birthdayCommand = {
   name:        'birthday',
-  description: 'Manage birthday reminders.'
+  description: 'Manage your birthday reminders (max 5 birthdays)',
+  options: [
+    {
+      name:        'action',
+      description: 'What do you want to do?',
+      type:        3,
+      required:    true,
+      choices: [
+        { name: 'Set Birthday',    value: 'set'    },
+        { name: 'Remove Birthday', value: 'remove' },
+        { name: 'List Birthdays',  value: 'list'   }
+      ]
+    }
+  ]
 };
 
 // ============================================================================
-// ENTRY POINT — shows action picker
+// ENTRY POINT
 // ============================================================================
 
 /**
@@ -45,60 +58,13 @@ export const birthdayCommand = {
  */
 export async function handleBirthdayCommand(interaction) {
   try {
-    const embed = new EmbedBuilder()
-      .setColor(0xFF69B4)
-      .setTitle('🎂 Birthday Manager')
-      .setDescription('Choose an action below to manage your birthday reminders.');
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('birthday_action_set')
-        .setLabel('Set Birthday')
-        .setStyle(ButtonStyle.Primary)
-        .setEmoji('🎂'),
-      new ButtonBuilder()
-        .setCustomId('birthday_action_remove')
-        .setLabel('Remove Birthday')
-        .setStyle(ButtonStyle.Danger)
-        .setEmoji('🗑️'),
-      new ButtonBuilder()
-        .setCustomId('birthday_action_list')
-        .setLabel('List Birthdays')
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji('📅')
-    );
-
-    await interaction.reply({
-      embeds:     [embed],
-      components: [row],
-      flags:      MessageFlags.Ephemeral
-    });
-
-    setTimeout(() => interaction.deleteReply().catch(() => {}), MENU_EXPIRY_MS);
+    const action = interaction.options.getString('action');
+    if      (action === 'set')    await showBirthdaySetup(interaction);
+    else if (action === 'remove') await removeBirthday(interaction);
+    else if (action === 'list')   await listBirthdays(interaction, 0);
   } catch (error) {
     logger.error('handleBirthdayCommand failed', error);
-    await sendError(interaction, 'Failed to open birthday menu.');
-  }
-}
-
-// ============================================================================
-// ACTION BUTTON HANDLER (Set / Remove / List)
-// ============================================================================
-
-/**
- * Handles button presses from the action picker (birthday_action_set/remove/list).
- * Updates the existing ephemeral picker message in place.
- * @param {import('discord.js').ButtonInteraction} interaction
- */
-export async function handleBirthdayActionButton(interaction) {
-  const action = interaction.customId.replace('birthday_action_', '');
-  try {
-    if      (action === 'set')    await showBirthdaySetup(interaction, true);
-    else if (action === 'remove') await removeBirthday(interaction, true);
-    else if (action === 'list')   await listBirthdays(interaction, 0, true);
-  } catch (error) {
-    logger.error('handleBirthdayActionButton failed', error);
-    await sendError(interaction, 'An error occurred.', true);
+    await sendError(interaction, 'An error occurred while processing the birthday command.');
   }
 }
 
@@ -378,15 +344,11 @@ export async function handleBirthdayListJump(interaction) {
 // PRIVATE HELPERS
 // ============================================================================
 
+/** Show month picker to start setup flow. */
 const ACCENT_COLOR     = 0xE53935;
 const IS_COMPONENTS_V2 = 1 << 15;
 
-/**
- * Show month picker to start the birthday setup flow.
- * @param {import('discord.js').Interaction} interaction
- * @param {boolean} [isUpdate=false]  Use .update() instead of .reply() when called from a button.
- */
-async function showBirthdaySetup(interaction, isUpdate = false) {
+async function showBirthdaySetup(interaction) {
   try {
     const userId = interaction.user.id;
     if (!state.birthdays) state.birthdays = {};
@@ -398,12 +360,9 @@ async function showBirthdaySetup(interaction, isUpdate = false) {
         new TextDisplayBuilder().setContent(
           '**Birthday Limit Reached**\n' +
           `You have reached the maximum of ${MAX_BIRTHDAYS_PER_USER} birthdays.\n` +
-          'Remove existing birthdays using `/birthday` → Remove Birthday before adding new ones.'
+          'Remove existing birthdays using `/birthday action:remove` before adding new ones.'
         )
       );
-      if (isUpdate) {
-        return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
-      }
       return interaction.reply({
         components: [container],
         flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
@@ -443,28 +402,22 @@ async function showBirthdaySetup(interaction, isUpdate = false) {
       new TextDisplayBuilder().setContent('-# Your birthday will never be shared without permission.')
     );
 
-    if (isUpdate) {
-      await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
-    } else {
-      await interaction.reply({
-        components: [container],
-        flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
-      });
-      setTimeout(() => interaction.deleteReply().catch(() => {}), MENU_EXPIRY_MS);
-    }
+    await interaction.reply({
+      components: [container],
+      flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
+    });
+
+    // Auto-clean the ephemeral reply after 5 minutes
+    setTimeout(() => interaction.deleteReply().catch(() => {}), MENU_EXPIRY_MS);
 
   } catch (error) {
     logger.error('showBirthdaySetup failed', error);
-    await sendError(interaction, 'Failed to start birthday setup.', isUpdate);
+    await sendError(interaction, 'Failed to start birthday setup.');
   }
 }
 
-/**
- * Show a delete-picker for the user's own birthdays.
- * @param {import('discord.js').Interaction} interaction
- * @param {boolean} [isUpdate=false]
- */
-async function removeBirthday(interaction, isUpdate = false) {
+/** Show a delete-picker for the user's own birthdays. */
+async function removeBirthday(interaction) {
   try {
     const userId = interaction.user.id;
     if (!state.birthdays) state.birthdays = {};
@@ -474,11 +427,7 @@ async function removeBirthday(interaction, isUpdate = false) {
       const embed = new EmbedBuilder()
         .setColor(0xFF5555)
         .setTitle('❌ No Birthdays Found')
-        .setDescription("You don't have any birthdays set up yet!\n\nUse `/birthday` → Set Birthday to add one.");
-
-      if (isUpdate) {
-        return interaction.update({ embeds: [embed], components: [] });
-      }
+        .setDescription("You don't have any birthdays set up yet!\n\nUse `/birthday action:set` to add one.");
       return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
@@ -501,21 +450,17 @@ async function removeBirthday(interaction, isUpdate = false) {
         })
       );
 
-    const payload = {
+    await interaction.reply({
       embeds:     [embed],
-      components: [new ActionRowBuilder().addComponents(deleteSelect)]
-    };
+      components: [new ActionRowBuilder().addComponents(deleteSelect)],
+      flags:      MessageFlags.Ephemeral
+    });
 
-    if (isUpdate) {
-      await interaction.update(payload);
-    } else {
-      await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
-      setTimeout(() => interaction.deleteReply().catch(() => {}), MENU_EXPIRY_MS);
-    }
+    setTimeout(() => interaction.deleteReply().catch(() => {}), MENU_EXPIRY_MS);
 
   } catch (error) {
     logger.error('removeBirthday failed', error);
-    await sendError(interaction, 'Failed to load birthdays for removal.', isUpdate);
+    await sendError(interaction, 'Failed to load birthdays for removal.');
   }
 }
 
@@ -523,10 +468,9 @@ async function removeBirthday(interaction, isUpdate = false) {
  * Render a paginated birthday list.
  * Works for both DMs (own birthdays only) and servers (shared birthdays).
  * @param {import('discord.js').Interaction} interaction
- * @param {number}  [page=0]      Zero-based page index.
- * @param {boolean} [isUpdate=false]  Use .update() for button-triggered calls.
+ * @param {number} page  Zero-based page index.
  */
-async function listBirthdays(interaction, page = 0, isUpdate = false) {
+async function listBirthdays(interaction, page = 0) {
   try {
     const userId  = interaction.user.id;
     const guildId = interaction.guild?.id;
@@ -536,9 +480,7 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
       const embed = new EmbedBuilder()
         .setColor(0xFF5555)
         .setTitle('📅 No Birthdays')
-        .setDescription('No birthdays have been set yet!\n\nBe the first with `/birthday` → Set Birthday');
-
-      if (isUpdate) return interaction.update({ embeds: [embed], components: [] });
+        .setDescription('No birthdays have been set yet!\n\nBe the first with `/birthday action:set`');
       return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
@@ -547,10 +489,10 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
       const userBirthdays = Object.entries(state.birthdays)
         .filter(([key]) => key.startsWith(userId))
         .map(([, data]) => ({
-          month:      data.month,
-          day:        data.day,
-          monthNum:   parseInt(data.month),
-          nameType:   data.nameType,
+          month:     data.month,
+          day:       data.day,
+          monthNum:  parseInt(data.month),
+          nameType:  data.nameType,
           preference: data.preference
         }))
         .sort((a, b) => a.monthNum - b.monthNum || parseInt(a.day) - parseInt(b.day));
@@ -559,9 +501,7 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
         const embed = new EmbedBuilder()
           .setColor(0xFF5555)
           .setTitle('📅 No Birthdays')
-          .setDescription("You haven't set any birthdays yet.\n\nUse `/birthday` → Set Birthday to add one!");
-
-        if (isUpdate) return interaction.update({ embeds: [embed], components: [] });
+          .setDescription("You haven't set any birthdays yet.\n\nUse `/birthday action:set` to add one!");
         return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
       }
 
@@ -579,12 +519,11 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
         .setDescription(list)
         .setFooter({ text: `${userBirthdays.length}/${MAX_BIRTHDAYS_PER_USER} birthdays set` });
 
-      if (isUpdate) return interaction.update({ embeds: [embed], components: [] });
       return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
     // ---------- Server view: paginated, shared birthdays ----------
-    const today        = new Date();
+    const today = new Date();
     const currentMonth = today.getMonth() + 1;
     const currentDay   = today.getDate();
 
@@ -597,8 +536,6 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
         .setColor(0xFF5555)
         .setTitle('📅 No Server Birthdays')
         .setDescription('No birthdays are set to be celebrated in this server.');
-
-      if (isUpdate) return interaction.update({ embeds: [embed], components: [] });
       return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
@@ -659,13 +596,8 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
       }
     }
 
-    // Determine reply method
-    if (isUpdate) {
-      await interaction.update({ embeds: [embed], components });
-    } else {
-      const replyMethod = interaction.replied || interaction.deferred ? 'editReply' : 'reply';
-      await interaction[replyMethod]({ embeds: [embed], components });
-    }
+    const replyMethod = interaction.replied || interaction.deferred ? 'editReply' : 'reply';
+    await interaction[replyMethod]({ embeds: [embed], components });
 
     // Auto-expire pagination buttons
     if (components.length > 0) {
@@ -679,7 +611,7 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
 
   } catch (error) {
     logger.error('listBirthdays failed', error);
-    await sendError(interaction, 'Failed to list birthdays.', isUpdate);
+    await sendError(interaction, 'Failed to list birthdays.');
   }
 }
 
