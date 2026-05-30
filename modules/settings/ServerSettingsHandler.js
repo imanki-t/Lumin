@@ -434,20 +434,29 @@ export async function showChannelManagementMenu(interaction, isUpdate = false) {
     ? allowedChannels.map(id => `<#${id}>`).join(', ')
     : 'All Channels';
 
-  // Channel management uses a select menu — falls back to standard embed+components layout
-  // because ChannelSelectMenuBuilder isn't supported inside ContainerBuilder
-  const embed = new EmbedBuilder()
-    .setColor(EMBED_COLOR)
-    .setTitle('Channel Management')
-    .setDescription(
-      'Select which channels Lumin is permitted to respond in. Leave empty to allow all channels.\n\n' +
-      `**Current Scope:** ${currentValue}`
+  // ChannelSelectMenuBuilder cannot be placed inside a ContainerBuilder, so it lives
+  // as a top-level ActionRow alongside the container.  The message still uses the
+  // IS_COMPONENTS_V2 flag so that interaction.update() works when transitioning from
+  // Page 4 (which is also a V2 message) — mixing V2 and non-V2 payloads in an
+  // update() call is rejected by Discord.
+  const container = new ContainerBuilder()
+    .setAccentColor(ACCENT_COLOR)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        '**Channel Management**\n\n' +
+        'Select which channels Lumin is permitted to respond in. ' +
+        'Leave empty to allow all channels.\n\n' +
+        `**Current Scope:** ${currentValue}`
+      )
     )
-    .setFooter({ text: 'Deselect all to authorize every channel.' });
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('-# Deselect all to authorize every channel.')
+    );
 
   const payload = {
-    embeds: [embed],
     components: [
+      container,
       new ActionRowBuilder().addComponents(channelSelect),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -460,7 +469,7 @@ export async function showChannelManagementMenu(interaction, isUpdate = false) {
           .setStyle(ButtonStyle.Success)
       )
     ],
-    flags: MessageFlags.Ephemeral
+    flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
   };
 
   if (isUpdate) await interaction.update(payload);
