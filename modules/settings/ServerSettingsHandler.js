@@ -397,6 +397,7 @@ export async function showServerSettingsPage5(interaction, isUpdate = false) {
             .setCustomId('download_server_conversation')
             .setLabel('Export History')
             .setStyle(ButtonStyle.Success)
+            .setDisabled(!hasMemory)
         )
       }
     ],
