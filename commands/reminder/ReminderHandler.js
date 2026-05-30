@@ -101,7 +101,7 @@ export async function handleReminderActionSelect(interaction) {
     else if (action === 'delete') await showDeleteReminderMenu(interaction);
   } catch (error) {
     logger.error('handleReminderActionSelect failed', error);
-    await sendError(interaction, 'Failed to process your selection.', true);
+    await sendError(interaction, 'Failed to process your selection.', true, true);
   }
 }
 
@@ -135,7 +135,7 @@ export async function handleReminderTypeSelect(interaction) {
     await interaction.showModal(modal);
   } catch (error) {
     logger.error('handleReminderTypeSelect failed', error);
-    await sendError(interaction, 'Failed to show reminder modal.', true);
+    await sendError(interaction, 'Failed to show reminder modal.', true, true);
   }
 }
 
@@ -307,11 +307,11 @@ export async function handleReminderDeleteSelect(interaction) {
 
     const idx = state.reminders?.[userId]?.findIndex(r => r.id === reminderId) ?? -1;
     if (idx === -1) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('❌ Reminder Not Found')
-        .setDescription('Could not find that reminder.');
-      return interaction.update({ embeds: [embed], components: [] });
+      const container = new ContainerBuilder().setAccentColor(0xFF5555);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent('❌ **Reminder Not Found**\nCould not find that reminder.')
+      );
+      return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
     }
 
     const reminder = state.reminders[userId][idx];
@@ -329,16 +329,18 @@ export async function handleReminderDeleteSelect(interaction) {
 
     const activeCount = state.reminders[userId].filter(r => r.active).length;
 
-    const embed = new EmbedBuilder()
-      .setColor(0x00FF00)
-      .setTitle('✅ Reminder Deleted')
-      .setDescription(`Deleted: **${reminder.message}**`)
-      .setFooter({ text: `Active reminders: ${activeCount}/${MAX_REMINDERS_PER_USER}` });
+    const container = new ContainerBuilder().setAccentColor(0x57F287);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `✅ **Reminder Deleted**\nDeleted: **${reminder.message}**\n\n` +
+        `-# Active reminders: ${activeCount}/${MAX_REMINDERS_PER_USER}`
+      )
+    );
 
-    await interaction.update({ embeds: [embed], components: [] });
+    await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
   } catch (error) {
     logger.error('handleReminderDeleteSelect failed', error);
-    await sendError(interaction, 'Failed to delete reminder.', true);
+    await sendError(interaction, 'Failed to delete reminder.', true, true);
   }
 }
 
@@ -353,30 +355,28 @@ async function showReminderTypeSelect(interaction) {
     const activeCount = (state.reminders?.[userId] ?? []).filter(r => r.active).length;
 
     if (activeCount >= MAX_REMINDERS_PER_USER) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('❌ Reminder Limit Reached')
-        .setDescription(
-          `You have reached the maximum limit of ${MAX_REMINDERS_PER_USER} reminders.\n\n` +
-          `Please delete some old reminders before creating new ones.`
-        );
-
       const deleteButton = new ButtonBuilder()
         .setCustomId('reminder_action_delete')
         .setLabel('Delete Reminders')
         .setStyle(ButtonStyle.Danger)
         .setEmoji('🗑️');
 
+      const container = new ContainerBuilder().setAccentColor(0xFF5555);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          '❌ **Reminder Limit Reached**\n' +
+          `You have reached the maximum limit of ${MAX_REMINDERS_PER_USER} reminders.\n\n` +
+          `Please delete some old reminders before creating new ones.`
+        )
+      );
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+      container.addActionRowComponents(new ActionRowBuilder().addComponents(deleteButton));
+
       return interaction.update({
-        embeds:     [embed],
-        components: [new ActionRowBuilder().addComponents(deleteButton)]
+        components: [container],
+        flags:      IS_COMPONENTS_V2
       });
     }
-
-    const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle('⏰ Reminder Setup')
-      .setDescription('Choose how often you want to be reminded:');
 
     const typeSelect = new StringSelectMenuBuilder()
       .setCustomId('reminder_type')
@@ -388,13 +388,20 @@ async function showReminderTypeSelect(interaction) {
         { label: 'Monthly',              value: 'monthly', description: 'Repeats every month',        emoji: '🗓️' }
       );
 
+    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('⏰ **Reminder Setup**\nChoose how often you want to be reminded:')
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(typeSelect));
+
     await interaction.update({
-      embeds:     [embed],
-      components: [new ActionRowBuilder().addComponents(typeSelect)]
+      components: [container],
+      flags:      IS_COMPONENTS_V2
     });
   } catch (error) {
     logger.error('showReminderTypeSelect failed', error);
-    await sendError(interaction, 'Failed to show reminder types.', true);
+    await sendError(interaction, 'Failed to show reminder types.', true, true);
   }
 }
 
@@ -405,11 +412,13 @@ async function viewReminders(interaction) {
     const active   = (state.reminders?.[userId] ?? []).filter(r => r.active);
 
     if (active.length === 0) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('📋 No Active Reminders')
-        .setDescription("You don't have any active reminders.\n\nUse `/reminder` to create one!");
-      return interaction.update({ embeds: [embed], components: [] });
+      const container = new ContainerBuilder().setAccentColor(0xFF5555);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          "📋 **No Active Reminders**\n\nYou don't have any active reminders.\n\nUse `/reminder` to create one!"
+        )
+      );
+      return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
     }
 
     const list = active
@@ -420,16 +429,18 @@ async function viewReminders(interaction) {
       })
       .join('\n\n');
 
-    const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle('📋 Your Active Reminders')
-      .setDescription(list)
-      .setFooter({ text: `${active.length}/${MAX_REMINDERS_PER_USER} reminders active` });
+    const container = new ContainerBuilder().setAccentColor(0x5865F2);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `📋 **Your Active Reminders**\n\n${list}\n\n` +
+        `-# ${active.length}/${MAX_REMINDERS_PER_USER} reminders active`
+      )
+    );
 
-    await interaction.update({ embeds: [embed], components: [] });
+    await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
   } catch (error) {
     logger.error('viewReminders failed', error);
-    await sendError(interaction, 'Failed to view reminders.', true);
+    await sendError(interaction, 'Failed to view reminders.', true, true);
   }
 }
 
@@ -449,17 +460,12 @@ async function showDeleteReminderMenu(interaction) {
     const active = (state.reminders?.[userId] ?? []).filter(r => r.active);
 
     if (active.length === 0) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('❌ No Reminders')
-        .setDescription("You don't have any active reminders to delete.");
-      return interaction.update({ embeds: [embed], components: [] });
+      const container = new ContainerBuilder().setAccentColor(0xFF5555);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent("❌ **No Reminders**\n\nYou don't have any active reminders to delete.")
+      );
+      return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
     }
-
-    const embed = new EmbedBuilder()
-      .setColor(0xFF6B6B)
-      .setTitle('🗑️ Delete Reminder')
-      .setDescription('Select a reminder to delete:');
 
     const deleteSelect = new StringSelectMenuBuilder()
       .setCustomId('reminder_delete_select')
@@ -472,13 +478,17 @@ async function showDeleteReminderMenu(interaction) {
         }))
       );
 
-    await interaction.update({
-      embeds:     [embed],
-      components: [new ActionRowBuilder().addComponents(deleteSelect)]
-    });
+    const container = new ContainerBuilder().setAccentColor(0xFF6B6B);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('🗑️ **Delete Reminder**\nSelect a reminder to delete:')
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(deleteSelect));
+
+    await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
   } catch (error) {
     logger.error('showDeleteReminderMenu failed', error);
-    await sendError(interaction, 'Failed to show delete menu.', true);
+    await sendError(interaction, 'Failed to show delete menu.', true, true);
   }
 }
 
@@ -606,19 +616,26 @@ function formatReminderTime(type, t) {
  * @param {import('discord.js').Interaction} interaction
  * @param {string}  message
  * @param {boolean} [isUpdate=false]
+ * @param {boolean} [v2=false]  Set to true when updating a IS_COMPONENTS_V2 message.
  */
-async function sendError(interaction, message, isUpdate = false) {
-  const embed = new EmbedBuilder()
-    .setColor(0xFF0000)
-    .setTitle('❌ Error')
-    .setDescription(message);
-
+async function sendError(interaction, message, isUpdate = false, v2 = false) {
   try {
     if (isUpdate) {
-      await interaction.update({ embeds: [embed], components: [] });
+      if (v2) {
+        const container = new ContainerBuilder().setAccentColor(0xFF0000);
+        container.addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(`❌ **Error**\n${message}`)
+        );
+        await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
+      } else {
+        const embed = new EmbedBuilder().setColor(0xFF0000).setTitle('❌ Error').setDescription(message);
+        await interaction.update({ embeds: [embed], components: [] });
+      }
     } else if (interaction.deferred || interaction.replied) {
+      const embed = new EmbedBuilder().setColor(0xFF0000).setTitle('❌ Error').setDescription(message);
       await interaction.editReply({ embeds: [embed], components: [] });
     } else {
+      const embed = new EmbedBuilder().setColor(0xFF0000).setTitle('❌ Error').setDescription(message);
       await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
   } catch (err) {
