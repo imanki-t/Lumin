@@ -11,7 +11,10 @@ import {
   StringSelectMenuBuilder,
   ActionRowBuilder,
   ChannelSelectMenuBuilder,
-  ChannelType
+  ChannelType,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder
 } from 'discord.js';
 
 import { state, saveStateToFile }      from '../../managers/BotManager.js';
@@ -76,6 +79,9 @@ function countScheduled(userId) {
 // ENTRY POINT
 // ============================================================================
 
+const ACCENT_COLOR     = 0xE53935;
+const IS_COMPONENTS_V2 = 1 << 15;
+
 /**
  * @param {import('discord.js').CommandInteraction} interaction
  */
@@ -85,16 +91,6 @@ export async function handleQuoteCommand(interaction) {
     const usage          = getUsage(userId);
     const scheduledCount = countScheduled(userId);
     const remaining      = MAX_QUOTES_PER_DAY - usage.count;
-
-    const embed = new EmbedBuilder()
-      .setColor(0x9B59B6)
-      .setTitle('✨ Daily Quote Setup')
-      .setDescription(
-        `What would you like to do?\n\n` +
-        `**Instant Quotes:** ${usage.count}/${MAX_QUOTES_PER_DAY} used today\n` +
-        `**Scheduled Quotes:** ${scheduledCount}/${MAX_SCHEDULED_QUOTES_PER_USER} active\n` +
-        `**Resets:** ${new Date(usage.lastReset + ONE_DAY_MS).toLocaleString()}`
-      );
 
     const actionSelect = new StringSelectMenuBuilder()
       .setCustomId('quote_action')
@@ -106,10 +102,22 @@ export async function handleQuoteCommand(interaction) {
         { label: 'Remove Daily Quote',      value: 'remove', description: 'Stop a scheduled quote',                                               emoji: '🗑️' }
       );
 
+    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        '**Daily Quote**\n' +
+        'Get an instant quote or schedule one to be delivered at a set time each day.\n\n' +
+        `**Instant Quotes:** ${usage.count}/${MAX_QUOTES_PER_DAY} used today\n` +
+        `**Scheduled Quotes:** ${scheduledCount}/${MAX_SCHEDULED_QUOTES_PER_USER} active\n` +
+        `**Resets:** ${new Date(usage.lastReset + ONE_DAY_MS).toLocaleString()}`
+      )
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(actionSelect));
+
     await interaction.reply({
-      embeds:     [embed],
-      components: [new ActionRowBuilder().addComponents(actionSelect)],
-      flags:      MessageFlags.Ephemeral
+      components: [container],
+      flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
     });
 
     // Auto-delete after 3 minutes if unused
