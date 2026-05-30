@@ -1,12 +1,17 @@
 /**
- * @fileoverview User settings pages (1–3) with toggle-button UI.
+ * @fileoverview User settings pages (1–3) — Components V2 layout.
+ *               Red accent sidebar, buttons inside the container,
+ *               nav buttons at the bottom of the same container.
+ *               No duplicate custom IDs.
  * @module modules/settings/UserSettingsHandler
  */
 
 import {
-  EmbedBuilder, MessageFlags, ButtonBuilder, ButtonStyle,
+  MessageFlags, ButtonBuilder, ButtonStyle,
   ActionRowBuilder, AttachmentBuilder,
-  ModalBuilder, TextInputBuilder, TextInputStyle
+  ModalBuilder, TextInputBuilder, TextInputStyle,
+  EmbedBuilder,
+  ContainerBuilder, TextDisplayBuilder, SeparatorBuilder
 } from 'discord.js';
 import path from 'path';
 import fs   from 'fs/promises';
@@ -20,9 +25,15 @@ import { Logger }  from '../../core/Logger.js';
 
 const logger = Logger.get('UserSettings');
 
-// Matches Discord dark-mode embed card — makes the left color stripe invisible
-const EMBED_COLOR = '#111214';
+// Red accent sidebar
+const ACCENT_COLOR = 0xE53935;
+// Fallback embed color for non-V2 messages (errors/confirmations)
+const EMBED_COLOR  = '#E53935';
+
 const TOTAL_USER_PAGES = 3;
+
+// Components V2 flag (IsComponentsV2 = 1 << 15)
+const IS_COMPONENTS_V2 = 1 << 15;
 
 // ============================================================================
 // PERSIST HELPERS
@@ -73,18 +84,20 @@ function scheduleAutoDelete(interaction, isUpdate) {
 // ============================================================================
 
 /**
- * Builds the 4-button navigation row for user settings.
- * On page 1, the back (<) button routes to the main settings menu.
+ * Navigation ActionRow for user settings.
+ * '<<' always uses 'nav_user_first' to avoid duplicate custom IDs when
+ * page === 2 (where '<' would also resolve to nav_user_p1).
  */
 function buildUserNavRow(page) {
   const isFirst = page === 1;
   const isLast  = page === TOTAL_USER_PAGES;
 
+  // '<' back target: page 1 goes to main menu, otherwise previous page
   const prevId = isFirst ? 'nav_main' : `nav_user_p${page - 1}`;
 
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId('nav_user_p1')
+      .setCustomId('nav_user_first')     // Unique ID — never clashes with prevId
       .setLabel('<<')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(isFirst),
@@ -98,14 +111,14 @@ function buildUserNavRow(page) {
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(isLast),
     new ButtonBuilder()
-      .setCustomId(`nav_user_p${TOTAL_USER_PAGES}`)
+      .setCustomId('nav_user_last')      // Unique ID — never clashes with next page IDs
       .setLabel('>>')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(isLast)
   );
 }
 
-/** Toggle button — green On / red Off reflecting current state. */
+/** Toggle button — green On / red Off. */
 function toggleBtn(customId, isEnabled) {
   return new ButtonBuilder()
     .setCustomId(customId)
@@ -113,7 +126,7 @@ function toggleBtn(customId, isEnabled) {
     .setStyle(isEnabled ? ButtonStyle.Success : ButtonStyle.Danger);
 }
 
-/** Format selector — two buttons, active one highlighted Primary. */
+/** Format selector buttons. */
 function formatBtns(current) {
   return [
     new ButtonBuilder()
@@ -127,46 +140,68 @@ function formatBtns(current) {
   ];
 }
 
+/**
+ * Builds a Components V2 container with a red accent bar.
+ * Each section: TextDisplay (name + description) → ActionRow (buttons).
+ * Navigation sits at the very bottom inside the same container.
+ */
+function buildContainer(sections, navRow) {
+  const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+
+  for (let i = 0; i < sections.length; i++) {
+    const { text, row } = sections[i];
+
+    container.addComponents(new TextDisplayBuilder().setContent(text));
+    container.addComponents(row);
+
+    if (i < sections.length - 1) {
+      container.addComponents(new SeparatorBuilder().setDivider(true));
+    }
+  }
+
+  container.addComponents(new SeparatorBuilder().setDivider(true));
+  container.addComponents(navRow);
+
+  return container;
+}
+
 // ============================================================================
 // MAIN SETTINGS DASHBOARD
 // ============================================================================
 
 export async function showMainSettings(interaction, isUpdate = false) {
   try {
-    const userId    = interaction.user.id;
     const guildId   = interaction.guild?.id;
     const canManage = guildId
       ? interaction.member.permissions.has(0x20n)
       : false;
 
-    const userBtn = new ButtonBuilder()
-      .setCustomId('nav_user_p1')
-      .setLabel('User Settings')
-      .setStyle(ButtonStyle.Primary);
-
-    const serverBtn = new ButtonBuilder()
-      .setCustomId('nav_server_p1')
-      .setLabel('Server Settings')
-      .setStyle(ButtonStyle.Secondary);
-
-    const components = canManage
-      ? [new ActionRowBuilder().addComponents(userBtn, serverBtn)]
-      : [new ActionRowBuilder().addComponents(userBtn)];
-
-    let desc = 'Select a configuration tier below to customize Lumin.';
+    let descText = '**Settings**\nSelect a configuration tier below to customize Lumin.\n\n' +
+                   '**User Settings**\nPersonal defaults, response style, behavior, and privacy.';
     if (canManage) {
-      desc += '\n\n**User Settings**\nPersonal defaults, response style, behavior, and privacy.\n\n**Server Settings**\nServer-wide overrides, channel controls, and data management.';
-    } else {
-      desc += '\n\n**User Settings**\nPersonal defaults, response style, behavior, and privacy.';
+      descText += '\n\n**Server Settings**\nServer-wide overrides, channel controls, and data management.';
     }
 
-    const embed = new EmbedBuilder()
-      .setColor(EMBED_COLOR)
-      .setTitle('Settings')
-      .setDescription(desc)
-      .setFooter({ text: 'Changes are saved automatically.' });
+    const btnRow = canManage
+      ? new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('nav_user_p1').setLabel('User Settings').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('nav_server_p1').setLabel('Server Settings').setStyle(ButtonStyle.Secondary)
+        )
+      : new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('nav_user_p1').setLabel('User Settings').setStyle(ButtonStyle.Primary)
+        );
 
-    const payload = { embeds: [embed], components, flags: MessageFlags.Ephemeral };
+    const container = new ContainerBuilder()
+      .setAccentColor(ACCENT_COLOR)
+      .addComponents(new TextDisplayBuilder().setContent(descText))
+      .addComponents(new SeparatorBuilder().setDivider(true))
+      .addComponents(btnRow)
+      .addComponents(new TextDisplayBuilder().setContent('-# Changes are saved automatically.'));
+
+    const payload = {
+      components: [container],
+      flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
+    };
 
     if (isUpdate) await interaction.update(payload);
     else           await interaction.reply(payload);
@@ -182,9 +217,9 @@ export async function showMainSettings(interaction, isUpdate = false) {
 // ============================================================================
 
 export async function showUserSettings(interaction, isUpdate = false) {
-  const userId      = interaction.user.id;
+  const userId       = interaction.user.id;
   const userSettings = state.userSettings[userId] || {};
-  const guildId     = interaction.guild?.id;
+  const guildId      = interaction.guild?.id;
 
   if (guildId && !isUpdate) {
     const ss = state.serverSettings[guildId] || {};
@@ -202,25 +237,26 @@ export async function showUserSettings(interaction, isUpdate = false) {
   const responseFormat    = userSettings.responseFormat   || DEFAULT_USER_SETTINGS.responseFormat || 'Normal';
   const showActionButtons = userSettings.showActionButtons ?? DEFAULT_USER_SETTINGS.showActionButtons ?? true;
 
-  const embed = new EmbedBuilder()
-    .setColor(EMBED_COLOR)
-    .setTitle('User Settings')
-    .setDescription(
-      '**Response Format**\n' +
-      'Controls how Lumin sends replies. Normal is plain text; Embedded uses rich cards.\n\n' +
-      '**Action Buttons**\n' +
-      'Toggles quick-action controls (Copy, Save, Delete) after each response.'
-    )
-    .setFooter({ text: `Page 1 of ${TOTAL_USER_PAGES}` });
+  const container = buildContainer(
+    [
+      {
+        text: `**User Settings** — Page 1 of ${TOTAL_USER_PAGES}\n\n` +
+              '**Response Format**\n' +
+              'Controls how Lumin sends replies. Normal is plain text; Embedded uses rich cards.',
+        row: new ActionRowBuilder().addComponents(...formatBtns(responseFormat))
+      },
+      {
+        text: '**Action Buttons**\n' +
+              'Toggles quick-action controls (Copy, Save, Delete) after each response.',
+        row: new ActionRowBuilder().addComponents(toggleBtn('user_toggle_action_buttons', showActionButtons))
+      }
+    ],
+    buildUserNavRow(1)
+  );
 
   const payload = {
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(...formatBtns(responseFormat)),
-      new ActionRowBuilder().addComponents(toggleBtn('user_toggle_action_buttons', showActionButtons)),
-      buildUserNavRow(1),
-    ],
-    flags: MessageFlags.Ephemeral
+    components: [container],
+    flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -234,30 +270,31 @@ export async function showUserSettings(interaction, isUpdate = false) {
 // ============================================================================
 
 export async function showUserSettingsPage2(interaction, isUpdate = false) {
-  const userId       = interaction.user.id;
-  const userSettings = state.userSettings[userId] || {};
+  const userId              = interaction.user.id;
+  const userSettings        = state.userSettings[userId] || {};
   const continuousReply     = userSettings.continuousReply     ?? true;
   const crossContextEnabled = userSettings.crossContextEnabled ?? false;
 
-  const embed = new EmbedBuilder()
-    .setColor(EMBED_COLOR)
-    .setTitle('User Settings')
-    .setDescription(
-      '**Continuous Reply**\n' +
-      'When enabled, Lumin responds to your consecutive messages without requiring a mention each time.\n\n' +
-      '**Cross-Context Memory**\n' +
-      'When enabled, Lumin can draw on conversation history from across servers and DMs.'
-    )
-    .setFooter({ text: `Page 2 of ${TOTAL_USER_PAGES}` });
+  const container = buildContainer(
+    [
+      {
+        text: `**User Settings** — Page 2 of ${TOTAL_USER_PAGES}\n\n` +
+              '**Continuous Reply**\n' +
+              'When enabled, Lumin responds to your consecutive messages without requiring a mention each time.',
+        row: new ActionRowBuilder().addComponents(toggleBtn('user_toggle_continuous_reply', continuousReply))
+      },
+      {
+        text: '**Cross-Context Memory**\n' +
+              'When enabled, Lumin can draw on conversation history from across servers and DMs.',
+        row: new ActionRowBuilder().addComponents(toggleBtn('user_toggle_cross_context', crossContextEnabled))
+      }
+    ],
+    buildUserNavRow(2)
+  );
 
   const payload = {
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(toggleBtn('user_toggle_continuous_reply', continuousReply)),
-      new ActionRowBuilder().addComponents(toggleBtn('user_toggle_cross_context', crossContextEnabled)),
-      buildUserNavRow(2),
-    ],
-    flags: MessageFlags.Ephemeral
+    components: [container],
+    flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -276,50 +313,55 @@ export async function showUserSettingsPage3(interaction, isUpdate = false) {
   const hasPersonality = !!userSettings.customPersonality;
   const embedColor     = userSettings.embedColor || BOT_CONFIG.HEX_COLOUR || EMBED_COLOR;
 
-  const embed = new EmbedBuilder()
-    .setColor(EMBED_COLOR)
-    .setTitle('User Settings')
-    .setDescription(
-      '**Embed Color**\n' +
-      `Set a personal accent color for Lumin's embeds. Current: \`${embedColor}\`\n\n` +
-      '**Custom Personality**\n' +
-      `Define a personal persona for Lumin. Status: \`${hasPersonality ? 'Active' : 'Default'}\`\n\n` +
-      '**Data Management**\n' +
-      'Clear your stored conversation memory or export your chat history as a file.'
-    )
-    .setFooter({ text: `Page 3 of ${TOTAL_USER_PAGES}` });
-
-  const customizationRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('user_embed_color')
-      .setLabel('Set Color')
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId('user_custom_personality')
-      .setLabel('Set Personality')
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId('user_remove_personality')
-      .setLabel('Reset Personality')
-      .setStyle(ButtonStyle.Danger)
-      .setDisabled(!hasPersonality)
-  );
-
-  const dataRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('clear_user_memory')
-      .setLabel('Clear Memory')
-      .setStyle(ButtonStyle.Danger),
-    new ButtonBuilder()
-      .setCustomId('download_user_conversation')
-      .setLabel('Export History')
-      .setStyle(ButtonStyle.Success)
+  const container = buildContainer(
+    [
+      {
+        text: `**User Settings** — Page 3 of ${TOTAL_USER_PAGES}\n\n` +
+              '**Embed Color**\n' +
+              `Set a personal accent color for Lumin's embeds. Current: \`${embedColor}\``,
+        row: new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('user_embed_color')
+            .setLabel('Set Color')
+            .setStyle(ButtonStyle.Secondary)
+        )
+      },
+      {
+        text: '**Custom Personality**\n' +
+              `Define a personal persona for Lumin. Status: \`${hasPersonality ? 'Active' : 'Default'}\``,
+        row: new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('user_custom_personality')
+            .setLabel('Set Personality')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('user_remove_personality')
+            .setLabel('Reset Personality')
+            .setStyle(ButtonStyle.Danger)
+            .setDisabled(!hasPersonality)
+        )
+      },
+      {
+        text: '**Data Management**\n' +
+              'Clear your stored conversation memory or export your chat history as a file.',
+        row: new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('clear_user_memory')
+            .setLabel('Clear Memory')
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId('download_user_conversation')
+            .setLabel('Export History')
+            .setStyle(ButtonStyle.Success)
+        )
+      }
+    ],
+    buildUserNavRow(3)
   );
 
   const payload = {
-    embeds: [embed],
-    components: [customizationRow, dataRow, buildUserNavRow(3)],
-    flags: MessageFlags.Ephemeral
+    components: [container],
+    flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
   };
 
   if (isUpdate) await interaction.update(payload);

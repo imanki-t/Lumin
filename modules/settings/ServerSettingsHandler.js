@@ -1,13 +1,17 @@
 /**
- * @fileoverview Server settings pages (1–5) with toggle-button UI.
+ * @fileoverview Server settings pages (1–5) — Components V2 layout.
+ *               Red accent sidebar, buttons inside the container,
+ *               nav buttons at the bottom of the same container.
+ *               No duplicate custom IDs.
  * @module modules/settings/ServerSettingsHandler
  */
 
 import {
-  EmbedBuilder, MessageFlags, ButtonBuilder, ButtonStyle,
+  MessageFlags, ButtonBuilder, ButtonStyle,
   ActionRowBuilder, ChannelSelectMenuBuilder, ChannelType,
   AttachmentBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
-  PermissionsBitField
+  PermissionsBitField, EmbedBuilder,
+  ContainerBuilder, TextDisplayBuilder, SeparatorBuilder
 } from 'discord.js';
 import path from 'path';
 import fs   from 'fs/promises';
@@ -21,9 +25,15 @@ import { Logger } from '../../core/Logger.js';
 
 const logger = Logger.get('ServerSettings');
 
-// Matches Discord dark-mode embed card — makes the left color stripe invisible
-const EMBED_COLOR = '#111214';
+// Red accent sidebar — visible and on-brand
+const ACCENT_COLOR  = 0xE53935;
+// Fallback embed color for non-V2 messages (errors/confirmations)
+const EMBED_COLOR   = '#E53935';
+
 const TOTAL_SERVER_PAGES = 5;
+
+// Components V2 flag (IsComponentsV2 = 1 << 15)
+const IS_COMPONENTS_V2 = 1 << 15;
 
 // ============================================================================
 // HELPERS
@@ -80,16 +90,21 @@ async function persistChatHistory(id) {
 // SHARED UI BUILDERS
 // ============================================================================
 
-/** 4-button navigation row for server settings. */
+/**
+ * Navigation ActionRow for server settings.
+ * '<<' always uses 'nav_server_first' to avoid duplicate custom IDs when
+ * page === 2 (where '<' would also resolve to nav_server_p1).
+ */
 function buildServerNavRow(page) {
   const isFirst = page === 1;
   const isLast  = page === TOTAL_SERVER_PAGES;
 
+  // '<' back target: page 1 goes to main menu, otherwise previous page
   const prevId = isFirst ? 'nav_main' : `nav_server_p${page - 1}`;
 
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId('nav_server_p1')
+      .setCustomId('nav_server_first')   // Unique ID — never clashes with prevId
       .setLabel('<<')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(isFirst),
@@ -103,7 +118,7 @@ function buildServerNavRow(page) {
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(isLast),
     new ButtonBuilder()
-      .setCustomId(`nav_server_p${TOTAL_SERVER_PAGES}`)
+      .setCustomId('nav_server_last')    // Unique ID — never clashes with next page IDs
       .setLabel('>>')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(isLast)
@@ -132,6 +147,33 @@ function formatBtns(current) {
   ];
 }
 
+/**
+ * Builds a Components V2 container with a red accent bar.
+ * Each setting block is: TextDisplay (name + description) → ActionRow (buttons).
+ * Navigation sits at the very bottom inside the same container.
+ */
+function buildContainer(sections, navRow) {
+  const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+
+  for (let i = 0; i < sections.length; i++) {
+    const { text, row } = sections[i];
+
+    container.addComponents(new TextDisplayBuilder().setContent(text));
+    container.addComponents(row);
+
+    // Separator between settings blocks, not after the last one
+    if (i < sections.length - 1) {
+      container.addComponents(new SeparatorBuilder().setDivider(true));
+    }
+  }
+
+  // Separator before navigation
+  container.addComponents(new SeparatorBuilder().setDivider(true));
+  container.addComponents(navRow);
+
+  return container;
+}
+
 // ============================================================================
 // PAGE 1 — Core Preferences
 // ============================================================================
@@ -144,25 +186,26 @@ export async function showServerSettings(interaction, isUpdate = false) {
   const responseFormat = ss.responseFormat    || DEFAULT_SERVER_SETTINGS.responseFormat || 'Normal';
   const showButtons    = ss.showActionButtons  ?? DEFAULT_SERVER_SETTINGS.showActionButtons ?? true;
 
-  const embed = new EmbedBuilder()
-    .setColor(EMBED_COLOR)
-    .setTitle('Server Settings')
-    .setDescription(
-      '**Response Format**\n' +
-      'Controls how Lumin sends replies server-wide. Normal is plain text; Embedded uses rich cards.\n\n' +
-      '**Action Buttons**\n' +
-      'Toggles quick-action controls (Copy, Save, Delete) after each response across the server.'
-    )
-    .setFooter({ text: `Page 1 of ${TOTAL_SERVER_PAGES}` });
+  const container = buildContainer(
+    [
+      {
+        text: `**Server Settings** — Page 1 of ${TOTAL_SERVER_PAGES}\n\n` +
+              '**Response Format**\n' +
+              'Controls how Lumin sends replies server-wide. Normal is plain text; Embedded uses rich cards.',
+        row: new ActionRowBuilder().addComponents(...formatBtns(responseFormat))
+      },
+      {
+        text: '**Action Buttons**\n' +
+              'Toggles quick-action controls (Copy, Save, Delete) after each response across the server.',
+        row: new ActionRowBuilder().addComponents(toggleBtn('server_toggle_action_buttons', showButtons))
+      }
+    ],
+    buildServerNavRow(1)
+  );
 
   const payload = {
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(...formatBtns(responseFormat)),
-      new ActionRowBuilder().addComponents(toggleBtn('server_toggle_action_buttons', showButtons)),
-      buildServerNavRow(1),
-    ],
-    flags: MessageFlags.Ephemeral
+    components: [container],
+    flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -176,34 +219,37 @@ export async function showServerSettings(interaction, isUpdate = false) {
 export async function showServerSettingsPage2(interaction, isUpdate = false) {
   if (!requireManageGuild(interaction)) return;
 
-  const guildId           = interaction.guild.id;
-  const ss                = state.serverSettings[guildId] || {};
+  const guildId              = interaction.guild.id;
+  const ss                   = state.serverSettings[guildId] || {};
   const overrideUserSettings = ss.overrideUserSettings ?? false;
-  const continuousReply   = ss.continuousReply          ?? false;
-  const serverChatHistory = ss.serverChatHistory        ?? false;
+  const continuousReply      = ss.continuousReply       ?? false;
+  const serverChatHistory    = ss.serverChatHistory     ?? false;
 
-  const embed = new EmbedBuilder()
-    .setColor(EMBED_COLOR)
-    .setTitle('Server Settings')
-    .setDescription(
-      '**Override User Settings**\n' +
-      'When enabled, server-level settings take priority over individual user preferences.\n\n' +
-      '**Continuous Reply**\n' +
-      'When enabled, Lumin responds to consecutive messages without requiring a mention each time.\n\n' +
-      '**Server-Wide History**\n' +
-      'When enabled, conversation history is shared across all users on this server.'
-    )
-    .setFooter({ text: `Page 2 of ${TOTAL_SERVER_PAGES}` });
+  const container = buildContainer(
+    [
+      {
+        text: `**Server Settings** — Page 2 of ${TOTAL_SERVER_PAGES}\n\n` +
+              '**Override User Settings**\n' +
+              'When enabled, server-level settings take priority over individual user preferences.',
+        row: new ActionRowBuilder().addComponents(toggleBtn('server_toggle_override', overrideUserSettings))
+      },
+      {
+        text: '**Continuous Reply**\n' +
+              'When enabled, Lumin responds to consecutive messages without requiring a mention each time.',
+        row: new ActionRowBuilder().addComponents(toggleBtn('server_toggle_continuous', continuousReply))
+      },
+      {
+        text: '**Server-Wide History**\n' +
+              'When enabled, conversation history is shared across all users on this server.',
+        row: new ActionRowBuilder().addComponents(toggleBtn('server_toggle_srv_history', serverChatHistory))
+      }
+    ],
+    buildServerNavRow(2)
+  );
 
   const payload = {
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(toggleBtn('server_toggle_override', overrideUserSettings)),
-      new ActionRowBuilder().addComponents(toggleBtn('server_toggle_continuous', continuousReply)),
-      new ActionRowBuilder().addComponents(toggleBtn('server_toggle_srv_history', serverChatHistory)),
-      buildServerNavRow(2),
-    ],
-    flags: MessageFlags.Ephemeral
+    components: [container],
+    flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -217,43 +263,46 @@ export async function showServerSettingsPage2(interaction, isUpdate = false) {
 export async function showServerSettingsPage3(interaction, isUpdate = false) {
   if (!requireManageGuild(interaction)) return;
 
-  const guildId      = interaction.guild.id;
-  const ss           = state.serverSettings[guildId] || {};
+  const guildId        = interaction.guild.id;
+  const ss             = state.serverSettings[guildId] || {};
   const hasPersonality = !!ss.customPersonality;
   const embedColor     = ss.embedColor || BOT_CONFIG.HEX_COLOUR || EMBED_COLOR;
 
-  const embed = new EmbedBuilder()
-    .setColor(EMBED_COLOR)
-    .setTitle('Server Settings')
-    .setDescription(
-      '**Embed Color**\n' +
-      `Set a server-wide accent color for Lumin's embeds. Current: \`${embedColor}\`\n\n` +
-      '**Custom Personality**\n' +
-      `Define a custom server-wide persona for Lumin. Status: \`${hasPersonality ? 'Active' : 'Default'}\``
-    )
-    .setFooter({ text: `Page 3 of ${TOTAL_SERVER_PAGES}` });
+  const container = buildContainer(
+    [
+      {
+        text: `**Server Settings** — Page 3 of ${TOTAL_SERVER_PAGES}\n\n` +
+              '**Embed Color**\n' +
+              `Set a server-wide accent color for Lumin's embeds. Current: \`${embedColor}\``,
+        row: new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('server_embed_color')
+            .setLabel('Set Color')
+            .setStyle(ButtonStyle.Secondary)
+        )
+      },
+      {
+        text: '**Custom Personality**\n' +
+              `Define a custom server-wide persona for Lumin. Status: \`${hasPersonality ? 'Active' : 'Default'}\``,
+        row: new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('server_custom_personality')
+            .setLabel('Set Personality')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('server_remove_personality')
+            .setLabel('Reset Personality')
+            .setStyle(ButtonStyle.Danger)
+            .setDisabled(!hasPersonality)
+        )
+      }
+    ],
+    buildServerNavRow(3)
+  );
 
   const payload = {
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('server_embed_color')
-          .setLabel('Set Color')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId('server_custom_personality')
-          .setLabel('Set Personality')
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId('server_remove_personality')
-          .setLabel('Reset Personality')
-          .setStyle(ButtonStyle.Danger)
-          .setDisabled(!hasPersonality)
-      ),
-      buildServerNavRow(3),
-    ],
-    flags: MessageFlags.Ephemeral
+    components: [container],
+    flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -276,39 +325,40 @@ export async function showServerSettingsPage4(interaction, isUpdate = false) {
       (allowedChannels.length > 5 ? ` +${allowedChannels.length - 5} more` : '')
     : 'All channels permitted';
 
-  const embed = new EmbedBuilder()
-    .setColor(EMBED_COLOR)
-    .setTitle('Server Settings')
-    .setDescription(
-      '**Allowed Channels**\n' +
-      `Restrict Lumin to specific channels. Current scope: ${channelList}\n\n` +
-      '**Channel-Specific Mode**\n' +
-      'Toggle continuous reply mode for the current channel without affecting server-wide settings.'
-    )
-    .setFooter({ text: `Page 4 of ${TOTAL_SERVER_PAGES}` });
+  const container = buildContainer(
+    [
+      {
+        text: `**Server Settings** — Page 4 of ${TOTAL_SERVER_PAGES}\n\n` +
+              '**Allowed Channels**\n' +
+              `Restrict Lumin to specific channels. Current scope: ${channelList}`,
+        row: new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('manage_allowed_channels')
+            .setLabel('Manage Channels')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('set_all_channels')
+            .setLabel('Allow All Channels')
+            .setStyle(ButtonStyle.Secondary)
+        )
+      },
+      {
+        text: '**Channel-Specific Mode**\n' +
+              'Toggle continuous reply mode for the current channel without affecting server-wide settings.',
+        row: new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('toggle_continuous_reply')
+            .setLabel('Toggle Channel Mode')
+            .setStyle(ButtonStyle.Secondary)
+        )
+      }
+    ],
+    buildServerNavRow(4)
+  );
 
   const payload = {
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('manage_allowed_channels')
-          .setLabel('Manage Channels')
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId('set_all_channels')
-          .setLabel('Allow All Channels')
-          .setStyle(ButtonStyle.Secondary)
-      ),
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('toggle_continuous_reply')
-          .setLabel('Toggle Channel Mode')
-          .setStyle(ButtonStyle.Secondary)
-      ),
-      buildServerNavRow(4),
-    ],
-    flags: MessageFlags.Ephemeral
+    components: [container],
+    flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -322,36 +372,36 @@ export async function showServerSettingsPage4(interaction, isUpdate = false) {
 export async function showServerSettingsPage5(interaction, isUpdate = false) {
   if (!requireManageGuild(interaction)) return;
 
-  const guildId = interaction.guild.id;
-  const ss      = state.serverSettings[guildId] || {};
-
-  const embed = new EmbedBuilder()
-    .setColor(EMBED_COLOR)
-    .setTitle('Server Settings')
-    .setDescription(
-      '**Clear Server Memory**\n' +
-      'Permanently erase all stored conversation logs for this server.\n\n' +
-      '**Export Server History**\n' +
-      'Download the complete server conversation archive as a text file.'
-    )
-    .setFooter({ text: `Page 5 of ${TOTAL_SERVER_PAGES}` });
+  const container = buildContainer(
+    [
+      {
+        text: `**Server Settings** — Page 5 of ${TOTAL_SERVER_PAGES}\n\n` +
+              '**Clear Server Memory**\n' +
+              'Permanently erase all stored conversation logs for this server.',
+        row: new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('clear_server_memory')
+            .setLabel('Clear Memory')
+            .setStyle(ButtonStyle.Danger)
+        )
+      },
+      {
+        text: '**Export Server History**\n' +
+              'Download the complete server conversation archive as a text file.',
+        row: new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('download_server_conversation')
+            .setLabel('Export History')
+            .setStyle(ButtonStyle.Success)
+        )
+      }
+    ],
+    buildServerNavRow(5)
+  );
 
   const payload = {
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('clear_server_memory')
-          .setLabel('Clear Memory')
-          .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-          .setCustomId('download_server_conversation')
-          .setLabel('Export History')
-          .setStyle(ButtonStyle.Success)
-      ),
-      buildServerNavRow(5),
-    ],
-    flags: MessageFlags.Ephemeral
+    components: [container],
+    flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -384,6 +434,8 @@ export async function showChannelManagementMenu(interaction, isUpdate = false) {
     ? allowedChannels.map(id => `<#${id}>`).join(', ')
     : 'All Channels';
 
+  // Channel management uses a select menu — falls back to standard embed+components layout
+  // because ChannelSelectMenuBuilder isn't supported inside ContainerBuilder
   const embed = new EmbedBuilder()
     .setColor(EMBED_COLOR)
     .setTitle('Channel Management')
@@ -400,7 +452,7 @@ export async function showChannelManagementMenu(interaction, isUpdate = false) {
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('nav_server_p4')
-          .setLabel('<')
+          .setLabel('< Back')
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('set_all_channels')

@@ -102,6 +102,14 @@ const BUTTON_HANDLERS = {
   'nav_server_p4':        (i) => showServerSettingsPage4(i, true),
   'nav_server_p5':        (i) => showServerSettingsPage5(i, true),
 
+  // ── << and >> aliases (avoid duplicate customIds when adjacent to p1/last) ─
+  // Server: nav_server_first (<<) always goes to p1, nav_server_last (>>) goes to p5
+  'nav_server_first':     (i) => showServerSettings(i, true),
+  'nav_server_last':      (i) => showServerSettingsPage5(i, true),
+  // User: nav_user_first (<<) always goes to p1, nav_user_last (>>) goes to p3
+  'nav_user_first':       (i) => showUserSettings(i, true),
+  'nav_user_last':        (i) => showUserSettingsPage3(i, true),
+
   // ── Legacy navigation aliases (backward compat) ────────────────────────────
   'user_settings':        (i) => showUserSettings(i, true),
   'server_settings':      (i) => showServerSettings(i, true),
@@ -109,41 +117,41 @@ const BUTTON_HANDLERS = {
   'settings_btn':         (i) => showMainSettings(i, true),
 
   // ── User toggle buttons ────────────────────────────────────────────────────
-  'user_set_format_normal':    handleUserResponseFormatNormal,
-  'user_set_format_embedded':  handleUserResponseFormatEmbedded,
-  'user_toggle_action_buttons': handleUserToggleActionButtons,
+  'user_set_format_normal':       handleUserResponseFormatNormal,
+  'user_set_format_embedded':     handleUserResponseFormatEmbedded,
+  'user_toggle_action_buttons':   handleUserToggleActionButtons,
   'user_toggle_continuous_reply': handleUserToggleContinuousReply,
-  'user_toggle_cross_context': handleUserToggleCrossContext,
+  'user_toggle_cross_context':    handleUserToggleCrossContext,
 
   // ── Server toggle buttons ──────────────────────────────────────────────────
-  'server_set_format_normal':    handleServerResponseFormatNormal,
-  'server_set_format_embedded':  handleServerResponseFormatEmbedded,
+  'server_set_format_normal':     handleServerResponseFormatNormal,
+  'server_set_format_embedded':   handleServerResponseFormatEmbedded,
   'server_toggle_action_buttons': handleServerToggleActionButtons,
-  'server_toggle_override':      handleServerToggleOverride,
-  'server_toggle_continuous':    handleServerToggleContinuous,
-  'server_toggle_srv_history':   handleServerToggleSrvHistory,
+  'server_toggle_override':       handleServerToggleOverride,
+  'server_toggle_continuous':     handleServerToggleContinuous,
+  'server_toggle_srv_history':    handleServerToggleSrvHistory,
 
   // ── User actions ───────────────────────────────────────────────────────────
-  'clear_user_memory':           clearUserMemory,
-  'download_user_conversation':  downloadUserConversation,
-  'user_custom_personality':     showUserPersonalityModal,
-  'user_remove_personality':     removeUserPersonality,
-  'user_embed_color':            showUserEmbedColorModal,
+  'clear_user_memory':            clearUserMemory,
+  'download_user_conversation':   downloadUserConversation,
+  'user_custom_personality':      showUserPersonalityModal,
+  'user_remove_personality':      removeUserPersonality,
+  'user_embed_color':             showUserEmbedColorModal,
 
   // ── Server actions ─────────────────────────────────────────────────────────
-  'clear_server_memory':         clearServerMemory,
+  'clear_server_memory':          clearServerMemory,
   'download_server_conversation': downloadServerConversation,
-  'server_custom_personality':   showServerPersonalityModal,
-  'server_remove_personality':   removeServerPersonality,
-  'server_embed_color':          showServerEmbedColorModal,
+  'server_custom_personality':    showServerPersonalityModal,
+  'server_remove_personality':    removeServerPersonality,
+  'server_embed_color':           showServerEmbedColorModal,
 
   // ── Channel management ─────────────────────────────────────────────────────
-  'toggle_continuous_reply':     toggleContinuousReplyChannel,
-  'manage_allowed_channels':     (i) => showChannelManagementMenu(i, true),
-  'set_all_channels':            handleSetAllChannels,
+  'toggle_continuous_reply':      toggleContinuousReplyChannel,
+  'manage_allowed_channels':      (i) => showChannelManagementMenu(i, true),
+  'set_all_channels':             handleSetAllChannels,
 
   // ── Message actions ────────────────────────────────────────────────────────
-  'download_message':            downloadMessage,
+  'download_message':             downloadMessage,
 };
 
 export async function handleButtonInteraction(interaction) {
