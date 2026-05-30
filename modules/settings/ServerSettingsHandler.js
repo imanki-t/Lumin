@@ -158,18 +158,18 @@ function buildContainer(sections, navRow) {
   for (let i = 0; i < sections.length; i++) {
     const { text, row } = sections[i];
 
-    container.addComponents(new TextDisplayBuilder().setContent(text));
-    container.addComponents(row);
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(text));
+    container.addActionRowComponents(row);
 
     // Separator between settings blocks, not after the last one
     if (i < sections.length - 1) {
-      container.addComponents(new SeparatorBuilder().setDivider(true));
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     }
   }
 
   // Separator before navigation
-  container.addComponents(new SeparatorBuilder().setDivider(true));
-  container.addComponents(navRow);
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addActionRowComponents(navRow);
 
   return container;
 }

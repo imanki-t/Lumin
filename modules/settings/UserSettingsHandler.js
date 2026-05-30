@@ -151,16 +151,16 @@ function buildContainer(sections, navRow) {
   for (let i = 0; i < sections.length; i++) {
     const { text, row } = sections[i];
 
-    container.addComponents(new TextDisplayBuilder().setContent(text));
-    container.addComponents(row);
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(text));
+    container.addActionRowComponents(row);
 
     if (i < sections.length - 1) {
-      container.addComponents(new SeparatorBuilder().setDivider(true));
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     }
   }
 
-  container.addComponents(new SeparatorBuilder().setDivider(true));
-  container.addComponents(navRow);
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addActionRowComponents(navRow);
 
   return container;
 }
@@ -192,11 +192,11 @@ export async function showMainSettings(interaction, isUpdate = false) {
         );
 
     const container = new ContainerBuilder()
-      .setAccentColor(ACCENT_COLOR)
-      .addComponents(new TextDisplayBuilder().setContent(descText))
-      .addComponents(new SeparatorBuilder().setDivider(true))
-      .addComponents(btnRow)
-      .addComponents(new TextDisplayBuilder().setContent('-# Changes are saved automatically.'));
+      .setAccentColor(ACCENT_COLOR);
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(descText));
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(btnRow);
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent('-# Changes are saved automatically.'));
 
     const payload = {
       components: [container],
