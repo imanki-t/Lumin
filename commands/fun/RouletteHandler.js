@@ -133,59 +133,83 @@ export async function handleReactionActionSelect(interaction) {
 
   if (!state.roulette) state.roulette = {};
 
-  if (action === 'enable') {
-    if (!state.roulette[channelId]) {
-      state.roulette[channelId] = { active: true, rarity: 'medium', guildId: interaction.guild.id };
-    } else {
-      state.roulette[channelId].active = true;
-    }
-    await saveStateToFile();
+  try {
+    if (action === 'enable') {
+      // Update state in memory first
+      if (!state.roulette[channelId]) {
+        state.roulette[channelId] = { active: true, rarity: 'medium', guildId: interaction.guild.id };
+      } else {
+        state.roulette[channelId].active = true;
+      }
 
-    const container = new ContainerBuilder().setAccentColor(0x00C853);
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        `**✅ Roulette Enabled**\n` +
-        `I'll now randomly react to messages in this channel! 🎰\n\n` +
-        `**Rarity:** ${state.roulette[channelId].rarity || 'medium'}`
-      )
-    );
-    return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
-  }
-
-  if (action === 'disable') {
-    if (state.roulette[channelId]) {
-      state.roulette[channelId].active = false;
-      await saveStateToFile();
-    }
-
-    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        '**❌ Roulette Disabled**\nReaction roulette has been disabled for this channel.'
-      )
-    );
-    return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
-  }
-
-  if (action === 'rarity') {
-    const raritySelect = new StringSelectMenuBuilder()
-      .setCustomId('reaction_rarity')
-      .setPlaceholder('Select frequency')
-      .addOptions(
-        { label: 'Common',    value: 'common',    description: '~20% of messages', emoji: '🟢' },
-        { label: 'Medium',    value: 'medium',    description: '~10% of messages', emoji: '🟡' },
-        { label: 'Rare',      value: 'rare',      description: '~5% of messages',  emoji: '🔴' },
-        { label: 'Legendary', value: 'legendary', description: '~1% of messages',  emoji: '✨' }
+      const rarity    = state.roulette[channelId].rarity || 'medium';
+      const container = new ContainerBuilder().setAccentColor(0x00C853);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          `**✅ Roulette Enabled**\n` +
+          `I'll now randomly react to messages in this channel! 🎰\n\n` +
+          `**Rarity:** ${rarity}`
+        )
+      );
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`-# This message will be dismissed automatically.`)
       );
 
-    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('**⚙️ Set Reaction Rarity**\nHow often should I react to messages?')
-    );
-    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-    container.addActionRowComponents(new ActionRowBuilder().addComponents(raritySelect));
+      // Respond immediately — before the DB write — to avoid interaction timeout
+      await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
+      saveStateToFile().catch(err => logger.error('Roulette enable save failed', err));
 
-    return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
+      setTimeout(() => interaction.deleteReply().catch(() => {}), 3 * 60 * 1000);
+      return;
+    }
+
+    if (action === 'disable') {
+      if (state.roulette[channelId]) {
+        state.roulette[channelId].active = false;
+      }
+
+      const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          '**❌ Roulette Disabled**\nReaction roulette has been disabled for this channel.'
+        )
+      );
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`-# This message will be dismissed automatically.`)
+      );
+
+      await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
+      saveStateToFile().catch(err => logger.error('Roulette disable save failed', err));
+
+      setTimeout(() => interaction.deleteReply().catch(() => {}), 3 * 60 * 1000);
+      return;
+    }
+
+    if (action === 'rarity') {
+      const raritySelect = new StringSelectMenuBuilder()
+        .setCustomId('reaction_rarity')
+        .setPlaceholder('Select frequency')
+        .addOptions(
+          { label: 'Common',    value: 'common',    description: '~20% of messages', emoji: '🟢' },
+          { label: 'Medium',    value: 'medium',    description: '~10% of messages', emoji: '🟡' },
+          { label: 'Rare',      value: 'rare',      description: '~5% of messages',  emoji: '🔴' },
+          { label: 'Legendary', value: 'legendary', description: '~1% of messages',  emoji: '✨' }
+        );
+
+      const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent('**⚙️ Set Reaction Rarity**\nHow often should I react to messages?')
+      );
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+      container.addActionRowComponents(new ActionRowBuilder().addComponents(raritySelect));
+
+      return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
+    }
+  } catch (err) {
+    logger.error('handleReactionActionSelect failed', err);
+    await sendPermError(interaction).catch(() => {});
   }
 }
 
@@ -199,18 +223,30 @@ export async function handleReactionRaritySelect(interaction) {
   const rarity    = interaction.values[0];
   const channelId = interaction.channelId;
 
-  if (!state.roulette) state.roulette = {};
-  if (!state.roulette[channelId]) {
-    state.roulette[channelId] = { active: true, guildId: interaction.guild.id };
-  }
-  state.roulette[channelId].rarity = rarity;
-  await saveStateToFile();
+  try {
+    if (!state.roulette) state.roulette = {};
+    if (!state.roulette[channelId]) {
+      state.roulette[channelId] = { active: false, guildId: interaction.guild.id };
+    }
+    state.roulette[channelId].rarity = rarity;
 
-  const container = new ContainerBuilder().setAccentColor(0x00C853);
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`**✅ Rarity Updated**\nReaction rarity set to **${rarity}**!`)
-  );
-  await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
+    const container = new ContainerBuilder().setAccentColor(0x00C853);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`**✅ Rarity Updated**\nReaction rarity set to **${rarity}**!`)
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`-# This message will be dismissed automatically.`)
+    );
+
+    // Respond immediately before the DB write to avoid interaction timeout
+    await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
+    saveStateToFile().catch(err => logger.error('Roulette rarity save failed', err));
+
+    setTimeout(() => interaction.deleteReply().catch(() => {}), 3 * 60 * 1000);
+  } catch (err) {
+    logger.error('handleReactionRaritySelect failed', err);
+  }
 }
 
 // ============================================================================

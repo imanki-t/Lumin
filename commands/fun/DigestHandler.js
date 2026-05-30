@@ -20,7 +20,7 @@ import path              from 'path';
 import fs                from 'fs/promises';
 
 import { state, saveStateToFile, genAI, TEMP_DIR } from '../../managers/BotManager.js';
-import { memorySystem }                             from '../../memory/MemorySystem.js';
+import { embeddingService }                         from '../../memory/EmbeddingService.js';
 import * as db                                      from '../../database/index.js';
 import { RATE_LIMIT_ERRORS, MODELS, DEFAULT_MODEL } from '../../modules/config.js';
 import { Logger }                                   from '../../core/Logger.js';
@@ -114,11 +114,11 @@ export async function handleDigestCommand(interaction) {
     if (relevantEntries.length > 0) {
       try {
         const query          = 'Key events, important decisions, funny moments, and meaningful conversations from the week.';
-        const queryEmbedding = await memorySystem.generateEmbedding(query, 'RETRIEVAL_QUERY');
+        const queryEmbedding = await embeddingService.generateEmbedding(query, 'RETRIEVAL_QUERY');
 
         if (queryEmbedding) {
           const scored = relevantEntries
-            .map(e => ({ ...e, similarity: memorySystem.cosineSimilarity(queryEmbedding, e.embedding) }))
+            .map(e => ({ ...e, similarity: embeddingService.cosineSimilarity(queryEmbedding, e.embedding) }))
             .sort((a, b) => b.similarity - a.similarity);
 
           let count = 0;
