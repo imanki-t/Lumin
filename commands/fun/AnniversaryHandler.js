@@ -3,7 +3,7 @@
  * @module commands/fun/AnniversaryHandler
  */
 
-import { EmbedBuilder, MessageFlags } from 'discord.js';
+import { EmbedBuilder, MessageFlags, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder } from 'discord.js';
 
 import { state }   from '../../managers/BotManager.js';
 import { Logger }  from '../../core/Logger.js';
@@ -15,13 +15,16 @@ const logger = Logger.get('AnniversaryHandler');
 // ============================================================================
 
 export const anniversaryCommand = {
-  name:        'anniversary',
-  description: "View bot's server anniversary info with detailed stats"
+  name:        'details',
+  description: "View bot's server details and conversation statistics"
 };
 
 // ============================================================================
 // HANDLER
 // ============================================================================
+
+const ACCENT_COLOR     = 0xE53935;
+const IS_COMPONENTS_V2 = 1 << 15;
 
 /**
  * Show how long the bot has been in the server and key conversation statistics.
@@ -29,11 +32,11 @@ export const anniversaryCommand = {
  */
 export async function handleAnniversaryCommand(interaction) {
   if (!interaction.guild) {
-    const embed = new EmbedBuilder()
-      .setColor(0xFF5555)
-      .setTitle('❌ Server Only')
-      .setDescription('This command can only be used in servers!');
-    return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('**Server Only**\nThis command can only be used in servers.')
+    );
+    return interaction.reply({ components: [container], flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2 });
   }
 
   try {
@@ -81,55 +84,56 @@ export async function handleAnniversaryCommand(interaction) {
     if (finalDays > 0 || parts.length === 0) parts.push(`${finalDays} day${finalDays !== 1 ? 's' : ''}`);
     const timeDisplay = parts.join(', ');
 
-    const embed = new EmbedBuilder()
-      .setColor(0xFFD700)
-      .setTitle(`🎊 ${interaction.guild.name} Anniversary`)
-      .setDescription(
-        `I've been part of **${interaction.guild.name}** for **${timeDisplay}**!\n\n` +
-        `**Join Date:** ${joinDate.toLocaleDateString('en-US', {
-          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-        })}`
-      )
-      .addFields(
-        { name: '📊 Total Messages', value: String(totalMessages), inline: true },
-        { name: '👥 Unique Users',   value: String(uniqueUsers.size), inline: true },
-        { name: '📅 Days Together',  value: String(daysSince), inline: true },
-        { name: '💬 User Messages',  value: String(userMessages), inline: true },
-        { name: '🤖 Bot Responses',  value: String(botMessages), inline: true },
-        { name: '📈 Avg/Day',        value: avgPerDay, inline: true }
-      )
-      .setThumbnail(interaction.guild.iconURL())
-      .setFooter({ text: 'Thank you for having me! 💙' })
-      .setTimestamp();
+    const joinDateStr = joinDate.toLocaleDateString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    });
 
-    // Most active user field
+    // Resolve most active user display name
+    let topUserLine = '';
     if (mostActiveUser && uniqueUsers.size > 0) {
       try {
         const topUser = await interaction.client.users.fetch(mostActiveUser[0]);
-        embed.addFields({
-          name:   '⭐ Most Active User',
-          value:  `${topUser.username} (${mostActiveUser[1]} messages)`,
-          inline: false
-        });
+        topUserLine = `\n**Most Active:** ${topUser.username} (${mostActiveUser[1]} messages)`;
       } catch (err) {
         logger.error('Could not fetch most active user', err);
       }
     }
 
-    if (uniqueUsers.size > 0) {
-      embed.addFields({ name: '📊 Engagement', value: `${avgPerUser} avg messages per user`, inline: false });
-    }
+    const engagementLine = uniqueUsers.size > 0
+      ? `\n**Avg per User:** ${avgPerUser} messages`
+      : '';
 
-    await interaction.reply({ embeds: [embed] });
+    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**${interaction.guild.name} — Server Details**\n` +
+        `Lumin has been part of this server for **${timeDisplay}**.\n\n` +
+        `**Joined:** ${joinDateStr}`
+      )
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**Statistics**\n` +
+        `**Total Messages:** ${totalMessages}\n` +
+        `**User Messages:** ${userMessages}\n` +
+        `**Bot Responses:** ${botMessages}\n` +
+        `**Unique Users:** ${uniqueUsers.size}\n` +
+        `**Days Together:** ${daysSince}\n` +
+        `**Avg / Day:** ${avgPerDay}` +
+        topUserLine +
+        engagementLine
+      )
+    );
+
+    await interaction.reply({ components: [container], flags: IS_COMPONENTS_V2 });
 
   } catch (error) {
     logger.error('handleAnniversaryCommand failed', error);
-
-    const embed = new EmbedBuilder()
-      .setColor(0xFF0000)
-      .setTitle('❌ Error')
-      .setDescription('Failed to retrieve anniversary information. Please try again later.');
-
-    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('**Error**\nFailed to retrieve server details. Please try again later.')
+    );
+    await interaction.reply({ components: [container], flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2 });
   }
 }

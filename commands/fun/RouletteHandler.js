@@ -8,7 +8,12 @@ import {
   MessageFlags,
   StringSelectMenuBuilder,
   ActionRowBuilder,
-  PermissionsBitField
+  PermissionsBitField,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } from 'discord.js';
 
 import { state, saveStateToFile } from '../../managers/BotManager.js';
@@ -32,8 +37,8 @@ const RARITY_CHANCES = Object.freeze({
 // COMMAND DEFINITION
 // ============================================================================
 
-export const rouletteCommand = {
-  name:        'roulette',
+export const reactionCommand = {
+  name:        'reaction',
   description: 'Bot randomly reacts to messages in this channel'
 };
 
@@ -66,17 +71,20 @@ function hasManageGuild(member) {
 // HANDLERS
 // ============================================================================
 
+const ACCENT_COLOR     = 0xE53935;
+const IS_COMPONENTS_V2 = 1 << 15;
+
 /**
- * Entry point — show roulette configuration menu.
+ * Entry point — show reaction configuration menu.
  * @param {import('discord.js').CommandInteraction} interaction
  */
-export async function handleRouletteCommand(interaction) {
+export async function handleReactionCommand(interaction) {
   if (!interaction.guild) {
-    const embed = new EmbedBuilder()
-      .setColor(0xFF5555)
-      .setTitle('❌ Server Only')
-      .setDescription('This command can only be used in servers!');
-    return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('**Server Only**\nThis command can only be used in servers.')
+    );
+    return interaction.reply({ components: [container], flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2 });
   }
 
   if (!hasManageGuild(interaction.member)) return sendPermError(interaction);
@@ -84,17 +92,10 @@ export async function handleRouletteCommand(interaction) {
   if (!state.roulette) state.roulette = {};
 
   const isActive = state.roulette[interaction.channelId]?.active ?? false;
-
-  const embed = new EmbedBuilder()
-    .setColor(0xFF6B6B)
-    .setTitle('🎰 Reaction Roulette')
-    .setDescription(
-      `Configure reaction roulette for this channel.\n\n` +
-      `**Current Status:** ${isActive ? '✅ Active' : '❌ Inactive'}`
-    );
+  const rarity   = state.roulette[interaction.channelId]?.rarity  ?? 'medium';
 
   const actionSelect = new StringSelectMenuBuilder()
-    .setCustomId('roulette_action')
+    .setCustomId('reaction_action')
     .setPlaceholder('Choose an action')
     .addOptions(
       { label: 'Enable',     value: 'enable',  description: 'Start reacting to random messages', emoji: '✅' },
@@ -102,10 +103,21 @@ export async function handleRouletteCommand(interaction) {
       { label: 'Set Rarity', value: 'rarity',  description: 'Adjust reaction frequency',          emoji: '⚙️' }
     );
 
+  const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      '**Reaction**\n' +
+      'Configure random emoji reactions for messages in this channel.\n\n' +
+      `**Status:** ${isActive ? 'Active' : 'Inactive'}\n` +
+      `**Rarity:** ${rarity.charAt(0).toUpperCase() + rarity.slice(1)}`
+    )
+  );
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addActionRowComponents(new ActionRowBuilder().addComponents(actionSelect));
+
   await interaction.reply({
-    embeds:     [embed],
-    components: [new ActionRowBuilder().addComponents(actionSelect)],
-    flags:      MessageFlags.Ephemeral
+    components: [container],
+    flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
   });
 }
 
@@ -113,7 +125,7 @@ export async function handleRouletteCommand(interaction) {
  * Handle Enable / Disable / Rarity selection.
  * @param {import('discord.js').StringSelectMenuInteraction} interaction
  */
-export async function handleRouletteActionSelect(interaction) {
+export async function handleReactionActionSelect(interaction) {
   if (!hasManageGuild(interaction.member)) return sendPermError(interaction);
 
   const action    = interaction.values[0];
@@ -159,7 +171,7 @@ export async function handleRouletteActionSelect(interaction) {
       .setDescription('How often should I react to messages?');
 
     const raritySelect = new StringSelectMenuBuilder()
-      .setCustomId('roulette_rarity')
+      .setCustomId('reaction_rarity')
       .setPlaceholder('Select frequency')
       .addOptions(
         { label: 'Common',    value: 'common',    description: '~20% of messages', emoji: '🟢' },
@@ -179,7 +191,7 @@ export async function handleRouletteActionSelect(interaction) {
  * Handle rarity selection.
  * @param {import('discord.js').StringSelectMenuInteraction} interaction
  */
-export async function handleRouletteRaritySelect(interaction) {
+export async function handleReactionRaritySelect(interaction) {
   if (!hasManageGuild(interaction.member)) return sendPermError(interaction);
 
   const rarity    = interaction.values[0];
@@ -209,7 +221,7 @@ export async function handleRouletteRaritySelect(interaction) {
  * Called in the message create event handler — never throws.
  * @param {import('discord.js').Message} message
  */
-export function checkRoulette(message) {
+export function checkReaction(message) {
   const config = state.roulette?.[message.channelId];
   if (!config?.active) return;
 
