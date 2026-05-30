@@ -13,7 +13,10 @@ import {
   TextInputBuilder,
   TextInputStyle,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder
 } from 'discord.js';
 
 import { state, saveStateToFile }    from '../../managers/BotManager.js';
@@ -41,18 +44,16 @@ export const reminderCommand = {
 // ENTRY POINT
 // ============================================================================
 
+const ACCENT_COLOR     = 0xE53935;
+const IS_COMPONENTS_V2 = 1 << 15;
+
 /**
  * @param {import('discord.js').CommandInteraction} interaction
  */
 export async function handleReminderCommand(interaction) {
   try {
-    const userId         = interaction.user.id;
-    const activeCount    = (state.reminders?.[userId] ?? []).filter(r => r.active).length;
-
-    const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle('⏰ Reminder Setup')
-      .setDescription(`Choose an action:\n\n**Active Reminders:** ${activeCount}/${MAX_REMINDERS_PER_USER}`);
+    const userId      = interaction.user.id;
+    const activeCount = (state.reminders?.[userId] ?? []).filter(r => r.active).length;
 
     const actionSelect = new StringSelectMenuBuilder()
       .setCustomId('reminder_action')
@@ -63,10 +64,20 @@ export async function handleReminderCommand(interaction) {
         { label: 'Delete Reminder', value: 'delete', description: 'Remove a reminder',      emoji: '🗑️' }
       );
 
+    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        '**Reminders**\n' +
+        'Create, view, or remove personal reminders. Lumin will notify you at your scheduled time.\n\n' +
+        `**Active Reminders:** ${activeCount}/${MAX_REMINDERS_PER_USER}`
+      )
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(actionSelect));
+
     await interaction.reply({
-      embeds:     [embed],
-      components: [new ActionRowBuilder().addComponents(actionSelect)],
-      flags:      MessageFlags.Ephemeral
+      components: [container],
+      flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
     });
   } catch (error) {
     logger.error('handleReminderCommand failed', error);
