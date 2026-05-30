@@ -51,17 +51,17 @@ import { initializeDailyQuotes } from './quote/QuoteScheduler.js';
 
 // ─── Fun ─────────────────────────────────────────────────────────────────────
 import {
-  rouletteCommand,
-  handleRouletteCommand,
-  handleRouletteActionSelect,
-  handleRouletteRaritySelect,
-  checkRoulette
+  reactionCommand,
+  handleReactionCommand,
+  handleReactionActionSelect,
+  handleReactionRaritySelect,
+  checkReaction
 } from './fun/RouletteHandler.js';
 
 import {
   anniversaryCommand,
   handleAnniversaryCommand
-} from './fun/AnniversaryHandler.js';
+} from './fun/AnniversaryHandler.js'; // command name is now 'details'
 
 import {
   digestCommand,
@@ -123,11 +123,11 @@ import {
   handleSearchCommand
 } from './search.js';
 
-// ─── Realive ─────────────────────────────────────────────────────────────────
+// ─── Revive ───────────────────────────────────────────────────────────────────
 import {
-  realiveCommand,
-  handleRealiveCommand,
-  startRealiveLoop
+  reviveCommand,
+  handleReviveCommand,
+  startReviveLoop
 } from './realive.js';
 
 // ============================================================================
@@ -142,7 +142,7 @@ export function initializeScheduledTasks(client) {
   scheduleBirthdayChecks(client);
   initializeReminders(client);
   initializeDailyQuotes(client);
-  startRealiveLoop(client);
+  startReviveLoop(client);
 }
 
 // ============================================================================
@@ -153,8 +153,8 @@ const COMMAND_HANDLERS = {
   birthday:    handleBirthdayCommand,
   reminder:    handleReminderCommand,
   quote:       handleQuoteCommand,
-  roulette:    handleRouletteCommand,
-  anniversary: handleAnniversaryCommand,
+  reaction:    handleReactionCommand,
+  details:     handleAnniversaryCommand,
   digest:      handleDigestCommand,
   starter:     handleStarterCommand,
   compliment:  handleComplimentCommand,
@@ -162,7 +162,7 @@ const COMMAND_HANDLERS = {
   timezone:    handleTimezoneCommand,
   summary:     handleSummaryCommand,
   search:      handleSearchCommand,
-  realive:     handleRealiveCommand
+  revive:      handleReviveCommand
 };
 
 /**
@@ -199,8 +199,8 @@ const SELECT_MENU_HANDLERS = [
   ['quote_location_',       handleQuoteLocationSelect],
   ['quote_channel_',        handleQuoteChannelSelect],
   ['quote_remove_select',   handleQuoteRemoveSelect],
-  ['roulette_action',       handleRouletteActionSelect],
-  ['roulette_rarity',       handleRouletteRaritySelect],
+  ['reaction_action',       handleReactionActionSelect],
+  ['reaction_rarity',       handleReactionRaritySelect],
   ['game_select',           handleGameSelect],
   ['tds_choice',            handleTDSChoice],
   ['akinator_mode',         handleAkinatorModeSelect],
@@ -285,12 +285,12 @@ export async function handleButtonInteraction(interaction) {
 // ============================================================================
 
 /**
- * Proxy for the roulette passive message checker.
+ * Proxy for the reaction passive message checker.
  * Called from the root messageCreate event handler.
  * @param {import('discord.js').Message} message
  */
 export function processMessageRoulette(message) {
-  checkRoulette(message);
+  checkReaction(message);
 }
 
 // ============================================================================
@@ -301,7 +301,7 @@ export {
   birthdayCommand,
   reminderCommand,
   quoteCommand,
-  rouletteCommand,
+  reactionCommand,
   anniversaryCommand,
   digestCommand,
   starterCommand,
@@ -309,5 +309,5 @@ export {
   gameCommand,
   timezoneCommand,
   summaryCommand,
-  realiveCommand
+  reviveCommand
 };
