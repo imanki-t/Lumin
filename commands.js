@@ -69,11 +69,6 @@ const commands = [
     ]
   },
   {
-    name: "game",
-    description: "Play interactive AI-powered games.",
-    dm_permission: false
-  },
-  {
     name: "timezone",
     description: "Set your timezone for time-based features."
   },
@@ -84,13 +79,13 @@ const commands = [
     options: [
       {
         name: "link",
-        description: "A Discord message link or YouTube / website URL",
+        description: "Message Link or YouTube/Web URL",
         type: ApplicationCommandOptionType.String,
         required: true
       },
       {
         name: "count",
-        description: "Number of messages to summarize (Discord links only)",
+        description: "Number of messages to summarize.",
         type: ApplicationCommandOptionType.Integer,
         required: false,
         min_value: 1,
