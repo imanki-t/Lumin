@@ -5,7 +5,6 @@
  */
 
 import {
-  EmbedBuilder,
   MessageFlags,
   ButtonBuilder,
   ButtonStyle,
@@ -45,33 +44,37 @@ export const birthdayCommand = {
  */
 export async function handleBirthdayCommand(interaction) {
   try {
-    const embed = new EmbedBuilder()
-      .setColor(0xFF69B4)
-      .setTitle('🎂 Birthday Manager')
-      .setDescription('Choose an action below to manage your birthday reminders.');
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('birthday_action_set')
-        .setLabel('Set Birthday')
-        .setStyle(ButtonStyle.Primary)
-        .setEmoji('🎂'),
-      new ButtonBuilder()
-        .setCustomId('birthday_action_remove')
-        .setLabel('Remove Birthday')
-        .setStyle(ButtonStyle.Danger)
-        .setEmoji('🗑️'),
-      new ButtonBuilder()
-        .setCustomId('birthday_action_list')
-        .setLabel('List Birthdays')
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji('📅')
+    const container = new ContainerBuilder().setAccentColor(0xFF69B4);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        '**🎂 Birthday Manager**\n' +
+        'Choose an action below to manage your birthday reminders.'
+      )
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('birthday_action_set')
+          .setLabel('Set Birthday')
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji('🎂'),
+        new ButtonBuilder()
+          .setCustomId('birthday_action_remove')
+          .setLabel('Remove Birthday')
+          .setStyle(ButtonStyle.Danger)
+          .setEmoji('🗑️'),
+        new ButtonBuilder()
+          .setCustomId('birthday_action_list')
+          .setLabel('List Birthdays')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('📅')
+      )
     );
 
     await interaction.reply({
-      embeds:     [embed],
-      components: [row],
-      flags:      MessageFlags.Ephemeral
+      components: [container],
+      flags:      MessageFlags.Ephemeral | IS_COMPONENTS_V2
     });
 
     setTimeout(() => interaction.deleteReply().catch(() => {}), MENU_EXPIRY_MS);
@@ -115,11 +118,6 @@ export async function handleBirthdayMonthSelect(interaction) {
     const month   = interaction.values[0];
     const maxDays = getDaysInMonth(month);
 
-    const embed = new EmbedBuilder()
-      .setColor(0xFF69B4)
-      .setTitle('🎂 Birthday Setup — Day')
-      .setDescription(`You selected **${getMonthName(month)}**.\nNow select the day of the month:`);
-
     // Two select menus: days 1-15 and 16-maxDays
     const daySelect1 = new StringSelectMenuBuilder()
       .setCustomId(`birthday_day_${month}_1`)
@@ -141,13 +139,18 @@ export async function handleBirthdayMonthSelect(interaction) {
         }))
       );
 
-    await interaction.update({
-      embeds:     [embed],
-      components: [
-        new ActionRowBuilder().addComponents(daySelect1),
-        new ActionRowBuilder().addComponents(daySelect2)
-      ]
-    });
+    const container = new ContainerBuilder().setAccentColor(0xFF69B4);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**🎂 Birthday Setup — Day**\n` +
+        `You selected **${getMonthName(month)}**.\nNow select the day of the month:`
+      )
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(daySelect1));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(daySelect2));
+
+    await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
   } catch (error) {
     logger.error('handleBirthdayMonthSelect failed', error);
     await sendError(interaction, 'Failed to update birthday month selection.', true);
@@ -164,11 +167,6 @@ export async function handleBirthdayDaySelect(interaction) {
     const month = parts[2];
     const day   = interaction.values[0];
 
-    const embed = new EmbedBuilder()
-      .setColor(0xFF69B4)
-      .setTitle("🎂 Birthday Setup — Person's Name")
-      .setDescription(`Birthday: **${getMonthName(month)} ${parseInt(day)}**\n\nWhose birthday is this?`);
-
     const nameSelect = new StringSelectMenuBuilder()
       .setCustomId(`birthday_name_${month}_${day}`)
       .setPlaceholder('Choose whose birthday this is')
@@ -177,10 +175,17 @@ export async function handleBirthdayDaySelect(interaction) {
         { label: "Someone Else's Birthday", value: 'other', description: "Track someone else's birthday", emoji: '👥' }
       );
 
-    await interaction.update({
-      embeds:     [embed],
-      components: [new ActionRowBuilder().addComponents(nameSelect)]
-    });
+    const container = new ContainerBuilder().setAccentColor(0xFF69B4);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**🎂 Birthday Setup — Person's Name**\n` +
+        `Birthday: **${getMonthName(month)} ${parseInt(day)}**\n\nWhose birthday is this?`
+      )
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(nameSelect));
+
+    await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
   } catch (error) {
     logger.error('handleBirthdayDaySelect failed', error);
     await sendError(interaction, 'Failed to update birthday day selection.', true);
@@ -199,15 +204,6 @@ export async function handleBirthdayNameSelect(interaction) {
     const nameType = interaction.values[0];
     const guildId  = interaction.guild?.id;
 
-    const embed = new EmbedBuilder()
-      .setColor(0xFF69B4)
-      .setTitle('🎂 Birthday Setup — Notification Preferences')
-      .setDescription(
-        `Birthday: **${getMonthName(month)} ${parseInt(day)}**\n` +
-        `For: **${nameType === 'self' ? 'You' : 'Someone else'}**\n\n` +
-        `Where should I send birthday notifications?`
-      );
-
     const preferenceSelect = new StringSelectMenuBuilder()
       .setCustomId(`birthday_pref_${month}_${day}_${nameType}`)
       .setPlaceholder('Choose notification preference');
@@ -224,10 +220,19 @@ export async function handleBirthdayNameSelect(interaction) {
       );
     }
 
-    await interaction.update({
-      embeds:     [embed],
-      components: [new ActionRowBuilder().addComponents(preferenceSelect)]
-    });
+    const container = new ContainerBuilder().setAccentColor(0xFF69B4);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**🎂 Birthday Setup — Notification Preferences**\n` +
+        `Birthday: **${getMonthName(month)} ${parseInt(day)}**\n` +
+        `For: **${nameType === 'self' ? 'You' : 'Someone else'}**\n\n` +
+        `Where should I send birthday notifications?`
+      )
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(preferenceSelect));
+
+    await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
   } catch (error) {
     logger.error('handleBirthdayNameSelect failed', error);
     await sendError(interaction, 'Failed to update birthday name selection.', true);
@@ -252,11 +257,13 @@ export async function handleBirthdayPrefSelect(interaction) {
 
     const userBirthdays = Object.keys(state.birthdays).filter(k => k.startsWith(userId)).length;
     if (userBirthdays >= MAX_BIRTHDAYS_PER_USER) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('❌ Birthday Limit Reached')
-        .setDescription(`You have reached the maximum limit of ${MAX_BIRTHDAYS_PER_USER} birthdays.`);
-      return interaction.update({ embeds: [embed], components: [] });
+      const container = new ContainerBuilder().setAccentColor(0xFF5555);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          `**❌ Birthday Limit Reached**\nYou have reached the maximum limit of ${MAX_BIRTHDAYS_PER_USER} birthdays.`
+        )
+      );
+      return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
     }
 
     const birthdayKey = `${userId}_${month}_${day}`;
@@ -276,16 +283,17 @@ export async function handleBirthdayPrefSelect(interaction) {
 
     const prefText = { dm: 'DMs only', server: 'this server only', both: 'DMs and this server' }[preference];
 
-    const embed = new EmbedBuilder()
-      .setColor(0x00FF00)
-      .setTitle('✅ Birthday Saved!')
-      .setDescription(
+    const container = new ContainerBuilder().setAccentColor(0x00C853);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**✅ Birthday Saved!**\n` +
         `Birthday set for **${getMonthName(month)} ${parseInt(day)}**!\n\n` +
-        `You'll receive birthday notifications via: **${prefText}** 🎂`
+        `You'll receive birthday notifications via: **${prefText}** 🎂\n\n` +
+        `-# ${userBirthdays + 1}/${MAX_BIRTHDAYS_PER_USER} birthdays set • Change anytime with /birthday`
       )
-      .setFooter({ text: `${userBirthdays + 1}/${MAX_BIRTHDAYS_PER_USER} birthdays set • Change anytime with /birthday` });
+    );
 
-    await interaction.update({ embeds: [embed], components: [] });
+    await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
   } catch (error) {
     logger.error('handleBirthdayPrefSelect failed', error);
     await sendError(interaction, 'Failed to save birthday preference.', true);
@@ -301,11 +309,11 @@ export async function handleBirthdayDeleteSelect(interaction) {
     const birthdayKey = interaction.values[0];
 
     if (!state.birthdays?.[birthdayKey]) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('❌ Birthday Not Found')
-        .setDescription('Could not find that birthday.');
-      return interaction.update({ embeds: [embed], components: [] });
+      const container = new ContainerBuilder().setAccentColor(0xFF5555);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent('**❌ Birthday Not Found**\nCould not find that birthday.')
+      );
+      return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
     }
 
     const birthday = state.birthdays[birthdayKey];
@@ -317,13 +325,16 @@ export async function handleBirthdayDeleteSelect(interaction) {
     const userId    = interaction.user.id;
     const remaining = Object.keys(state.birthdays).filter(k => k.startsWith(userId)).length;
 
-    const embed = new EmbedBuilder()
-      .setColor(0x00FF00)
-      .setTitle('✅ Birthday Removed')
-      .setDescription(`Birthday on **${getMonthName(birthday.month)} ${parseInt(birthday.day)}** has been removed.`)
-      .setFooter({ text: `${remaining}/${MAX_BIRTHDAYS_PER_USER} birthdays remaining` });
+    const container = new ContainerBuilder().setAccentColor(0x00C853);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**✅ Birthday Removed**\n` +
+        `Birthday on **${getMonthName(birthday.month)} ${parseInt(birthday.day)}** has been removed.\n\n` +
+        `-# ${remaining}/${MAX_BIRTHDAYS_PER_USER} birthdays remaining`
+      )
+    );
 
-    await interaction.update({ embeds: [embed], components: [] });
+    await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
   } catch (error) {
     logger.error('handleBirthdayDeleteSelect failed', error);
     await sendError(interaction, 'Failed to delete birthday.', true);
@@ -471,21 +482,15 @@ async function removeBirthday(interaction, isUpdate = false) {
 
     const userBirthdays = Object.keys(state.birthdays).filter(k => k.startsWith(userId));
     if (userBirthdays.length === 0) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('❌ No Birthdays Found')
-        .setDescription("You don't have any birthdays set up yet!\n\nUse `/birthday` → Set Birthday to add one.");
-
-      if (isUpdate) {
-        return interaction.update({ embeds: [embed], components: [] });
-      }
-      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      const container = new ContainerBuilder().setAccentColor(0xFF5555);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          "**❌ No Birthdays Found**\nYou don't have any birthdays set up yet!\n\nUse `/birthday` → Set Birthday to add one."
+        )
+      );
+      if (isUpdate) return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
+      return interaction.reply({ components: [container], flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2 });
     }
-
-    const embed = new EmbedBuilder()
-      .setColor(0xFF6B6B)
-      .setTitle('🗑️ Remove Birthday')
-      .setDescription('Select which birthday to remove:');
 
     const deleteSelect = new StringSelectMenuBuilder()
       .setCustomId('birthday_delete_select')
@@ -501,15 +506,17 @@ async function removeBirthday(interaction, isUpdate = false) {
         })
       );
 
-    const payload = {
-      embeds:     [embed],
-      components: [new ActionRowBuilder().addComponents(deleteSelect)]
-    };
+    const container = new ContainerBuilder().setAccentColor(0xFF6B6B);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('**🗑️ Remove Birthday**\nSelect which birthday to remove:')
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(deleteSelect));
 
     if (isUpdate) {
-      await interaction.update(payload);
+      await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
     } else {
-      await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ components: [container], flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2 });
       setTimeout(() => interaction.deleteReply().catch(() => {}), MENU_EXPIRY_MS);
     }
 
@@ -532,14 +539,28 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
     const guildId = interaction.guild?.id;
     const isDM    = !guildId;
 
-    if (!state.birthdays || Object.keys(state.birthdays).length === 0) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('📅 No Birthdays')
-        .setDescription('No birthdays have been set yet!\n\nBe the first with `/birthday` → Set Birthday');
+    const makeEmptyContainer = (text) => {
+      const c = new ContainerBuilder().setAccentColor(0xFF5555);
+      c.addTextDisplayComponents(new TextDisplayBuilder().setContent(text));
+      return c;
+    };
 
-      if (isUpdate) return interaction.update({ embeds: [embed], components: [] });
-      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    const sendContainer = async (container, comps = []) => {
+      // Attach any ActionRows to the container
+      for (const row of comps) container.addActionRowComponents(row);
+      if (isUpdate) {
+        await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
+      } else {
+        const replyMethod = interaction.replied || interaction.deferred ? 'editReply' : 'reply';
+        const flags = interaction.deferred ? IS_COMPONENTS_V2 : MessageFlags.Ephemeral | IS_COMPONENTS_V2;
+        await interaction[replyMethod]({ components: [container], flags });
+      }
+    };
+
+    if (!state.birthdays || Object.keys(state.birthdays).length === 0) {
+      return sendContainer(makeEmptyContainer(
+        '**📅 No Birthdays**\nNo birthdays have been set yet!\n\nBe the first with `/birthday` → Set Birthday'
+      ));
     }
 
     if (isDM) {
@@ -556,13 +577,9 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
         .sort((a, b) => a.monthNum - b.monthNum || parseInt(a.day) - parseInt(b.day));
 
       if (userBirthdays.length === 0) {
-        const embed = new EmbedBuilder()
-          .setColor(0xFF5555)
-          .setTitle('📅 No Birthdays')
-          .setDescription("You haven't set any birthdays yet.\n\nUse `/birthday` → Set Birthday to add one!");
-
-        if (isUpdate) return interaction.update({ embeds: [embed], components: [] });
-        return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        return sendContainer(makeEmptyContainer(
+          "**📅 No Birthdays**\nYou haven't set any birthdays yet.\n\nUse `/birthday` → Set Birthday to add one!"
+        ));
       }
 
       const list = userBirthdays
@@ -573,14 +590,15 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
         })
         .join('\n');
 
-      const embed = new EmbedBuilder()
-        .setColor(0xFF69B4)
-        .setTitle('🎉 Your Birthdays')
-        .setDescription(list)
-        .setFooter({ text: `${userBirthdays.length}/${MAX_BIRTHDAYS_PER_USER} birthdays set` });
-
-      if (isUpdate) return interaction.update({ embeds: [embed], components: [] });
-      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      const container = new ContainerBuilder().setAccentColor(0xFF69B4);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`**🎉 Your Birthdays**\n\n${list}`)
+      );
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`-# ${userBirthdays.length}/${MAX_BIRTHDAYS_PER_USER} birthdays set`)
+      );
+      return sendContainer(container);
     }
 
     // ---------- Server view: paginated, shared birthdays ----------
@@ -593,13 +611,9 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
       .map(d => ({ username: d.ownerUsername ?? 'User', month: d.month, day: d.day, monthNum: parseInt(d.month) }));
 
     if (all.length === 0) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('📅 No Server Birthdays')
-        .setDescription('No birthdays are set to be celebrated in this server.');
-
-      if (isUpdate) return interaction.update({ embeds: [embed], components: [] });
-      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      return sendContainer(makeEmptyContainer(
+        '**📅 No Server Birthdays**\nNo birthdays are set to be celebrated in this server.'
+      ));
     }
 
     // Sort: upcoming first, wrap around past
@@ -620,15 +634,18 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
       .map(b => `🎂 **${b.username}** — ${getMonthName(b.month)} ${parseInt(b.day)}`)
       .join('\n');
 
-    const embed = new EmbedBuilder()
-      .setColor(0xFF69B4)
-      .setTitle('🎉 Server Birthdays')
-      .setDescription(list)
-      .setFooter({
-        text: `Page ${safePage + 1}/${totalPages} • ${sorted.length} birthday${sorted.length !== 1 ? 's' : ''} registered`
-      });
+    const container = new ContainerBuilder().setAccentColor(0xFF69B4);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`**🎉 Server Birthdays**\n\n${list}`)
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `-# Page ${safePage + 1}/${totalPages} • ${sorted.length} birthday${sorted.length !== 1 ? 's' : ''} registered`
+      )
+    );
 
-    const components = [];
+    const paginationRows = [];
 
     if (totalPages > 1) {
       const prevBtn = new ButtonBuilder()
@@ -641,7 +658,7 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
         .setLabel('Next').setStyle(ButtonStyle.Primary).setEmoji('➡️')
         .setDisabled(safePage === totalPages - 1);
 
-      components.push(new ActionRowBuilder().addComponents(prevBtn, nextBtn));
+      paginationRows.push(new ActionRowBuilder().addComponents(prevBtn, nextBtn));
 
       if (totalPages > 3) {
         const pageSelect = new StringSelectMenuBuilder()
@@ -655,24 +672,24 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
               default:     i === safePage
             }))
           );
-        components.push(new ActionRowBuilder().addComponents(pageSelect));
+        paginationRows.push(new ActionRowBuilder().addComponents(pageSelect));
       }
     }
 
-    // Determine reply method
-    if (isUpdate) {
-      await interaction.update({ embeds: [embed], components });
-    } else {
-      const replyMethod = interaction.replied || interaction.deferred ? 'editReply' : 'reply';
-      await interaction[replyMethod]({ embeds: [embed], components });
-    }
+    await sendContainer(container, paginationRows);
 
     // Auto-expire pagination buttons
-    if (components.length > 0) {
+    if (paginationRows.length > 0) {
       setTimeout(async () => {
         try {
           const msg = await interaction.fetchReply();
-          if (msg?.components.length > 0) await interaction.editReply({ components: [] }).catch(() => {});
+          if (msg?.components.length > 0) {
+            const stripped = new ContainerBuilder().setAccentColor(0xFF69B4);
+            stripped.addTextDisplayComponents(
+              new TextDisplayBuilder().setContent(`**🎉 Server Birthdays**\n\n${list}`)
+            );
+            await interaction.editReply({ components: [stripped], flags: IS_COMPONENTS_V2 }).catch(() => {});
+          }
         } catch {}
       }, MENU_EXPIRY_MS);
     }
@@ -690,18 +707,18 @@ async function listBirthdays(interaction, page = 0, isUpdate = false) {
  * @param {boolean} [isUpdate=false]  Use interaction.update() instead of reply/editReply.
  */
 async function sendError(interaction, message, isUpdate = false) {
-  const embed = new EmbedBuilder()
-    .setColor(0xFF0000)
-    .setTitle('❌ Error')
-    .setDescription(message);
+  const container = new ContainerBuilder().setAccentColor(0xFF0000);
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`**❌ Error**\n${message}`)
+  );
 
   try {
     if (isUpdate) {
-      await interaction.update({ embeds: [embed], components: [] });
+      await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
     } else if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({ embeds: [embed], components: [] });
+      await interaction.editReply({ components: [container], flags: IS_COMPONENTS_V2 });
     } else {
-      await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      await interaction.reply({ components: [container], flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2 });
     }
   } catch (err) {
     logger.error('sendError itself failed', err);
