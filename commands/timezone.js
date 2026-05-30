@@ -12,7 +12,10 @@ import {
   ButtonStyle,
   ModalBuilder,
   TextInputBuilder,
-  TextInputStyle
+  TextInputStyle,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder
 } from 'discord.js';
 
 import { state, saveStateToFile } from '../managers/BotManager.js';
@@ -39,6 +42,9 @@ export const timezoneCommand = {
  * Entry point — show current timezone + "Set Custom Timezone" button.
  * @param {import('discord.js').CommandInteraction} interaction
  */
+const ACCENT_COLOR     = 0xE53935;
+const IS_COMPONENTS_V2 = 1 << 15;
+
 export async function handleTimezoneCommand(interaction) {
   const userId    = interaction.user.id;
   const currentTz = state.userTimezones?.[userId] || 'Not set (using UTC)';
@@ -55,25 +61,30 @@ export async function handleTimezoneCommand(interaction) {
     currentTime = 'Unknown';
   }
 
-  const embed = new EmbedBuilder()
-    .setColor(0x5865F2)
-    .setTitle('🌍 Timezone Setup')
-    .setDescription(
-      `Set your timezone to ensure reminders and events happen at your local time.\n\n` +
-      `**Current Setting:** \`${currentTz}\`\n**Your Time:** ${currentTime}`
-    )
-    .setFooter({ text: 'We use standard IANA timezone IDs (e.g., America/New_York)' });
+  const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
 
-  const customButton = new ButtonBuilder()
-    .setCustomId('timezone_custom')
-    .setLabel('Set Custom Timezone')
-    .setStyle(ButtonStyle.Primary)
-    .setEmoji('⌨️');
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      '**Timezone**\n' +
+      'Set your timezone to ensure reminders and events trigger at your local time.\n\n' +
+      `**Current Setting:** \`${currentTz}\`\n` +
+      `**Your Time:** ${currentTime}\n\n` +
+      '-# Uses standard IANA timezone IDs (e.g., America/New_York)'
+    )
+  );
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('timezone_custom')
+        .setLabel('Set Timezone')
+        .setStyle(ButtonStyle.Primary)
+    )
+  );
 
   await interaction.reply({
-    embeds:     [embed],
-    components: [new ActionRowBuilder().addComponents(customButton)],
-    flags:      MessageFlags.Ephemeral
+    components: [container],
+    flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
   });
 }
 
