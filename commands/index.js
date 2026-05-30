@@ -9,6 +9,7 @@
 import {
   birthdayCommand,
   handleBirthdayCommand,
+  handleBirthdayActionButton,
   handleBirthdayMonthSelect,
   handleBirthdayDaySelect,
   handleBirthdayNameSelect,
@@ -61,7 +62,7 @@ import {
 import {
   anniversaryCommand,
   handleAnniversaryCommand
-} from './fun/AnniversaryHandler.js'; // command name is now 'details'
+} from './fun/AnniversaryHandler.js'; // command name is 'details'
 
 import {
   digestCommand,
@@ -123,7 +124,7 @@ import {
   handleSearchCommand
 } from './search.js';
 
-// ─── Revive ───────────────────────────────────────────────────────────────────
+// ─── Schedule (chat revival) ──────────────────────────────────────────────────
 import {
   reviveCommand,
   handleReviveCommand,
@@ -162,7 +163,7 @@ const COMMAND_HANDLERS = {
   timezone:    handleTimezoneCommand,
   summary:     handleSummaryCommand,
   search:      handleSearchCommand,
-  revive:      handleReviveCommand
+  schedule:    handleReviveCommand
 };
 
 /**
@@ -183,29 +184,29 @@ export async function handleCommandInteraction(interaction) {
  * Evaluated in order — more-specific prefixes should come first.
  */
 const SELECT_MENU_HANDLERS = [
-  ['birthday_month',        handleBirthdayMonthSelect],
-  ['birthday_day_',         handleBirthdayDaySelect],
-  ['birthday_name_',        handleBirthdayNameSelect],
-  ['birthday_pref_',        handleBirthdayPrefSelect],
+  ['birthday_month',         handleBirthdayMonthSelect],
+  ['birthday_day_',          handleBirthdayDaySelect],
+  ['birthday_name_',         handleBirthdayNameSelect],
+  ['birthday_pref_',         handleBirthdayPrefSelect],
   ['birthday_delete_select', handleBirthdayDeleteSelect],
-  ['birthday_list_jump_',   handleBirthdayListJump],
-  ['reminder_action',       handleReminderActionSelect],
-  ['reminder_type',         handleReminderTypeSelect],
-  ['reminder_location_',    handleReminderLocationSelect],
+  ['birthday_list_jump_',    handleBirthdayListJump],
+  ['reminder_action',        handleReminderActionSelect],
+  ['reminder_type',          handleReminderTypeSelect],
+  ['reminder_location_',     handleReminderLocationSelect],
   ['reminder_delete_select', handleReminderDeleteSelect],
-  ['quote_action',          handleQuoteActionSelect],
-  ['quote_category',        handleQuoteCategorySelect],
-  ['quote_time_',           handleQuoteTimeSelect],
-  ['quote_location_',       handleQuoteLocationSelect],
-  ['quote_channel_',        handleQuoteChannelSelect],
-  ['quote_remove_select',   handleQuoteRemoveSelect],
-  ['reaction_action',       handleReactionActionSelect],
-  ['reaction_rarity',       handleReactionRaritySelect],
-  ['game_select',           handleGameSelect],
-  ['tds_choice',            handleTDSChoice],
-  ['akinator_mode',         handleAkinatorModeSelect],
-  ['timezone_region',       handleTimezoneSelect],
-  ['timezone_select',       handleTimezoneSelect]
+  ['quote_action',           handleQuoteActionSelect],
+  ['quote_category',         handleQuoteCategorySelect],
+  ['quote_time_',            handleQuoteTimeSelect],
+  ['quote_location_',        handleQuoteLocationSelect],
+  ['quote_channel_',         handleQuoteChannelSelect],
+  ['quote_remove_select',    handleQuoteRemoveSelect],
+  ['reaction_action',        handleReactionActionSelect],
+  ['reaction_rarity',        handleReactionRaritySelect],
+  ['game_select',            handleGameSelect],
+  ['tds_choice',             handleTDSChoice],
+  ['akinator_mode',          handleAkinatorModeSelect],
+  ['timezone_region',        handleTimezoneSelect],
+  ['timezone_select',        handleTimezoneSelect]
 ];
 
 /**
@@ -247,6 +248,7 @@ export async function handleModalSubmission(interaction) {
 // ============================================================================
 
 const BUTTON_HANDLERS = [
+  ['birthday_action_',     handleBirthdayActionButton],  // action picker: set / remove / list
   ['birthday_list_prev_',  handleBirthdayListPrev],
   ['birthday_list_next_',  handleBirthdayListNext],
   ['akinator_yes_',        handleAkinatorAnswer],

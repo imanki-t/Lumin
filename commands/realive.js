@@ -22,8 +22,8 @@ const CHECK_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
 // ============================================================================
 
 export const reviveCommand = {
-  name:        'revive',
-  description: 'Periodically send AI-generated messages to re-engage quiet channels (Server Only)',
+  name:        'schedule',
+  description: 'Auto-send revival messages to quiet channels.',
   options: [
     {
       name:        'action',
