@@ -1,99 +1,91 @@
 /**
- * @fileoverview /realive command — periodically sends AI-generated revival messages
- *               to quiet server channels. Server-only, requires Manage Guild permission.
- * @module commands/realive
+ * @fileoverview Command to periodically send AI-generated revival messages
+ * to inactive server channels.
  */
 
-import { EmbedBuilder, PermissionsBitField, MessageFlags } from 'discord.js';
-
+import { EmbedBuilder, PermissionsBitField } from 'discord.js';
 import { state, saveStateToFile, genAI } from '../managers/BotManager.js';
-import * as db                            from '../database/index.js';
-import { memorySystem }                   from '../memory/MemorySystem.js';
-import { MODELS, DEFAULT_MODEL } from '../modules/config.js';  // ← renamed to avoid collision with local 
-import { Logger }                         from '../core/Logger.js';
+import * as db from '../database/index.js';
+import { memorySystem } from '../memory/MemorySystem.js';
+import { MODELS, DEFAULT_MODEL } from '../modules/config.js';
+import { Logger } from '../core/Logger.js';
 
 const logger = Logger.get('Realive');
-
 const REVIVAL_MODEL = DEFAULT_MODEL;
-const CHECK_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
+const CHECK_INTERVAL_MS = 10 * 60 * 1000;
 
-// ============================================================================
-// COMMAND DEFINITION
-// ============================================================================
-
+/** @type {!Object} */
 export const reviveCommand = {
-  name:        'schedule',
+  name: 'schedule',
   description: 'Auto-send revival messages to quiet channels.',
   options: [
     {
-      name:        'action',
+      name: 'action',
       description: 'What do you want to do?',
-      type:        3,
-      required:    true,
+      type: 3,
+      required: true,
       choices: [
-        { name: 'Enable',   value: 'enable'   },
-        { name: 'Disable',  value: 'disable'  },
+        { name: 'Enable', value: 'enable' },
+        { name: 'Disable', value: 'disable' },
         { name: 'Interval', value: 'interval' },
-        { name: 'Status',   value: 'status'   }
+        { name: 'Status', value: 'status' }
       ]
     },
     {
-      name:        'hours',
+      name: 'hours',
       description: 'Interval in hours (used with action: interval)',
-      type:        4,
-      required:    false,
-      min_value:   1,
-      max_value:   168
+      type: 4,
+      required: false,
+      min_value: 1,
+      max_value: 168
     }
   ]
 };
 
-// ============================================================================
-// COMMAND HANDLER
-// ============================================================================
-
 /**
- * @param {import('discord.js').CommandInteraction} interaction
+ * Handles configuration and actions for the chat revival command.
+ * @param {!import('discord.js').CommandInteraction} interaction
+ * @return {!Promise<void>}
  */
 export async function handleReviveCommand(interaction) {
   const guild = interaction.guild;
 
-  // Server-only guard
   if (!guild) {
     return interaction.reply({
       content: '❌ This command can only be used in servers.',
-      flags:   MessageFlags.Ephemeral
+      ephemeral: true
     });
   }
 
-  // Permission guard
   if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
     return interaction.reply({
       content: '🚫 You need **Manage Server** permission to configure chat revival.',
-      flags:   MessageFlags.Ephemeral
+      ephemeral: true
     });
   }
 
-  const action  = interaction.options.getString('action');
-  const hours   = interaction.options.getInteger('hours');
+  const action = interaction.options.getString('action');
+  const hours = interaction.options.getInteger('hours');
   const guildId = guild.id;
 
-  // Lazy-initialise state
-  if (!state.realive)           state.realive           = {};
-  if (!state.realive[guildId])  state.realive[guildId]  = {
-    enabled:       false,
-    intervalHours: 12,
-    lastRun:       0,
-    lastChannelId: null
-  };
+  if (!state.realive) state.realive = {};
+  if (!state.realive[guildId]) {
+    state.realive[guildId] = {
+      enabled: false,
+      intervalHours: 12,
+      lastRun: 0,
+      lastChannelId: null
+    };
+  }
 
-  // Use a distinct name to avoid shadowing the `botConfig` import above
   const guildConfig = state.realive[guildId];
 
   switch (action) {
     case 'enable': {
       guildConfig.enabled = true;
-      if (!guildConfig.lastChannelId) guildConfig.lastChannelId = interaction.channelId;
+      if (!guildConfig.lastChannelId) {
+        guildConfig.lastChannelId = interaction.channelId;
+      }
 
       await persistConfig(guildId, guildConfig);
       return interaction.reply({
@@ -114,7 +106,7 @@ export async function handleReviveCommand(interaction) {
       if (!hours) {
         return interaction.reply({
           content: '⚠️ Please specify the number of hours using the `hours` option.',
-          flags:   MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
       guildConfig.intervalHours = hours;
@@ -133,12 +125,14 @@ export async function handleReviveCommand(interaction) {
         .setColor(0x00FFFF)
         .setTitle('✨ Channel Revival Status')
         .addFields(
-          { name: 'Status',         value: guildConfig.enabled ? '✅ Enabled' : '❌ Disabled', inline: true  },
-          { name: 'Interval',       value: `${guildConfig.intervalHours} hours`,               inline: true  },
-          { name: 'Target Channel', value: channelText,                                        inline: false },
-          { name: 'Last Run',       value: guildConfig.lastRun
-              ? new Date(guildConfig.lastRun).toLocaleString()
-              : 'Never',                                                                        inline: false }
+          { name: 'Status', value: guildConfig.enabled ? '✅ Enabled' : '❌ Disabled', inline: true },
+          { name: 'Interval', value: `${guildConfig.intervalHours} hours`, inline: true },
+          { name: 'Target Channel', value: channelText, inline: false },
+          {
+            name: 'Last Run',
+            value: guildConfig.lastRun ? new Date(guildConfig.lastRun).toLocaleString() : 'Never',
+            inline: false
+          }
         );
 
       return interaction.reply({ embeds: [embed] });
@@ -147,18 +141,14 @@ export async function handleReviveCommand(interaction) {
     default:
       return interaction.reply({
         content: '❌ Unknown action.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
   }
 }
 
-// ============================================================================
-// BACKGROUND TASK
-// ============================================================================
-
 /**
- * Start the Realive background loop (called once at bot startup).
- * @param {import('discord.js').Client} client
+ * Starts the automated loop to check background revival status.
+ * @param {!import('discord.js').Client} client
  */
 export function startReviveLoop(client) {
   setInterval(() => checkAndRevive(client), CHECK_INTERVAL_MS);
@@ -166,8 +156,9 @@ export function startReviveLoop(client) {
 }
 
 /**
- * Scan all guilds and send revival messages where due.
- * @param {import('discord.js').Client} client
+ * Iterates through servers to determine which channels require interaction.
+ * @param {!import('discord.js').Client} client
+ * @return {!Promise<void>}
  */
 async function checkAndRevive(client) {
   if (!state.realive) return;
@@ -177,7 +168,7 @@ async function checkAndRevive(client) {
   for (const [guildId, guildConfig] of Object.entries(state.realive ?? {})) {
     if (!guildConfig.enabled || !guildConfig.lastChannelId) continue;
 
-    const intervalMs       = guildConfig.intervalHours * 60 * 60 * 1000;
+    const intervalMs = guildConfig.intervalHours * 60 * 60 * 1000;
     const timeSinceLastRun = now - (guildConfig.lastRun || 0);
     if (timeSinceLastRun < intervalMs) continue;
 
@@ -188,35 +179,28 @@ async function checkAndRevive(client) {
       const channel = guild.channels.cache.get(guildConfig.lastChannelId);
       if (!channel) continue;
 
-      // Only revive if the channel is actually quiet
       const messages = await channel.messages.fetch({ limit: 1 }).catch(() => null);
-      const lastMsg  = messages?.first();
+      const lastMsg = messages?.first();
 
       const shouldRevive = !lastMsg || (now - lastMsg.createdTimestamp) >= intervalMs;
 
-      // In both cases reset lastRun so the next cycle starts from now
       guildConfig.lastRun = now;
       await persistConfig(guildId, guildConfig);
 
       if (shouldRevive) {
         await sendRevivalMessage(channel, guildId);
       }
-
     } catch (error) {
       logger.error(`Realive task failed for guild ${guildId}`, error);
     }
   }
 }
 
-// ============================================================================
-// PRIVATE — AI REVIVAL MESSAGE
-// ============================================================================
-
 /**
- * Generate and send an AI revival message to the channel.
- * Falls back to a static list if generation fails.
- * @param {import('discord.js').TextChannel} channel
+ * Constructs and transmits an AI payload to the targeted guild channel.
+ * @param {!import('discord.js').TextChannel} channel
  * @param {string} guildId
+ * @return {!Promise<void>}
  */
 async function sendRevivalMessage(channel, guildId) {
   try {
@@ -234,7 +218,7 @@ async function sendRevivalMessage(channel, guildId) {
       "Keep it short, casual, and friendly — like you're genuinely wondering where everyone went. " +
       'Examples: "duhh, where are all of you?", "sooo... did everyone disappear? 👀", "it\'s quiet here... too quiet 🤔"';
 
-    const serverSettings   = state.serverSettings?.[guildId] ?? {};
+    const serverSettings = state.serverSettings?.[guildId] ?? {};
     const customPersonality = serverSettings.customPersonality || state.customInstructions?.[guildId];
 
     let systemInstruction = botConfig.coreSystemRules;
@@ -247,7 +231,7 @@ async function sendRevivalMessage(channel, guildId) {
       "Reference recent conversations if available. Don't use quotes or formal greetings.";
 
     const request = {
-      model:    REVIVAL_MODEL,
+      model: REVIVAL_MODEL,
       contents: [
         ...(history ?? []),
         { role: 'user', parts: [{ text: contextPrompt }] }
@@ -255,7 +239,7 @@ async function sendRevivalMessage(channel, guildId) {
       config: {
         systemInstruction,
         temperature: 0.95,
-        topP:        0.95
+        topP: 0.95
       }
     };
 
@@ -263,19 +247,21 @@ async function sendRevivalMessage(channel, guildId) {
     let revivalMsg = result.text ?? '';
 
     revivalMsg = revivalMsg
-      .replace(/^["']|["']$/g, '')   // remove surrounding quotes
-      .replace(/^\*\*|\*\*$/g, '')   // remove bold markers
+      .replace(/^["']|["']$/g, '')
+      .replace(/^\*\*|\*\*$/g, '')
       .trim();
 
     await channel.send(revivalMsg || pickFallback());
-
   } catch (error) {
     logger.error('Failed to generate revival message', error);
     await channel.send(pickFallback());
   }
 }
 
-/** Pick a random fallback revival message. */
+/**
+ * Provides a string list array fallback backup structure.
+ * @return {string}
+ */
 function pickFallback() {
   const fallbacks = [
     'duhh, where are all of you? 👀',
@@ -288,14 +274,11 @@ function pickFallback() {
   return fallbacks[Math.floor(Math.random() * fallbacks.length)];
 }
 
-// ============================================================================
-// PRIVATE — PERSISTENCE
-// ============================================================================
-
 /**
- * Persist the guild Realive config to DB and state file.
+ * Handles runtime operations configuration state logging persistence.
  * @param {string} guildId
- * @param {object} guildConfig
+ * @param {!Object} guildConfig
+ * @return {!Promise<void>}
  */
 async function persistConfig(guildId, guildConfig) {
   state.realive[guildId] = guildConfig;
