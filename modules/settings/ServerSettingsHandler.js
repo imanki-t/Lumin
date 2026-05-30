@@ -372,6 +372,9 @@ export async function showServerSettingsPage4(interaction, isUpdate = false) {
 export async function showServerSettingsPage5(interaction, isUpdate = false) {
   if (!requireManageGuild(interaction)) return;
 
+  const guildId  = interaction.guild.id;
+  const hasMemory = Object.keys(state.chatHistories[guildId] || {}).length > 0;
+
   const container = buildContainer(
     [
       {
@@ -383,6 +386,7 @@ export async function showServerSettingsPage5(interaction, isUpdate = false) {
             .setCustomId('clear_server_memory')
             .setLabel('Clear Memory')
             .setStyle(ButtonStyle.Danger)
+            .setDisabled(!hasMemory)
         )
       },
       {

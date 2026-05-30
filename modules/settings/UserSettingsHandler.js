@@ -311,6 +311,7 @@ export async function showUserSettingsPage3(interaction, isUpdate = false) {
   const userId       = interaction.user.id;
   const userSettings = state.userSettings[userId] || {};
   const hasPersonality = !!userSettings.customPersonality;
+  const hasMemory      = Object.keys(state.chatHistories[userId] || {}).length > 0;
   const embedColor     = userSettings.embedColor || BOT_CONFIG.HEX_COLOUR || EMBED_COLOR;
 
   const container = buildContainer(
@@ -348,7 +349,8 @@ export async function showUserSettingsPage3(interaction, isUpdate = false) {
           new ButtonBuilder()
             .setCustomId('clear_user_memory')
             .setLabel('Clear Memory')
-            .setStyle(ButtonStyle.Danger),
+            .setStyle(ButtonStyle.Danger)
+            .setDisabled(!hasMemory),
           new ButtonBuilder()
             .setCustomId('download_user_conversation')
             .setLabel('Export History')
