@@ -84,12 +84,17 @@ export async function handleDigestCommand(interaction) {
         `**📋  Last Digest**\n\n` +
         `> 📅  **Generated**    ${new Date(lastDigest.timestamp).toLocaleString()}\n` +
         `> 💬  **Messages**     ${lastDigest.messageCount}\n` +
-        `> 📆  **Days Covered** ${lastDigest.daysAnalyzed}` +
-        (lastDigest.summary
-          ? `\n\n**📝  Summary**\n${lastDigest.summary.slice(0, 1000)}`
-          : '')
+        `> 📆  **Days Covered** ${lastDigest.daysAnalyzed}`
       )
     );
+    if (lastDigest.summary) {
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          `**📝  Summary**\n\n${lastDigest.summary.slice(0, 1000)}`
+        )
+      );
+    }
     container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     container.addTextDisplayComponents(
       new TextDisplayBuilder().setContent(`-# Use /digest again in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}`)
@@ -307,8 +312,9 @@ export async function handleDigestCommand(interaction) {
     container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     container.addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `> 💬  **Messages Analyzed**   ${selectedMessages.length} (relevance-selected)\n` +
+        `> 💬  **Messages Analyzed**   ${selectedMessages.length}\n` +
         `> 📆  **Period**              Last ${DAYS_TO_ANALYZE} days\n` +
+        `> 🔍  **Selection**           Relevance-ranked\n` +
         `> ⏭️  **Next Digest**         <t:${nextDigestTs}:R>`
       )
     );

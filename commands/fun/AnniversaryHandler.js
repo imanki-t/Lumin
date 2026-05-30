@@ -233,10 +233,16 @@ export async function handleAnniversaryCommand(interaction) {
     // — Section 4: Structure ——
     addSection(container,
       `**Channels & Roles**\n\n` +
-      `> **Text**          ${textCount}   ·   **Voice**   ${voiceCount}   ·   **Stage**   ${stageCount}\n` +
-      `> **Forum**         ${forumCount}   ·   **Announcement**   ${announcCount}   ·   **Category**   ${categoryCount}\n` +
-      `> **Total Channels**   ${totalChannels}\n` +
-      `> **Roles**            ${guild.roles.cache.size}   ·   **Emojis**   ${guild.emojis.cache.size}   ·   **Stickers**   ${guild.stickers.cache.size}`
+      `> **Text Channels**       ${textCount}\n` +
+      `> **Voice Channels**      ${voiceCount}\n` +
+      `> **Stage Channels**      ${stageCount}\n` +
+      `> **Forum Channels**      ${forumCount}\n` +
+      `> **Announcement**        ${announcCount}\n` +
+      `> **Categories**          ${categoryCount}\n` +
+      `> **Total Channels**      ${totalChannels}\n` +
+      `> **Roles**               ${guild.roles.cache.size}\n` +
+      `> **Emojis**              ${guild.emojis.cache.size}\n` +
+      `> **Stickers**            ${guild.stickers.cache.size}`
     );
 
     // — Section 5: Features ——
