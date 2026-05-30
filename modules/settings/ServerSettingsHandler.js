@@ -1,7 +1,6 @@
 /**
- * @fileoverview Server settings pages (1–5), channel management, and server
- *               data actions (clear/download memory). All handlers require
- *               ManageGuild permission — checked once at the top of each fn.
+ * @fileoverview Server settings pages (1–5), channel management, and data actions.
+ * UI: Dank Memer-inspired — no emojis, toggle buttons, 5-button nav, dynamic model.
  * @module modules/settings/ServerSettingsHandler
  */
 
@@ -15,14 +14,15 @@ import path from 'path';
 import fs   from 'fs/promises';
 
 import {
-  state, TEMP_DIR, BOT_CONFIG,
-  DEFAULT_SERVER_SETTINGS
+  state, TEMP_DIR, BOT_CONFIG, DEFAULT_SERVER_SETTINGS
 } from '../../managers/BotManager.js';
 import * as db    from '../../database.js';
 import { Logger } from '../../core/Logger.js';
+import { MODELS } from '../config.js';
+import { formatModelName } from './UserSettingsHandler.js';
 
 const logger = Logger.get('ServerSettings');
-const THEME_COLOR = '#09090B'; // Matte black brand fallback
+const MATTE  = 0x09090B;
 
 // ============================================================================
 // HELPERS
@@ -32,47 +32,99 @@ function requireManageGuild(interaction) {
   if (!interaction.member?.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
     interaction.reply({
       embeds: [new EmbedBuilder()
-        .setColor('#09090B')
+        .setColor(MATTE)
         .setTitle('Permission Denied')
-        .setDescription('You require the "Manage Server" permission to view or modify server settings.')
+        .setDescription('You need the "Manage Server" permission to access server settings.')
       ],
-      flags: MessageFlags.Ephemeral
+      flags: MessageFlags.Ephemeral,
     }).catch(() => {});
     return false;
   }
   return true;
 }
 
-async function persistServer(guildId) {
-  try {
-    await db.saveServerSettings(guildId, state.serverSettings[guildId]);
-  } catch (err) {
-    logger.error(`Failed to persist server settings for ${guildId}`, err);
-  }
+function colorOf(guildId) {
+  const raw = state.serverSettings[guildId]?.embedColor;
+  if (!raw) return MATTE;
+  const n = parseInt(raw.replace('#', ''), 16);
+  return isNaN(n) ? MATTE : n;
 }
 
-async function persistInstructions(id, instructions) {
-  try {
-    await db.saveCustomInstructions(id, instructions ?? null);
-  } catch (err) {
-    logger.error(`Failed to persist custom instructions for ${id}`, err);
-  }
+async function persistServer(guildId) {
+  try { await db.saveServerSettings(guildId, state.serverSettings[guildId]); }
+  catch (err) { logger.error(`Persist server ${guildId}`, err); }
+}
+
+async function persistInstructions(id, val) {
+  try { await db.saveCustomInstructions(id, val ?? null); }
+  catch (err) { logger.error(`Persist instructions ${id}`, err); }
 }
 
 async function persistChannelSetting(channelId, type, value) {
-  try {
-    await db.saveChannelSetting(channelId, type, value);
-  } catch (err) {
-    logger.error(`Failed to persist channel setting for ${channelId}`, err);
-  }
+  try { await db.saveChannelSetting(channelId, type, value); }
+  catch (err) { logger.error(`Persist channel ${channelId}`, err); }
 }
 
 async function persistChatHistory(id) {
-  try {
-    await db.saveChatHistory(id, state.chatHistories[id] ?? {});
-  } catch (err) {
-    logger.error(`Failed to persist chat history for ${id}`, err);
-  }
+  try { await db.saveChatHistory(id, state.chatHistories[id] ?? {}); }
+  catch (err) { logger.error(`Persist history ${id}`, err); }
+}
+
+/** Toggle button — green On / red Off. */
+function toggle(customId, isOn) {
+  return new ButtonBuilder()
+    .setCustomId(customId)
+    .setLabel(isOn ? 'On' : 'Off')
+    .setStyle(isOn ? ButtonStyle.Success : ButtonStyle.Danger);
+}
+
+/** Per-model descriptions. */
+const MODEL_DESC = {
+  'gemini-3.1-pro':        'Most capable — agentic tasks',
+  'gemini-3.1-flash-lite': 'Fastest and most efficient',
+  'gemini-3-flash':        'Frontier-class, lower cost',
+  'gemini-3.5-flash':      'Speed and quality balance',
+  'gemini-2.5-pro':        'Best reasoning and coding',
+  'gemma-4-26b':           'Gemma 4 — 26B active params (MoE)',
+  'gemma-4-31b':           'Gemma 4 — 31B dense model',
+  'gemma-3-27b':           'Gemma 3 — 27B',
+  'gemma-3-12b':           'Gemma 3 — 12B',
+  'gemma-3-4b':            'Gemma 3 — 4B',
+  'gemma-3-2b':            'Gemma 3 — 2B',
+  'gemma-3-1b':            'Gemma 3 — 1B',
+};
+
+function buildModelSelect(customId, currentModel) {
+  return new StringSelectMenuBuilder()
+    .setCustomId(customId)
+    .setPlaceholder('Select AI model')
+    .addOptions(
+      Object.keys(MODELS).map(key =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(formatModelName(key))
+          .setDescription(MODEL_DESC[key] ?? key)
+          .setValue(key)
+          .setDefault(currentModel === key)
+      )
+    );
+}
+
+/**
+ * 5-button nav row for server settings (5 pages).
+ * « ‹ ↺ › »
+ */
+function navRow(page) {
+  const PREV_ID = { 1: 'server_settings_p1', 2: 'server_settings_p1', 3: 'server_settings_page2', 4: 'server_settings_page3', 5: 'server_settings_page4' };
+  const NEXT_ID = { 1: 'server_settings_page2', 2: 'server_settings_page3', 3: 'server_settings_page4', 4: 'server_settings_page5', 5: 'server_settings_page5' };
+  const REFR_ID = { 1: 'srv_p1_ref', 2: 'srv_p2_ref', 3: 'srv_p3_ref', 4: 'srv_p4_ref', 5: 'srv_p5_ref' };
+
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('server_settings_p1').setLabel('«').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
+    new ButtonBuilder().setCustomId(PREV_ID[page]).setLabel('‹').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
+    new ButtonBuilder().setCustomId(REFR_ID[page]).setLabel('↺').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(NEXT_ID[page]).setLabel('›').setStyle(ButtonStyle.Secondary).setDisabled(page === 5),
+    new ButtonBuilder().setCustomId('server_settings_page5').setLabel('»').setStyle(ButtonStyle.Secondary).setDisabled(page === 5)
+  );
 }
 
 // ============================================================================
@@ -82,75 +134,42 @@ async function persistChatHistory(id) {
 export async function showServerSettings(interaction, isUpdate = false) {
   if (!requireManageGuild(interaction)) return;
 
-  const guildId        = interaction.guild.id;
-  const ss             = state.serverSettings[guildId] || {};
-  const selectedModel  = ss.selectedModel     || DEFAULT_SERVER_SETTINGS.selectedModel;
-  const responseFormat = ss.responseFormat    || DEFAULT_SERVER_SETTINGS.responseFormat;
-  const showButtons    = ss.showActionButtons ?? DEFAULT_SERVER_SETTINGS.showActionButtons;
-  const embedColor     = ss.embedColor        || THEME_COLOR;
+  const guildId = interaction.guild.id;
+  const ss      = state.serverSettings[guildId] || {};
+  const model   = ss.selectedModel     || DEFAULT_SERVER_SETTINGS.selectedModel;
+  const format  = ss.responseFormat    || DEFAULT_SERVER_SETTINGS.responseFormat;
+  const btns    = ss.showActionButtons ?? DEFAULT_SERVER_SETTINGS.showActionButtons;
+  const color   = colorOf(guildId);
 
-  const responseFormatSelect = new StringSelectMenuBuilder()
-    .setCustomId('server_response_format')
-    .setPlaceholder('Response Format')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Normal')
-        .setDescription('Plain text responses')
-        .setValue('Normal')
-        .setDefault(responseFormat === 'Normal'),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Embedded')
-        .setDescription('Rich embed responses')
-        .setValue('Embedded')
-        .setDefault(responseFormat === 'Embedded')
-    );
-
-  const actionButtonsSelect = new StringSelectMenuBuilder()
-    .setCustomId('server_action_buttons')
-    .setPlaceholder('Action Buttons')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Show Buttons')
-        .setDescription('Display Stop/Save/Delete options')
-        .setValue('show')
-        .setDefault(showButtons),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Hide Buttons')
-        .setDescription('Hide action buttons')
-        .setValue('hide')
-        .setDefault(!showButtons)
-    );
-
-  const backBtn = new ButtonBuilder()
-    .setCustomId('back_to_main')
-    .setLabel('← Menu')
-    .setStyle(ButtonStyle.Secondary);
-
-  const nextBtn = new ButtonBuilder()
-    .setCustomId('server_settings_page2')
-    .setLabel('Next Page →')
-    .setStyle(ButtonStyle.Primary);
+  const formatBtn = new ButtonBuilder()
+    .setCustomId('tog_sf')
+    .setLabel(format)
+    .setStyle(format === 'Embedded' ? ButtonStyle.Success : ButtonStyle.Danger);
 
   const embed = new EmbedBuilder()
-    .setColor(embedColor)
+    .setColor(color)
     .setTitle('Server Settings')
-    .setDescription('Configure server-wide AI model and response preferences.')
-    .addFields(
-      { name: 'AI Model',        value: `\`${selectedModel}\``,                    inline: true },
-      { name: 'Response Format', value: `\`${responseFormat}\``,                   inline: true },
-      { name: 'Action Buttons',  value: `\`${showButtons ? 'Visible' : 'Hidden'}\``, inline: true }
-    )
-    .setFooter({ text: 'Page 1 of 5' })
-    .setTimestamp();
+    .setDescription([
+      '**AI Model**',
+      `The model used server-wide for generating responses. Currently \`${formatModelName(model)}\`.`,
+      '',
+      '**Response Format**',
+      `Whether responses use plain text or rich embeds. Currently \`${format}\`.`,
+      '',
+      '**Action Buttons**',
+      'Toggle Stop, Save, and Delete buttons appended to responses.',
+    ].join('\n'))
+    .setFooter({ text: 'Page 1 of 5 · Server Settings' });
 
   const payload = {
     embeds: [embed],
     components: [
-      new ActionRowBuilder().addComponents(responseFormatSelect),
-      new ActionRowBuilder().addComponents(actionButtonsSelect),
-      new ActionRowBuilder().addComponents(backBtn, nextBtn)
+      new ActionRowBuilder().addComponents(buildModelSelect('server_model_select', model)),
+      new ActionRowBuilder().addComponents(formatBtn),
+      new ActionRowBuilder().addComponents(toggle('tog_sb', btns)),
+      navRow(1),
     ],
-    flags: MessageFlags.Ephemeral
+    flags: MessageFlags.Ephemeral,
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -164,92 +183,37 @@ export async function showServerSettings(interaction, isUpdate = false) {
 export async function showServerSettingsPage2(interaction, isUpdate = false) {
   if (!requireManageGuild(interaction)) return;
 
-  const guildId              = interaction.guild.id;
-  const ss                   = state.serverSettings[guildId] || {};
-  const embedColor           = ss.embedColor            || THEME_COLOR;
-  const overrideUserSettings  = ss.overrideUserSettings  || false;
-  const continuousReply      = ss.continuousReply       || false;
-  const serverChatHistory    = ss.serverChatHistory     || false;
-
-  const overrideSelect = new StringSelectMenuBuilder()
-    .setCustomId('server_override')
-    .setPlaceholder('Override User Settings')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Enabled')
-        .setDescription('Server settings override user preferences')
-        .setValue('enabled')
-        .setDefault(overrideUserSettings),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Disabled')
-        .setDescription('Users may define their own preferences')
-        .setValue('disabled')
-        .setDefault(!overrideUserSettings)
-    );
-
-  const continuousReplySelect = new StringSelectMenuBuilder()
-    .setCustomId('server_continuous_reply')
-    .setPlaceholder('Continuous Reply')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Enabled')
-        .setDescription('Respond to messages without explicit mentions')
-        .setValue('enabled')
-        .setDefault(continuousReply),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Disabled')
-        .setDescription('Require explicit mentions to respond')
-        .setValue('disabled')
-        .setDefault(!continuousReply)
-    );
-
-  const chatHistorySelect = new StringSelectMenuBuilder()
-    .setCustomId('server_chat_history')
-    .setPlaceholder('Server-Wide Chat History')
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Enabled')
-        .setDescription('Share conversation history across server')
-        .setValue('enabled')
-        .setDefault(serverChatHistory),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('Disabled')
-        .setDescription('Maintain individual user chat history')
-        .setValue('disabled')
-        .setDefault(!serverChatHistory)
-    );
-
-  const backBtn = new ButtonBuilder()
-    .setCustomId('back_to_server')
-    .setLabel('← Back')
-    .setStyle(ButtonStyle.Secondary);
-
-  const nextBtn = new ButtonBuilder()
-    .setCustomId('server_settings_page3')
-    .setLabel('Next Page →')
-    .setStyle(ButtonStyle.Primary);
+  const guildId  = interaction.guild.id;
+  const ss       = state.serverSettings[guildId] || {};
+  const override = ss.overrideUserSettings ?? DEFAULT_SERVER_SETTINGS.overrideUserSettings;
+  const contR    = ss.continuousReply      ?? DEFAULT_SERVER_SETTINGS.continuousReply;
+  const srvHist  = ss.serverChatHistory    ?? DEFAULT_SERVER_SETTINGS.serverChatHistory;
+  const color    = colorOf(guildId);
 
   const embed = new EmbedBuilder()
-    .setColor(embedColor)
+    .setColor(color)
     .setTitle('Server Settings')
-    .setDescription('Configure server behavior and override controls.')
-    .addFields(
-      { name: 'Override User Settings', value: `\`${overrideUserSettings ? 'Enabled' : 'Disabled'}\``, inline: true },
-      { name: 'Continuous Reply',       value: `\`${continuousReply ? 'Enabled' : 'Disabled'}\``,     inline: true },
-      { name: 'Server-Wide History',    value: `\`${serverChatHistory ? 'Enabled' : 'Disabled'}\``,   inline: true }
-    )
-    .setFooter({ text: 'Page 2 of 5' })
-    .setTimestamp();
+    .setDescription([
+      '**Override User Settings**',
+      'When enabled, server settings take precedence over individual user preferences.',
+      '',
+      '**Continuous Reply**',
+      'When enabled, the bot responds to all messages in authorized channels without requiring a mention.',
+      '',
+      '**Server-Wide Chat History**',
+      'When enabled, all members share a single conversation context rather than individual histories.',
+    ].join('\n'))
+    .setFooter({ text: 'Page 2 of 5 · Server Settings' });
 
   const payload = {
     embeds: [embed],
     components: [
-      new ActionRowBuilder().addComponents(overrideSelect),
-      new ActionRowBuilder().addComponents(continuousReplySelect),
-      new ActionRowBuilder().addComponents(chatHistorySelect),
-      new ActionRowBuilder().addComponents(backBtn, nextBtn)
+      new ActionRowBuilder().addComponents(toggle('tog_so', override)),
+      new ActionRowBuilder().addComponents(toggle('tog_sc', contR)),
+      new ActionRowBuilder().addComponents(toggle('tog_sh', srvHist)),
+      navRow(2),
     ],
-    flags: MessageFlags.Ephemeral
+    flags: MessageFlags.Ephemeral,
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -263,55 +227,35 @@ export async function showServerSettingsPage2(interaction, isUpdate = false) {
 export async function showServerSettingsPage3(interaction, isUpdate = false) {
   if (!requireManageGuild(interaction)) return;
 
-  const guildId      = interaction.guild.id;
-  const ss           = state.serverSettings[guildId] || {};
-  const embedColor   = ss.embedColor        || THEME_COLOR;
-  const hasPersonality = !!ss.customPersonality;
-
-  const colorBtn = new ButtonBuilder()
-    .setCustomId('server_embed_color')
-    .setLabel('Set Color')
-    .setStyle(ButtonStyle.Secondary);
-
-  const personalityBtn = new ButtonBuilder()
-    .setCustomId('server_custom_personality')
-    .setLabel('Set Personality')
-    .setStyle(ButtonStyle.Primary);
-
-  const removePersonalityBtn = new ButtonBuilder()
-    .setCustomId('server_remove_personality')
-    .setLabel('Reset')
-    .setStyle(ButtonStyle.Danger)
-    .setDisabled(!hasPersonality);
-
-  const backBtn = new ButtonBuilder()
-    .setCustomId('back_to_server_p2')
-    .setLabel('← Back')
-    .setStyle(ButtonStyle.Secondary);
-
-  const nextBtn = new ButtonBuilder()
-    .setCustomId('server_settings_page4')
-    .setLabel('Next Page →')
-    .setStyle(ButtonStyle.Primary);
+  const guildId  = interaction.guild.id;
+  const ss       = state.serverSettings[guildId] || {};
+  const hasPers  = !!ss.customPersonality;
+  const rawColor = ss.embedColor || 'Default';
+  const color    = colorOf(guildId);
 
   const embed = new EmbedBuilder()
-    .setColor(embedColor)
+    .setColor(color)
     .setTitle('Server Settings')
-    .setDescription("Customize the server's visual theme and custom bot instructions.")
-    .addFields(
-      { name: 'Embed Color',        value: `\`${embedColor}\``,                             inline: true },
-      { name: 'Custom Personality', value: `\`${hasPersonality ? 'Active' : 'Default'}\``,  inline: true }
-    )
-    .setFooter({ text: 'Page 3 of 5' })
-    .setTimestamp();
+    .setDescription([
+      '**Embed Color**',
+      `The accent color used in all bot embeds for this server. Currently \`${rawColor}\`.`,
+      '',
+      '**Custom Personality**',
+      `Define how the bot communicates across the server. Status: \`${hasPers ? 'Active' : 'Default'}\`.`,
+    ].join('\n'))
+    .setFooter({ text: 'Page 3 of 5 · Server Settings' });
 
   const payload = {
     embeds: [embed],
     components: [
-      new ActionRowBuilder().addComponents(colorBtn, personalityBtn, removePersonalityBtn),
-      new ActionRowBuilder().addComponents(backBtn, nextBtn)
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('server_embed_color').setLabel('Edit Color').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('server_custom_personality').setLabel('Set Personality').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('server_remove_personality').setLabel('Reset Personality').setStyle(ButtonStyle.Danger).setDisabled(!hasPers),
+      ),
+      navRow(3),
     ],
-    flags: MessageFlags.Ephemeral
+    flags: MessageFlags.Ephemeral,
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -325,54 +269,38 @@ export async function showServerSettingsPage3(interaction, isUpdate = false) {
 export async function showServerSettingsPage4(interaction, isUpdate = false) {
   if (!requireManageGuild(interaction)) return;
 
-  const guildId        = interaction.guild.id;
-  const ss             = state.serverSettings[guildId] || {};
-  const embedColor     = ss.embedColor      || THEME_COLOR;
-  const allowedChannels = ss.allowedChannels || [];
+  const guildId       = interaction.guild.id;
+  const ss            = state.serverSettings[guildId] || {};
+  const allowed       = ss.allowedChannels || [];
+  const color         = colorOf(guildId);
 
-  const manageBtn = new ButtonBuilder()
-    .setCustomId('manage_allowed_channels')
-    .setLabel('Manage Channels')
-    .setStyle(ButtonStyle.Primary);
-
-  const toggleBtn = new ButtonBuilder()
-    .setCustomId('toggle_continuous_reply')
-    .setLabel('Toggle Channel Mode')
-    .setStyle(ButtonStyle.Secondary);
-
-  const backBtn = new ButtonBuilder()
-    .setCustomId('back_to_server_p3')
-    .setLabel('← Back')
-    .setStyle(ButtonStyle.Secondary);
-
-  const nextBtn = new ButtonBuilder()
-    .setCustomId('server_settings_page5')
-    .setLabel('Next Page →')
-    .setStyle(ButtonStyle.Primary);
-
-  const channelList = allowedChannels.length > 0
-    ? allowedChannels.slice(0, 5).map(id => `<#${id}>`).join(', ') +
-      (allowedChannels.length > 5 ? ` +${allowedChannels.length - 5} more` : '')
-    : 'All channels allowed';
+  const channelDisplay = allowed.length > 0
+    ? allowed.slice(0, 5).map(id => `<#${id}>`).join(', ') +
+      (allowed.length > 5 ? ` +${allowed.length - 5} more` : '')
+    : 'All channels';
 
   const embed = new EmbedBuilder()
-    .setColor(embedColor)
+    .setColor(color)
     .setTitle('Server Settings')
-    .setDescription('Control which channels the bot is authorized to operate in.')
-    .addFields(
-      { name: 'Allowed Channels',       value: channelList,                                              inline: false },
-      { name: 'Channel-Specific Mode',  value: 'Enable or disable continuous mode in the active channel', inline: false }
-    )
-    .setFooter({ text: 'Page 4 of 5' })
-    .setTimestamp();
+    .setDescription([
+      '**Allowed Channels**',
+      `The channels where the bot is permitted to respond. Currently: ${channelDisplay}`,
+      '',
+      '**Channel-Specific Continuous Mode**',
+      'Enable or disable continuous reply in the current channel without changing the global setting.',
+    ].join('\n'))
+    .setFooter({ text: 'Page 4 of 5 · Server Settings' });
 
   const payload = {
     embeds: [embed],
     components: [
-      new ActionRowBuilder().addComponents(manageBtn, toggleBtn),
-      new ActionRowBuilder().addComponents(backBtn, nextBtn)
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('manage_allowed_channels').setLabel('Manage Channels').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('toggle_continuous_reply').setLabel('Toggle Channel Mode').setStyle(ButtonStyle.Secondary),
+      ),
+      navRow(4),
     ],
-    flags: MessageFlags.Ephemeral
+    flags: MessageFlags.Ephemeral,
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -386,48 +314,31 @@ export async function showServerSettingsPage4(interaction, isUpdate = false) {
 export async function showServerSettingsPage5(interaction, isUpdate = false) {
   if (!requireManageGuild(interaction)) return;
 
-  const guildId    = interaction.guild.id;
-  const ss         = state.serverSettings[guildId] || {};
-  const embedColor = ss.embedColor || THEME_COLOR;
-
-  const clearBtn = new ButtonBuilder()
-    .setCustomId('clear_server_memory')
-    .setLabel('Clear Memory')
-    .setStyle(ButtonStyle.Danger);
-
-  const downloadBtn = new ButtonBuilder()
-    .setCustomId('download_server_conversation')
-    .setLabel('Export History')
-    .setStyle(ButtonStyle.Success);
-
-  const backBtn = new ButtonBuilder()
-    .setCustomId('back_to_server_p4')
-    .setLabel('← Back')
-    .setStyle(ButtonStyle.Secondary);
-
-  const mainBtn = new ButtonBuilder()
-    .setCustomId('back_to_main')
-    .setLabel('← Main Menu')
-    .setStyle(ButtonStyle.Primary);
+  const guildId = interaction.guild.id;
+  const color   = colorOf(guildId);
 
   const embed = new EmbedBuilder()
-    .setColor(embedColor)
+    .setColor(color)
     .setTitle('Server Settings')
-    .setDescription('Manage server-wide conversation storage and data exports.')
-    .addFields(
-      { name: 'Clear Server Memory',   value: 'Erase all stored memory logs for this server.', inline: false },
-      { name: 'Export Server History', value: 'Download the complete conversation archive.',   inline: false }
-    )
-    .setFooter({ text: 'Page 5 of 5' })
-    .setTimestamp();
+    .setDescription([
+      '**Clear Server Memory**',
+      'Permanently erases all server-wide conversation history. This cannot be undone.',
+      '',
+      '**Export Server History**',
+      'Downloads the complete server conversation archive as a text file sent to your DMs.',
+    ].join('\n'))
+    .setFooter({ text: 'Page 5 of 5 · Server Settings' });
 
   const payload = {
     embeds: [embed],
     components: [
-      new ActionRowBuilder().addComponents(clearBtn, downloadBtn),
-      new ActionRowBuilder().addComponents(backBtn, mainBtn)
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('clear_server_memory').setLabel('Clear Memory').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('download_server_conversation').setLabel('Export History').setStyle(ButtonStyle.Secondary),
+      ),
+      navRow(5),
     ],
-    flags: MessageFlags.Ephemeral
+    flags: MessageFlags.Ephemeral,
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -441,50 +352,48 @@ export async function showServerSettingsPage5(interaction, isUpdate = false) {
 export async function showChannelManagementMenu(interaction, isUpdate = false) {
   if (!requireManageGuild(interaction)) return;
 
-  const guildId        = interaction.guild.id;
-  const ss             = state.serverSettings[guildId] || {};
-  const allowedChannels = ss.allowedChannels || [];
-  const embedColor     = ss.embedColor || THEME_COLOR;
+  const guildId = interaction.guild.id;
+  const ss      = state.serverSettings[guildId] || {};
+  const allowed = ss.allowedChannels || [];
+  const color   = colorOf(guildId);
 
   const channelSelect = new ChannelSelectMenuBuilder()
     .setCustomId('channel_manage_select')
     .setPlaceholder('Select authorized channels')
-    .setMinValues(0).setMaxValues(25)
+    .setMinValues(0)
+    .setMaxValues(25)
     .setChannelTypes([ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum]);
 
-  if (allowedChannels.length > 0) {
-    const valid = allowedChannels.filter(id => interaction.guild.channels.cache.has(id)).slice(0, 25);
+  if (allowed.length > 0) {
+    const valid = allowed.filter(id => interaction.guild.channels.cache.has(id)).slice(0, 25);
     if (valid.length > 0) channelSelect.setDefaultChannels(valid);
   }
 
-  const setAllBtn = new ButtonBuilder()
-    .setCustomId('set_all_channels')
-    .setLabel('Allow All')
-    .setStyle(ButtonStyle.Success);
-
-  const backBtn = new ButtonBuilder()
-    .setCustomId('back_to_server_p4')
-    .setLabel('← Back')
-    .setStyle(ButtonStyle.Secondary);
-
-  const currentValue = allowedChannels.length > 0
-    ? allowedChannels.map(id => `<#${id}>`).join(', ')
-    : 'All Channels';
+  const currentDisplay = allowed.length > 0
+    ? allowed.map(id => `<#${id}>`).join(', ')
+    : 'All channels';
 
   const embed = new EmbedBuilder()
-    .setColor(embedColor)
+    .setColor(color)
     .setTitle('Channel Management')
-    .setDescription('Define which channels the bot is permitted to respond in.')
-    .addFields({ name: 'Authorized Channels', value: currentValue })
-    .setFooter({ text: 'Leave empty to authorize all server channels.' });
+    .setDescription([
+      '**Authorized Channels**',
+      `Select which channels the bot may respond in. Currently: ${currentDisplay}`,
+      '',
+      'Leave the selection empty to allow all channels.',
+    ].join('\n'))
+    .setFooter({ text: 'Page 4 of 5 · Server Settings' });
 
   const payload = {
     embeds: [embed],
     components: [
       new ActionRowBuilder().addComponents(channelSelect),
-      new ActionRowBuilder().addComponents(backBtn, setAllBtn)
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('back_to_server_p4').setLabel('‹ Back').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('set_all_channels').setLabel('Allow All Channels').setStyle(ButtonStyle.Success),
+      ),
     ],
-    flags: MessageFlags.Ephemeral
+    flags: MessageFlags.Ephemeral,
   };
 
   if (isUpdate) await interaction.update(payload);
@@ -492,9 +401,69 @@ export async function showChannelManagementMenu(interaction, isUpdate = false) {
 }
 
 // ============================================================================
-// SELECT MENU HANDLERS (called from SettingsRouter)
+// TOGGLE HANDLERS (called from SettingsRouter for new tog_ button IDs)
 // ============================================================================
 
+export async function handleToggleServerFormat(interaction) {
+  if (!requireManageGuild(interaction)) return;
+  const guildId = interaction.guild.id;
+  if (!state.serverSettings[guildId]) state.serverSettings[guildId] = {};
+  const current = state.serverSettings[guildId].responseFormat || DEFAULT_SERVER_SETTINGS.responseFormat;
+  state.serverSettings[guildId].responseFormat = current === 'Normal' ? 'Embedded' : 'Normal';
+  await persistServer(guildId);
+  await showServerSettings(interaction, true);
+}
+
+export async function handleToggleServerButtons(interaction) {
+  if (!requireManageGuild(interaction)) return;
+  const guildId = interaction.guild.id;
+  if (!state.serverSettings[guildId]) state.serverSettings[guildId] = {};
+  state.serverSettings[guildId].showActionButtons = !(state.serverSettings[guildId].showActionButtons ?? DEFAULT_SERVER_SETTINGS.showActionButtons);
+  await persistServer(guildId);
+  await showServerSettings(interaction, true);
+}
+
+export async function handleToggleServerOverride(interaction) {
+  if (!requireManageGuild(interaction)) return;
+  const guildId = interaction.guild.id;
+  if (!state.serverSettings[guildId]) state.serverSettings[guildId] = {};
+  state.serverSettings[guildId].overrideUserSettings = !(state.serverSettings[guildId].overrideUserSettings ?? DEFAULT_SERVER_SETTINGS.overrideUserSettings);
+  await persistServer(guildId);
+  await showServerSettingsPage2(interaction, true);
+}
+
+export async function handleToggleServerContinuous(interaction) {
+  if (!requireManageGuild(interaction)) return;
+  const guildId = interaction.guild.id;
+  if (!state.serverSettings[guildId]) state.serverSettings[guildId] = {};
+  state.serverSettings[guildId].continuousReply = !(state.serverSettings[guildId].continuousReply ?? DEFAULT_SERVER_SETTINGS.continuousReply);
+  await persistServer(guildId);
+  await showServerSettingsPage2(interaction, true);
+}
+
+export async function handleToggleServerHistory(interaction) {
+  if (!requireManageGuild(interaction)) return;
+  const guildId = interaction.guild.id;
+  if (!state.serverSettings[guildId]) state.serverSettings[guildId] = {};
+  state.serverSettings[guildId].serverChatHistory = !(state.serverSettings[guildId].serverChatHistory ?? DEFAULT_SERVER_SETTINGS.serverChatHistory);
+  await persistServer(guildId);
+  await showServerSettingsPage2(interaction, true);
+}
+
+// ============================================================================
+// SELECT MENU HANDLERS (model select)
+// ============================================================================
+
+export async function handleServerModelSelect(interaction) {
+  if (!requireManageGuild(interaction)) return;
+  const guildId = interaction.guild.id;
+  if (!state.serverSettings[guildId]) state.serverSettings[guildId] = {};
+  state.serverSettings[guildId].selectedModel = interaction.values[0];
+  await persistServer(guildId);
+  await showServerSettings(interaction, true);
+}
+
+// Legacy select handlers kept for backwards compat with old customIds
 export async function handleServerResponseFormat(interaction) {
   if (!requireManageGuild(interaction)) return;
   const guildId = interaction.guild.id;
@@ -560,23 +529,24 @@ export async function handleSetAllChannels(interaction) {
 
 export async function toggleContinuousReplyChannel(interaction) {
   if (!requireManageGuild(interaction)) return;
-
   const channelId = interaction.channelId;
   if (!state.continuousReplyChannels) state.continuousReplyChannels = {};
-
   const newValue = !state.continuousReplyChannels[channelId];
   if (newValue) state.continuousReplyChannels[channelId] = true;
   else          delete state.continuousReplyChannels[channelId];
-
   await persistChannelSetting(channelId, 'continuousReply', newValue || null);
-
-  const embed = newValue
-    ? new EmbedBuilder().setColor('#09090B').setTitle('Continuous Reply Enabled')
-        .setDescription(`Mentions are no longer required in <#${channelId}>.`)
-    : new EmbedBuilder().setColor('#09090B').setTitle('Continuous Reply Disabled')
-        .setDescription(`Explicit mentions are now required in <#${channelId}>.`);
-
-  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  await interaction.reply({
+    embeds: [new EmbedBuilder()
+      .setColor(MATTE)
+      .setTitle(newValue ? 'Continuous Reply Enabled' : 'Continuous Reply Disabled')
+      .setDescription(
+        newValue
+          ? `Mentions are no longer required in <#${channelId}>.`
+          : `Explicit mentions are now required in <#${channelId}>.`
+      )
+    ],
+    flags: MessageFlags.Ephemeral,
+  });
 }
 
 // ============================================================================
@@ -589,121 +559,88 @@ export async function clearServerMemory(interaction) {
   state.chatHistories[guildId] = {};
   await persistChatHistory(guildId);
   await interaction.reply({
-    embeds: [new EmbedBuilder()
-      .setColor('#09090B')
-      .setTitle('Memory Cleared')
-      .setDescription('Server-wide chat history has been cleared.')
-    ],
-    flags: MessageFlags.Ephemeral
+    embeds: [new EmbedBuilder().setColor(MATTE).setTitle('Memory Cleared').setDescription('Server-wide conversation history has been permanently erased.')],
+    flags: MessageFlags.Ephemeral,
   });
 }
 
 export async function downloadServerConversation(interaction) {
   if (!requireManageGuild(interaction)) return;
-
   const guildId = interaction.guild.id;
   const ss      = state.serverSettings[guildId] || {};
 
   if (!ss.serverChatHistory) {
     return interaction.reply({
-      embeds: [new EmbedBuilder()
-        .setColor('#09090B')
-        .setTitle('Feature Disabled')
-        .setDescription('Server-wide chat history is currently disabled. Please enable it in page 2.')
-      ],
-      flags: MessageFlags.Ephemeral
+      embeds: [new EmbedBuilder().setColor(MATTE).setTitle('Feature Disabled').setDescription('Enable server-wide chat history on page 2 first.')],
+      flags: MessageFlags.Ephemeral,
     });
   }
 
-  const historyObject = state.chatHistories[guildId];
-  if (!historyObject || !Object.keys(historyObject).length) {
+  const histObj = state.chatHistories[guildId];
+  if (!histObj || !Object.keys(histObj).length) {
     return interaction.reply({
-      embeds: [new EmbedBuilder()
-        .setColor('#09090B')
-        .setTitle('No History Found')
-        .setDescription('There is no conversation history on record for this server.')
-      ],
-      flags: MessageFlags.Ephemeral
+      embeds: [new EmbedBuilder().setColor(MATTE).setTitle('No History').setDescription('There is no conversation history recorded for this server.')],
+      flags: MessageFlags.Ephemeral,
     });
   }
 
-  let conversationText = '';
-  let messageCount     = 0;
-
-  for (const messagesId of Object.keys(historyObject)) {
-    for (const entry of historyObject[messagesId]) {
-      const role         = entry.role === 'user' ? '[User]' : '[Assistant]';
-      const contentParts = (entry.content || entry.parts || [])
+  let text = '', count = 0;
+  for (const uid of Object.keys(histObj)) {
+    for (const entry of histObj[uid]) {
+      const role  = entry.role === 'user' ? '[User]' : '[Assistant]';
+      const parts = (entry.content || entry.parts || [])
         .filter(p => p.text || p.fileUri || p.fileData)
-        .map(p => p.text || '[Media File Attached]');
-
-      if (contentParts.length) {
-        conversationText += `${role}:\n${contentParts.join('\n')}\n\n`;
-        messageCount++;
-      }
+        .map(p => p.text || '[Media Attached]');
+      if (parts.length) { text += `${role}:\n${parts.join('\n')}\n\n`; count++; }
     }
   }
 
-  if (!conversationText || messageCount === 0) {
+  if (!text || count === 0) {
     return interaction.reply({
-      embeds: [new EmbedBuilder()
-        .setColor('#09090B')
-        .setTitle('No Readable History')
-        .setDescription('The existing conversation logs do not contain any exportable text content.')
-      ],
-      flags: MessageFlags.Ephemeral
+      embeds: [new EmbedBuilder().setColor(MATTE).setTitle('Nothing to Export').setDescription('The conversation logs contain no exportable text.')],
+      flags: MessageFlags.Ephemeral,
     });
   }
 
-  const tempFile  = path.join(TEMP_DIR, `server_conversation_${interaction.id}.txt`);
-  const header    = `Server Conversation History\nServer: ${interaction.guild.name}\nMessages: ${messageCount}\nExported: ${new Date().toLocaleString()}\n${'='.repeat(50)}\n\n`;
-  await fs.writeFile(tempFile, header + conversationText, 'utf8');
+  const safe    = interaction.guild.name.replace(/[^a-z0-9]/gi, '_');
+  const header  = `Server Conversation History\nServer: ${interaction.guild.name}\nMessages: ${count}\nExported: ${new Date().toLocaleString()}\n${'─'.repeat(50)}\n\n`;
+  const tmpFile = path.join(TEMP_DIR, `srv_conv_${interaction.id}.txt`);
+  await fs.writeFile(tmpFile, header + text, 'utf8');
 
-  const { size } = await fs.stat(tempFile);
+  const { size } = await fs.stat(tmpFile);
   const sizeMB   = size / (1024 * 1024);
-  const safeName = interaction.guild.name.replace(/[^a-z0-9]/gi, '_');
-  let fileSent   = false;
-  let fallback;
+  let sent = false, fallback;
 
   if (sizeMB <= 9.5) {
     try {
       await interaction.user.send({
-        content: `📥 **Server Conversation History**\n\`Server: ${interaction.guild.name}\`\n\`Messages: ${messageCount}\``,
-        files:   [new AttachmentBuilder(tempFile, { name: `${safeName}_history.txt` })]
+        content: `Server conversation history — ${interaction.guild.name} (${count} messages)`,
+        files:   [new AttachmentBuilder(tmpFile, { name: `${safe}_history.txt` })],
       });
       await interaction.reply({
-        embeds: [new EmbedBuilder()
-          .setColor('#09090B')
-          .setTitle('History Sent')
-          .setDescription(`The server conversation history (${messageCount} messages) has been sent to your DMs!`)
-        ],
-        flags: MessageFlags.Ephemeral
+        embeds: [new EmbedBuilder().setColor(MATTE).setTitle('History Sent').setDescription(`${count} messages exported and sent to your DMs.`)],
+        flags:  MessageFlags.Ephemeral,
       });
-      fileSent = true;
-    } catch (err) {
-      logger.error('DM send failed for server history', err);
-      fallback = new EmbedBuilder()
-        .setColor('#09090B')
-        .setTitle('DM Failed')
-        .setDescription('Could not deliver history to DMs. Attempting direct upload.');
+      sent = true;
+    } catch {
+      fallback = new EmbedBuilder().setColor(MATTE).setTitle('DM Failed').setDescription('Could not send to DMs. Uploading externally.');
     }
   } else {
-    fallback = new EmbedBuilder()
-      .setColor('#09090B')
-      .setTitle('History Too Large')
-      .setDescription(`The chat history is too large (${sizeMB.toFixed(2)} MB). Transferring to a secure external link.`);
+    fallback = new EmbedBuilder().setColor(MATTE).setTitle('File Too Large').setDescription(`History is ${sizeMB.toFixed(2)} MB — uploading externally.`);
   }
 
-  if (!fileSent) {
+  if (!sent) {
     const { uploadText } = await import('../../utils.js');
-    const urlText = await uploadText(conversationText);
-    const url     = urlText.match(/🔗 URL: (.+)/)?.[1] || 'URL generation failed.';
-    const embed   = (fallback || new EmbedBuilder().setColor('#09090B').setTitle('History Exported'))
-      .addFields({ name: 'Archive Link', value: `[View Saved Logs](${url})`, inline: false });
-    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    const urlText = await uploadText(text);
+    const url     = urlText.match(/URL: (.+)/)?.[1] || 'Generation failed.';
+    await interaction.reply({
+      embeds: [(fallback || new EmbedBuilder().setColor(MATTE).setTitle('History Exported'))
+        .addFields({ name: 'Link', value: `[View History](${url})` })],
+      flags: MessageFlags.Ephemeral,
+    });
   }
 
-  await fs.unlink(tempFile).catch(() => {});
+  await fs.unlink(tmpFile).catch(() => {});
 }
 
 // ============================================================================
@@ -712,18 +649,15 @@ export async function downloadServerConversation(interaction) {
 
 export async function showServerPersonalityModal(interaction) {
   if (!requireManageGuild(interaction)) return;
-
-  const guildId  = interaction.guild.id;
-  const existing = (state.serverSettings[guildId] || {}).customPersonality || '';
-
+  const existing = (state.serverSettings[interaction.guild.id] || {}).customPersonality || '';
   const input = new TextInputBuilder()
     .setCustomId('personality_input')
-    .setLabel("Define the bot's server personality")
+    .setLabel('Server personality instructions')
     .setStyle(TextInputStyle.Paragraph)
-    .setPlaceholder('Enter server custom personality instructions...')
-    .setMinLength(10).setMaxLength(4000);
+    .setPlaceholder('Describe how you want the bot to behave across this server...')
+    .setMinLength(10)
+    .setMaxLength(4000);
   if (existing) input.setValue(existing);
-
   await interaction.showModal(
     new ModalBuilder()
       .setCustomId('server_personality_modal')
@@ -734,39 +668,31 @@ export async function showServerPersonalityModal(interaction) {
 
 export async function removeServerPersonality(interaction) {
   if (!requireManageGuild(interaction)) return;
-
   const guildId = interaction.guild.id;
   if (state.serverSettings[guildId]) delete state.serverSettings[guildId].customPersonality;
   if (state.customInstructions?.[guildId]) delete state.customInstructions[guildId];
   await Promise.all([persistServer(guildId), persistInstructions(guildId, null)]);
   await interaction.reply({
-    embeds: [new EmbedBuilder()
-      .setColor('#09090B')
-      .setTitle('Personality Removed')
-      .setDescription('The server personality has been reset to default.')
-    ],
-    flags: MessageFlags.Ephemeral
+    embeds: [new EmbedBuilder().setColor(MATTE).setTitle('Personality Reset').setDescription('The server personality has been restored to default.')],
+    flags: MessageFlags.Ephemeral,
   });
 }
 
 export async function showServerEmbedColorModal(interaction) {
   if (!requireManageGuild(interaction)) return;
-
-  const guildId  = interaction.guild.id;
-  const existing = (state.serverSettings[guildId] || {}).embedColor || BOT_CONFIG.HEX_COLOUR;
-
+  const existing = (state.serverSettings[interaction.guild.id] || {}).embedColor || '';
   const input = new TextInputBuilder()
     .setCustomId('color_input')
-    .setLabel('Hex Color Code')
+    .setLabel('Hex color code')
     .setStyle(TextInputStyle.Short)
-    .setPlaceholder('#FF5733 or FF5733')
-    .setMinLength(6).setMaxLength(7);
+    .setPlaceholder('#FF5733')
+    .setMinLength(6)
+    .setMaxLength(7);
   if (existing) input.setValue(existing);
-
   await interaction.showModal(
     new ModalBuilder()
       .setCustomId('server_embed_color_modal')
-      .setTitle('Server Theme Color')
+      .setTitle('Server Embed Color')
       .addComponents(new ActionRowBuilder().addComponents(input))
   );
 }
