@@ -141,14 +141,15 @@ export async function handleReactionActionSelect(interaction) {
     }
     await saveStateToFile();
 
-    const embed = new EmbedBuilder()
-      .setColor(0x00FF00)
-      .setTitle('✅ Roulette Enabled')
-      .setDescription(
+    const container = new ContainerBuilder().setAccentColor(0x00C853);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**✅ Roulette Enabled**\n` +
         `I'll now randomly react to messages in this channel! 🎰\n\n` +
         `**Rarity:** ${state.roulette[channelId].rarity || 'medium'}`
-      );
-    return interaction.update({ embeds: [embed], components: [] });
+      )
+    );
+    return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
   }
 
   if (action === 'disable') {
@@ -157,19 +158,16 @@ export async function handleReactionActionSelect(interaction) {
       await saveStateToFile();
     }
 
-    const embed = new EmbedBuilder()
-      .setColor(0xFF5555)
-      .setTitle('❌ Roulette Disabled')
-      .setDescription('Reaction roulette has been disabled for this channel.');
-    return interaction.update({ embeds: [embed], components: [] });
+    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        '**❌ Roulette Disabled**\nReaction roulette has been disabled for this channel.'
+      )
+    );
+    return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
   }
 
   if (action === 'rarity') {
-    const embed = new EmbedBuilder()
-      .setColor(0xFF6B6B)
-      .setTitle('⚙️ Set Reaction Rarity')
-      .setDescription('How often should I react to messages?');
-
     const raritySelect = new StringSelectMenuBuilder()
       .setCustomId('reaction_rarity')
       .setPlaceholder('Select frequency')
@@ -180,10 +178,14 @@ export async function handleReactionActionSelect(interaction) {
         { label: 'Legendary', value: 'legendary', description: '~1% of messages',  emoji: '✨' }
       );
 
-    return interaction.update({
-      embeds:     [embed],
-      components: [new ActionRowBuilder().addComponents(raritySelect)]
-    });
+    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('**⚙️ Set Reaction Rarity**\nHow often should I react to messages?')
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(raritySelect));
+
+    return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
   }
 }
 
@@ -204,12 +206,11 @@ export async function handleReactionRaritySelect(interaction) {
   state.roulette[channelId].rarity = rarity;
   await saveStateToFile();
 
-  const embed = new EmbedBuilder()
-    .setColor(0x00FF00)
-    .setTitle('✅ Rarity Updated')
-    .setDescription(`Reaction rarity set to **${rarity}**!`);
-
-  await interaction.update({ embeds: [embed], components: [] });
+  const container = new ContainerBuilder().setAccentColor(0x00C853);
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`**✅ Rarity Updated**\nReaction rarity set to **${rarity}**!`)
+  );
+  await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
 }
 
 // ============================================================================
