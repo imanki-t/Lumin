@@ -147,7 +147,7 @@ export async function summarizeYouTubeVideo(interaction, videoUrl) {
         '📺', 'YouTube Video Summary',
         summaryText,
         [{ label: '🔗  **Source**', value: videoUrl }],
-        'Summarized by Lumin  ·  Gemini video understanding'
+        'Summarized by Lumin'
       )],
       flags: IS_COMPONENTS_V2
     });
@@ -280,7 +280,7 @@ export async function summarizeDiscordConversation(interaction, messageLink, cou
           { label: '📍  **Channel**',  value: `#${result.channelName} — ${result.guildName}` },
           { label: '💬  **Messages**', value: String(result.messageCount) }
         ],
-        'Summarized by Lumin  ·  Gemini file analysis'
+        'Summarized by Lumin'
       )],
       flags: IS_COMPONENTS_V2
     });
@@ -354,7 +354,7 @@ export async function summarizeWebsite(interaction, websiteUrl) {
         '🌐', 'Website Summary',
         summaryText,
         [{ label: '🔗  **Source**', value: websiteUrl + urlStatLine }],
-        'Summarized by Lumin  ·  URL context + Google Search'
+        'Summarized by Lumin'
       )],
       flags: IS_COMPONENTS_V2
     });
