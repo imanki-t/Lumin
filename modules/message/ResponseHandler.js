@@ -472,6 +472,10 @@ export async function handleModelResponse(
           botMessage = shouldForceReply()
             ? await originalMessage.reply({ content: tempResponse })
             : await originalMessage.channel.send({ content: tempResponse });
+          // Discord auto-clears typing when a message is sent, but our interval
+          // would re-trigger sendTyping() ~4s later while we're only editing.
+          // Stop the interval now — subsequent updates are edits, not sends.
+          typingManager.stop(channelId);
         }
 
         if (botMessage) {
@@ -548,17 +552,29 @@ export async function handleModelResponse(
         const stream = await genAI.models.generateContentStream(request);
         if (!stream) throw new Error('API returned undefined — check API keys');
 
-        // NOTE: do NOT stop the typing indicator here. The stream object is
-        // obtained before any tokens are generated. Stopping typing now causes
-        // a visible 2–3 s gap where typing has disappeared but no Discord
-        // message exists yet. Typing will stop automatically when the first
-        // reply is posted (Discord clears it on message send) and is cleaned
-        // up unconditionally in the finally-block cleanup() call.
+        // NOTE: do NOT stop the typing indicator before streaming begins. The
+        // stream object is obtained before any tokens are generated. Stopping
+        // typing now causes a visible 2–3 s gap where typing has disappeared
+        // but no Discord message exists yet.
+        //
+        // Typing is stopped at two points instead:
+        //   1. Inside drainStream, the moment the first botMessage is created
+        //      via reply/send — Discord auto-clears the indicator on send, and
+        //      we stop the interval so it can't re-trigger while we're editing.
+        //   2. Right after drainStream returns (below) — covers the
+        //      initialBotMessage path where no new message is ever sent and
+        //      Discord never gets a chance to auto-clear the indicator.
 
         let functionCallParts = [];  // now stores raw Part objects {functionCall, id?, thought_signature?}
         const onFunctionCall  = (parts) => functionCallParts.push(...parts);
 
         finalResponse = await drainStream(stream, { onFunctionCall, isLargeRef, initialResponse: '' });
+
+        // Stream fully drained — stop typing now regardless of path taken.
+        // For the reply/send path this is a no-op (already stopped inside
+        // drainStream). For the initialBotMessage/edit-only path this is the
+        // first and only chance to clear the indicator before final formatting.
+        typingManager.stop(channelId);
 
         // ── Function calling loop ────────────────────────────────────────
         // Gemini 3 built-in + custom tool combination requirement:
