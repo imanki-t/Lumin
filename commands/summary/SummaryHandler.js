@@ -4,7 +4,12 @@
  * @module commands/summary/SummaryHandler
  */
 
-import { EmbedBuilder, MessageFlags } from 'discord.js';
+import {
+  MessageFlags,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder
+} from 'discord.js';
 
 import { checkSummaryRateLimit }           from '../../managers/BotManager.js';
 import { Logger }                           from '../../core/Logger.js';
@@ -15,6 +20,18 @@ import {
 } from './SummaryExecutor.js';
 
 const logger = Logger.get('SummaryHandler');
+
+const ACCENT_COLOR     = 0xE53935;
+const IS_COMPONENTS_V2 = 1 << 15;
+
+/** Build a compact error container. */
+function errContainer(title, description) {
+  const c = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+  c.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`## ${title}\n${description}`)
+  );
+  return c;
+}
 
 // ============================================================================
 // COMMAND DEFINITION
@@ -54,11 +71,10 @@ export async function handleSummaryCommand(interaction) {
     // --- Rate-limit check ---
     const limitCheck = checkSummaryRateLimit(interaction.user.id);
     if (!limitCheck.allowed) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFFAA00)
-        .setTitle('⏳ Rate Limit Reached')
-        .setDescription(limitCheck.message);
-      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      return interaction.reply({
+        components: [errContainer('⏳  Rate Limit Reached', limitCheck.message)],
+        flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
+      });
     }
 
     const inputLink = interaction.options.getString('link')?.trim();
@@ -66,11 +82,10 @@ export async function handleSummaryCommand(interaction) {
 
     // --- Input validation ---
     if (!inputLink) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('❌ Invalid Input')
-        .setDescription('Please provide a valid link to summarize.');
-      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      return interaction.reply({
+        components: [errContainer('❌  Invalid Input', 'Please provide a valid link to summarize.')],
+        flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2
+      });
     }
 
     await interaction.deferReply();
@@ -83,31 +98,28 @@ export async function handleSummaryCommand(interaction) {
     } else if (isWebsiteUrl(inputLink)) {
       await summarizeWebsite(interaction, inputLink);
     } else {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('❌ Unsupported URL')
-        .setDescription(
+      await interaction.editReply({
+        components: [errContainer(
+          '❌  Unsupported URL',
           'I can only summarize:\n' +
-          '• YouTube videos\n' +
-          '• Discord message links\n' +
-          '• Website URLs\n\n' +
+          '> 📺  YouTube videos\n' +
+          '> 💬  Discord message links\n' +
+          '> 🌐  Website URLs\n\n' +
           'Please provide a valid link.'
-        );
-      await interaction.editReply({ embeds: [embed] });
+        )],
+        flags: IS_COMPONENTS_V2
+      });
     }
 
   } catch (error) {
     logger.error('Critical error in summary command', error);
 
-    const errorEmbed = new EmbedBuilder()
-      .setColor(0xFF0000)
-      .setTitle('❌ Unexpected Error')
-      .setDescription('An unexpected error occurred while processing the summary. Please try again later.');
+    const c = errContainer('❌  Unexpected Error', 'An unexpected error occurred while processing the summary. Please try again later.');
 
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ embeds: [errorEmbed], flags: MessageFlags.Ephemeral }).catch(() => {});
+      await interaction.reply({ components: [c], flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2 }).catch(() => {});
     } else {
-      await interaction.editReply({ embeds: [errorEmbed] }).catch(() => {});
+      await interaction.editReply({ components: [c], flags: IS_COMPONENTS_V2 }).catch(() => {});
     }
   }
 }

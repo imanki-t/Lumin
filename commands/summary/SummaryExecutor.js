@@ -5,7 +5,11 @@
  * @module commands/summary/SummaryExecutor
  */
 
-import { EmbedBuilder } from 'discord.js';
+import {
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder
+} from 'discord.js';
 import path             from 'path';
 import fs               from 'fs/promises';
 
@@ -29,6 +33,56 @@ import {
 import { Logger } from '../../core/Logger.js';
 
 const logger = Logger.get('SummaryExecutor');
+
+const ACCENT_COLOR     = 0xE53935;
+const IS_COMPONENTS_V2 = 1 << 15;
+
+/**
+ * Build a compact Components V2 error container.
+ * @param {string} title
+ * @param {string} description
+ */
+function errContainer(title, description) {
+  const c = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+  c.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`## ${title}\n${description}`)
+  );
+  return c;
+}
+
+/**
+ * Build a full summary result container.
+ * @param {string} emoji
+ * @param {string} title
+ * @param {string} summaryText
+ * @param {Array<{label:string, value:string}>} stats
+ * @param {string} [footerNote]
+ */
+function summaryContainer(emoji, title, summaryText, stats, footerNote) {
+  const c = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+  c.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`## ${emoji}  ${title}`)
+  );
+  c.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  c.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(summaryText.slice(0, 4000))
+  );
+  if (stats.length > 0) {
+    c.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    c.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        stats.map(s => `> ${s.label}   ${s.value}`).join('\n')
+      )
+    );
+  }
+  if (footerNote) {
+    c.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    c.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`-# ${footerNote}`)
+    );
+  }
+  return c;
+}
 
 const SUMMARY_MODEL          = DEFAULT_MODEL;
 // Summary always uses flash-lite → 3.5-flash, never Gemma:
@@ -86,27 +140,30 @@ export async function summarizeYouTubeVideo(interaction, videoUrl) {
     const summaryText = extractText(response.result);
     if (!summaryText) throw new Error('Gemini returned an empty response');
 
-    const embed = new EmbedBuilder()
-      .setColor(0xFF0000)
-      .setTitle('📺 YouTube Video Summary')
-      .setURL(videoUrl)
-      .setDescription(summaryText.slice(0, 4000))
-      .setFooter({ text: 'Summarized by Lumin' })
-      .setTimestamp();
 
     incrementSummaryUsage(interaction.user.id);
-    await interaction.editReply({ embeds: [embed] });
+    await interaction.editReply({
+      components: [summaryContainer(
+        '📺', 'YouTube Video Summary',
+        summaryText,
+        [{ label: '🔗  **Source**', value: videoUrl }],
+        'Summarized by Lumin  ·  Gemini video understanding'
+      )],
+      flags: IS_COMPONENTS_V2
+    });
 
   } catch (error) {
     logger.error('YouTube summarization failed', error);
     await interaction.editReply({
-      embeds: [errorEmbed(
-        '❌ Video Summary Failed',
+      components: [errContainer(
+        '❌  Video Summary Failed',
         "I couldn't summarize that video. Please ensure:\n" +
-        '• The video is public and not age-restricted\n' +
-        '• The video has captions or transcripts available\n' +
-        `• The video is not too long (>2 hours)\n\n*Error: ${error.message}*`
-      )]
+        '> • The video is public and not age-restricted\n' +
+        '> • The video has captions or transcripts available\n' +
+        `> • The video is not too long (>2 hours)\n\n` +
+        `-# Error: ${error.message}`
+      )],
+      flags: IS_COMPONENTS_V2
     });
   }
 }
@@ -127,7 +184,8 @@ export async function summarizeDiscordConversation(interaction, messageLink, cou
     const result = await fetchMessagesForSummary(interaction, messageLink, count);
     if (result.error) {
       return interaction.editReply({
-        embeds: [errorEmbed('❌ Discord Summary Failed', result.error)]
+        components: [errContainer('❌  Discord Summary Failed', result.error)],
+        flags: IS_COMPONENTS_V2
       });
     }
 
@@ -213,29 +271,30 @@ export async function summarizeDiscordConversation(interaction, messageLink, cou
     const summaryText = extractText(response.result);
     if (!summaryText) throw new Error('Generated summary was empty');
 
-    const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle('💬 Discord Conversation Summary')
-      .setDescription(summaryText.slice(0, 4000))
-      .addFields(
-        { name: '📍 Location', value: `#${result.channelName} (${result.guildName})`, inline: true },
-        { name: '💬 Messages', value: String(result.messageCount),                     inline: true }
-      )
-      .setFooter({ text: 'Summarized by Lumin' })
-      .setTimestamp();
-
     incrementSummaryUsage(interaction.user.id);
-    await interaction.editReply({ embeds: [embed] });
+    await interaction.editReply({
+      components: [summaryContainer(
+        '💬', 'Discord Conversation Summary',
+        summaryText,
+        [
+          { label: '📍  **Channel**',  value: `#${result.channelName} — ${result.guildName}` },
+          { label: '💬  **Messages**', value: String(result.messageCount) }
+        ],
+        'Summarized by Lumin  ·  Gemini file analysis'
+      )],
+      flags: IS_COMPONENTS_V2
+    });
 
   } catch (error) {
     logger.error('Discord summarization failed', error);
     if (filePath) await fs.unlink(filePath).catch(() => {});
 
     await interaction.editReply({
-      embeds: [errorEmbed(
-        '❌ Conversation Summary Failed',
-        `Failed to summarize the Discord conversation.\n\n*Error: ${error.message}*`
-      )]
+      components: [errContainer(
+        '❌  Conversation Summary Failed',
+        `Failed to summarize the Discord conversation.\n\n-# Error: ${error.message}`
+      )],
+      flags: IS_COMPONENTS_V2
     });
   }
 }
@@ -283,35 +342,35 @@ export async function summarizeWebsite(interaction, websiteUrl) {
     const summaryText = extractText(response.result);
     if (!summaryText) throw new Error('Generated summary was empty');
 
-    const embed = new EmbedBuilder()
-      .setColor(0x00D9FF)
-      .setTitle('🌐 Website Summary')
-      .setURL(websiteUrl)
-      .setDescription(summaryText.slice(0, 4000))
-      .setFooter({ text: 'Summarized by Lumin' })
-      .setTimestamp();
-
     // Optional: surface URL retrieval status
-    const urlMeta = response.result.candidates?.[0]?.url_context_metadata?.url_metadata;
-    if (urlMeta?.length > 0) {
-      const status      = urlMeta[0].url_retrieval_status;
-      const statusEmoji = status === 'URL_RETRIEVAL_STATUS_SUCCESS' ? '✅' : '⚠️';
-      embed.addFields({ name: '🔗 URL Status', value: `${statusEmoji} ${status}`, inline: false });
-    }
+    const urlMeta     = response.result.candidates?.[0]?.url_context_metadata?.url_metadata;
+    const urlStatLine = urlMeta?.length > 0
+      ? `\n> 🔗  **URL Status**   ${urlMeta[0].url_retrieval_status === 'URL_RETRIEVAL_STATUS_SUCCESS' ? '✅ Retrieved' : '⚠️ ' + urlMeta[0].url_retrieval_status}`
+      : '';
 
     incrementSummaryUsage(interaction.user.id);
-    await interaction.editReply({ embeds: [embed] });
+    await interaction.editReply({
+      components: [summaryContainer(
+        '🌐', 'Website Summary',
+        summaryText,
+        [{ label: '🔗  **Source**', value: websiteUrl + urlStatLine }],
+        'Summarized by Lumin  ·  URL context + Google Search'
+      )],
+      flags: IS_COMPONENTS_V2
+    });
 
   } catch (error) {
     logger.error('Website summarization failed', error);
     await interaction.editReply({
-      embeds: [errorEmbed(
-        '❌ Website Summary Failed',
+      components: [errContainer(
+        '❌  Website Summary Failed',
         "I couldn't summarize that website. Please ensure:\n" +
-        '• The URL is valid and accessible\n' +
-        '• The website is not behind a paywall or login\n' +
-        `• The website allows web scraping\n\n*Error: ${error.message}*`
-      )]
+        '> • The URL is valid and accessible\n' +
+        '> • The website is not behind a paywall or login\n' +
+        `> • The website allows web scraping\n\n` +
+        `-# Error: ${error.message}`
+      )],
+      flags: IS_COMPONENTS_V2
     });
   }
 }
@@ -470,11 +529,6 @@ async function waitForFileProcessing(fileName) {
 /** Extract the first text part from a Gemini GenerateContentResponse. */
 function extractText(result) {
   return result?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
-}
-
-/** Build a standard error embed. */
-function errorEmbed(title, description) {
-  return new EmbedBuilder().setColor(0xFF5555).setTitle(title).setDescription(description);
 }
 
 /** Simple promise-based sleep. */
