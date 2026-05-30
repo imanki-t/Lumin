@@ -21,9 +21,9 @@ const CHECK_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
 // COMMAND DEFINITION
 // ============================================================================
 
-export const realiveCommand = {
-  name:        'realive',
-  description: 'Periodically send messages to revive dead chats (Server Only)',
+export const reviveCommand = {
+  name:        'revive',
+  description: 'Periodically send AI-generated messages to re-engage quiet channels (Server Only)',
   options: [
     {
       name:        'action',
@@ -55,7 +55,7 @@ export const realiveCommand = {
 /**
  * @param {import('discord.js').CommandInteraction} interaction
  */
-export async function handleRealiveCommand(interaction) {
+export async function handleReviveCommand(interaction) {
   const guild = interaction.guild;
 
   // Server-only guard
@@ -131,7 +131,7 @@ export async function handleRealiveCommand(interaction) {
 
       const embed = new EmbedBuilder()
         .setColor(0x00FFFF)
-        .setTitle('✨ Realive Status')
+        .setTitle('✨ Channel Revival Status')
         .addFields(
           { name: 'Status',         value: guildConfig.enabled ? '✅ Enabled' : '❌ Disabled', inline: true  },
           { name: 'Interval',       value: `${guildConfig.intervalHours} hours`,               inline: true  },
@@ -160,7 +160,7 @@ export async function handleRealiveCommand(interaction) {
  * Start the Realive background loop (called once at bot startup).
  * @param {import('discord.js').Client} client
  */
-export function startRealiveLoop(client) {
+export function startReviveLoop(client) {
   setInterval(() => checkAndRevive(client), CHECK_INTERVAL_MS);
   logger.info('Realive background task started');
 }
