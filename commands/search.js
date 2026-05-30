@@ -193,7 +193,7 @@ async function sendSearchAsFile(interaction, text) {
   try {
     const tempFilePath = await writeTempFile(filename, text);
     await interaction.editReply({
-      content:    `<@${interaction.user.id}>, ${SEARCH_RESULTS_PREFIX}`,
+      content:    `Here are ${SEARCH_RESULTS_PREFIX}`,
       files:      [tempFilePath],
       embeds:     [],
       components: []
