@@ -35,7 +35,7 @@ Slash commands are registered automatically on every startup — no separate dep
 
 ### AI & Conversation
 
-- **Persistent RAG Memory** — Every reply is grounded by a vector search over past conversations. Lumin generates 3072-dimensional embeddings (`gemini-embedding-exp-03-07`) and retrieves semantically relevant history before each response. A K-means cluster engine accelerates search as memory grows.
+- **Persistent RAG Memory** — Every reply is grounded by a vector search over past conversations. Lumin generates 3072-dimensional embeddings (`gemini-embedding-2`) and retrieves semantically relevant history before each response. A K-means cluster engine accelerates search as memory grows.
 - **Personal Memory** — Lumin proactively saves facts about each user (hobbies, preferences, life details) via the `manage_personal_memory` function tool and recalls them naturally across all servers and DMs.
 - **Server Facts** — A shared knowledge layer for every guild. Lumin automatically stores and retrieves server-wide facts — relationships, nicknames, roles, recurring activities, events, and more — via `manage_server_fact`, categorised and scoped to the guild.
 - **Cross-Context Memory** — Opt-in feature that lets Lumin carry memories and server facts across every server a user shares with it, and across DMs.
