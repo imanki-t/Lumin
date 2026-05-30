@@ -9,14 +9,15 @@
 ╚══════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝
 ```
 
-**An intelligent Discord bot powered by Google Gemini AI**  
-*RAG memory · multi-key rotation · real-time admin dashboard*
+**An intelligent Discord bot powered by Google Gemini & Gemma AI**  
+*RAG memory · multi-model · multi-key rotation · real-time admin dashboard*
 
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![Discord.js](https://img.shields.io/badge/Discord.js-v14-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.js.org)
 [![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-47A248?style=flat-square&logo=mongodb&logoColor=white)](https://mongodb.com)
 [![Gemini](https://img.shields.io/badge/Google-Gemini_AI-4285F4?style=flat-square&logo=google&logoColor=white)](https://ai.google.dev)
-[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE.md)
+[![Version](https://img.shields.io/badge/version-3.1.0-orange?style=flat-square)]()
 
 </div>
 
@@ -24,47 +25,177 @@
 
 ## What is Lumin?
 
-Lumin is a full-featured AI Discord bot built on Google Gemini. It maintains persistent per-user and per-server conversation memory using a RAG (Retrieval-Augmented Generation) pipeline, supports file and image analysis, and ships with a real-time admin dashboard secured via Google OAuth.
+Lumin is a full-featured AI Discord companion built around Google Gemini and Gemma. It maintains persistent per-user and per-server conversation memory using a RAG pipeline backed by MongoDB Atlas Vector Search, supports multimodal file and image analysis, ships a complete interactive game system, and exposes a real-time admin dashboard secured via Google OAuth.
+
+Slash commands are registered automatically on every startup — no separate deploy step needed.
 
 ---
 
 ## Features
 
 ### AI & Conversation
-- **Persistent Memory** — RAG pipeline with MongoDB Atlas Vector Search. Lumin retrieves semantically relevant past messages before every response using 3072-dimensional embeddings (`gemini-embedding-2-preview`).
-- **Multi-Model Support** — Users can switch between Gemini 3 Flash, Gemini 2.5 Pro, Gemini 2.0 Flash, and more from their personal settings.
-- **Multi-Key Rotation** — Supports unlimited Gemini API keys (`GOOGLE_API_KEY1`, `GOOGLE_API_KEY2`, …) with automatic rate-limit detection and per-key cooldowns.
-- **File & Image Analysis** — Attach PDFs, images, and documents directly in chat. Lumin processes them via the Gemini Files API.
-- **Custom Personalities** — Each user and server can set a custom system prompt that shapes how Lumin responds.
-- **Response Formats** — Toggle between plain text, markdown, or embed-based responses per user.
 
-### Slash Commands
+- **Persistent RAG Memory** — Every reply is grounded by a vector search over past conversations. Lumin generates 3072-dimensional embeddings (`gemini-embedding-exp-03-07`) and retrieves semantically relevant history before each response. A K-means cluster engine accelerates search as memory grows.
+- **Personal Memory** — Lumin proactively saves facts about each user (hobbies, preferences, life details) via the `manage_personal_memory` function tool and recalls them naturally across all servers and DMs.
+- **Server Facts** — A shared knowledge layer for every guild. Lumin automatically stores and retrieves server-wide facts — relationships, nicknames, roles, recurring activities, events, and more — via `manage_server_fact`, categorised and scoped to the guild.
+- **Cross-Context Memory** — Opt-in feature that lets Lumin carry memories and server facts across every server a user shares with it, and across DMs.
+- **Automatic Tool Calling** — 9 native function tools Lumin calls on its own judgement: `manage_personal_memory`, `manage_server_fact`, `search_memory`, `set_reminder`, `set_birthday`, `set_timezone`, `check_time_elapsed`, `get_message_timestamp`, and `get_current_datetime`.
+- **Web Search** — Native Gemini grounding lets Lumin pull live web results into any reply.
+- **Multimodal Input** — Attach images, PDFs, and documents in chat. Video and audio processing are available behind feature flags. Files are processed via the Gemini Files API and optionally embedded into memory.
+- **Custom Personalities** — Each user and server can set their own system prompt that shapes how Lumin responds.
+- **Response Formats** — Toggle between plain text and Discord embed responses, per-user or per-server.
+
+### Multi-Model Support
+
+Users can pick their preferred model from settings. Available models:
+
+| Model key | Description |
+|---|---|
+| `gemini-3.1-pro` | Most capable Gemini 3, agentic tasks |
+| `gemini-3.1-flash-lite` | Fastest / cheapest Gemini 3 (default) |
+| `gemini-3-flash` | Frontier-class at a fraction of the cost |
+| `gemini-3.5-flash` | Speed + quality balance |
+| `gemini-2.5-pro` | Best reasoning and coding |
+| `gemma-4-26b` | MoE 26B active params |
+| `gemma-4-31b` | Dense 31B Gemma 4 |
+| `gemma-3-27b` | Gemma 3 27B |
+| `gemma-3-12b` | Gemma 3 12B |
+| `gemma-3-4b` | Gemma 3 4B |
+| `gemma-3-2b` | Gemma 3 2B |
+| `gemma-3-1b` | Gemma 3 1B |
+
+**Gemma modes** (configured in `modules/config.js`):
+- `ENABLE_GEMMA=true` — routes all standard chat through Gemma exclusively; Gemini is never used.
+- `CYCLE_GEMMA_WITH_GEMINI=true` — Gemini runs first; Gemma models are appended to the fallback chain after all Gemini keys are exhausted.
+
+### Multi-Key Rotation
+
+Add as many Gemini API keys as you like (`GOOGLE_API_KEY1`, `GOOGLE_API_KEY2`, …). The `ApiKeyManager` detects rate-limit responses, cools down the affected key, and rotates to the next automatically. A per-key daily cap is enforced for Gemma models.
+
+### Reliability Infrastructure
+
+- **Circuit Breaker** — The `core/CircuitBreaker` trips when the AI API is consistently failing and holds new requests off until the upstream recovers, preventing a cascade of failed calls.
+- **Per-User Queue** — Every user gets their own message queue (configurable depth). Messages beyond the cap are dropped with a warning rather than stacking up.
+- **Structured Error Hierarchy** — `core/AppError` gives every error type its own class (`RateLimitError`, `CircuitOpenError`, etc.) for clean catch blocks and logging.
+- **Retry Utilities** — Shared `retryUtils` with exponential backoff used across all commands and AI calls.
+
+---
+
+## Slash Commands
 
 | Command | Description |
 |---|---|
-| `/settings` | Open the full user/server settings dashboard |
-| `/search` | AI-powered web search with optional file attachment |
-| `/summary` | Summarize a Discord conversation or YouTube video |
+| `/settings` | Open the user or server settings panel |
+| `/search [prompt] [file]` | AI-powered web search; optionally attach a file |
+| `/summary [link] [count]` | Summarise recent Discord messages or a YouTube link |
 | `/reminder` | Set one-time, daily, weekly, or monthly reminders |
-| `/birthday` | Track and announce server birthdays |
-| `/quote` | Daily inspirational quotes |
-| `/digest` | AI-generated weekly summary of server activity |
-| `/compliment` | Send anonymous compliments to other users |
-| `/roulette` | Bot randomly reacts to messages in a channel |
-| `/realive` | Auto-send messages to revive inactive channels |
-| `/anniversary` | View bot's server anniversary info |
-| `/starter` | Generate conversation starters |
-| `/timezone` | Set your timezone for time-based features |
+| `/birthday` | Track and announce server member birthdays |
+| `/quote` | Schedule or fetch daily inspirational quotes |
+| `/digest` | AI-generated digest of recent server activity |
+| `/compliment [user]` | Send an anonymous compliment to someone |
+| `/reaction` | Configure Lumin's random reaction roulette on messages |
+| `/details` | View Lumin's server anniversary and join info |
+| `/starter` | Generate AI conversation starters for the server |
+| `/timezone` | Set your timezone (required for time-sensitive features) |
+| `/game` | Launch an interactive game (see below) |
+| `/schedule [action]` | Auto-send messages to revive inactive channels |
 
-### Admin Dashboard (LuminDash)
-- Live at `/dashboard` on your deployment URL
-- Google OAuth login — only authorized accounts can access
-- reCAPTCHA v3 bot protection running silently in the background
-- Real-time stats via WebSocket (1-second updates): ping, memory, uptime, server count
-- Live Node.js REPL — execute code directly on the running instance
+### Games (`/game`)
+
+| Game | Description |
+|---|---|
+| Truth, Dare, or Situation | AI-generated truth questions, dares, or hypothetical scenarios |
+| Never Have I Ever | Rotating NHIE prompts with a next button |
+| Would You Rather | Difficult AI-generated dilemma choices |
+| Akinator | Lumin guesses who or what you're thinking of |
+
+---
+
+## Settings
+
+### User Settings (`/settings`)
+
+| Setting | Description |
+|---|---|
+| Response format | Toggle between normal text and Discord embed responses |
+| Action buttons | Show/hide quick-action buttons on replies |
+| Continuous reply | Keep Lumin responding without needing another mention |
+| Cross-context memory | Share memories and facts across all servers |
+| Custom embed color | Set your personal accent color for embeds |
+| Custom personality | Write your own system prompt for Lumin |
+| Clear history | Wipe your personal conversation history |
+| Export history | Download your conversation logs |
+
+### Server Settings (`/settings` — admins only)
+
+| Setting | Description |
+|---|---|
+| Response format | Override format for the whole server |
+| Action buttons | Toggle action buttons server-wide |
+| Override user settings | Force server settings to take priority over user preferences |
+| Continuous reply | Enable/disable server-wide continuous reply |
+| Server chat history | Toggle shared server conversation history tracking |
+| Custom embed color | Set a server-wide accent color for embeds |
+| Custom personality | Write a server-wide system prompt |
+| Export server history | Download or archive the server's conversation logs |
+
+---
+
+## Admin Dashboard (LuminDash)
+
+Access at `/dashboard` on your deployment URL.
+
+**Authentication:** Google OAuth 2.0 — only the authorised account can log in. reCAPTCHA v3 runs silently in the background.
+
+**Real-time stats** (WebSocket, 1-second updates): ping, memory usage, uptime, server count, disk usage.
+
+**Terminals:**
+- Live Node.js REPL — execute JavaScript on the running instance
 - Live MongoDB shell — query your database in-browser
-- 25 admin commands: blacklist users, broadcast announcements, force saves, API key stats, set presence, send DMs, purge memory, and more
-- Global lockdown toggle — stop the bot from responding across all servers instantly
+
+**Admin commands available in the dashboard:**
+
+| Category | Commands |
+|---|---|
+| State | Force save, reload state |
+| API keys | View stats, switch active key, switch to specific key index |
+| Users | Blacklist, unblacklist, view blacklist, clear history, view profile, resolve username, send DM |
+| Servers | List servers, view settings, reset server, guild info, leave server |
+| Usage | Clear image usage, clear summary usage, clear quote usage, clear starter usage, clear compliment usage |
+| Reminders | View all reminders, clear reminders |
+| Birthdays | View all birthdays, clear birthdays |
+| Broadcast | Announce to all servers, announce to all users (DM), send to specific channel |
+| Members | Kick member, ban member, set nickname |
+| Bot presence | Set activity/status, get current presence |
+| Config | Reload slash commands, toggle debug mode |
+| Global | Lockdown toggle (stops the bot responding everywhere instantly), restart |
+
+---
+
+## Memory Architecture
+
+```
+User message
+     │
+     ▼
+EmbeddingService  ──►  3072-dim vector (gemini-embedding-exp-03-07)
+     │
+     ▼
+MemorySystem ──► L1 in-process LRU cache
+             ──► L2 semantic similarity cache
+             ──► L3 Redis cache (if REDIS_URL is set)
+             ──► MongoDB Atlas Vector Search (persistent)
+             │
+             ▼
+         ClusterEngine  ── K-means clustering for fast nearest-neighbour
+             │
+             ▼
+         Top-N results injected into prompt context
+```
+
+RAG can be run in two modes (set in `modules/config.js`):
+- `ENABLE_RAG=true` — automatic vector search before every reply
+- `ENABLE_RAG=false` (default) — AI calls `search_memory` as a tool on its own judgement
 
 ---
 
@@ -74,13 +205,15 @@ Lumin is a full-featured AI Discord bot built on Google Gemini. It maintains per
 |---|---|
 | Runtime | Node.js 20+ (ESM) |
 | Discord | Discord.js v14 |
-| AI | Google Gemini (`@google/genai`) |
+| AI | Google Gemini & Gemma (`@google/genai`) |
 | Database | MongoDB Atlas |
 | Vector Search | MongoDB Atlas Vector Search |
-| Caching | Redis (optional, falls back gracefully) |
-| Dashboard | Express.js + native WebSocket |
+| Caching | LRU-cache (L1/L2) + Redis (L3, optional) |
+| Dashboard | Express.js 5 + native WebSocket |
 | Auth | Google OAuth 2.0 + reCAPTCHA v3 |
-| Hosting | Render |
+| Media | sharp (images), fluent-ffmpeg (video/audio), office-text-extractor (docs) |
+| Scheduling | node-cron |
+| Hosting | Render (or any Node-compatible host) |
 
 ---
 
@@ -88,155 +221,171 @@ Lumin is a full-featured AI Discord bot built on Google Gemini. It maintains per
 
 ```
 lumin/
-├── index.js                    # Entry point — Discord client + Express server
-├── commands.js                 # Slash command definitions
-├── config.js                   # Bot configuration constants
-├── database.js                 # Database shim (re-exports from database/)
+├── index.js                      # Entry point — Discord client, Express server, command registration
+├── commands.js                   # Slash command definitions (auto-registered on startup)
+├── config.js                     # Bot personality, activities, core system rules
+├── database.js                   # Re-export shim for database/
 │
 ├── managers/
-│   ├── BotManager.js           # Initialization, state, Gemini client proxy
-│   ├── ApiKeyManager.js        # Multi-key rotation + rate-limit tracking
-│   └── StateManager.js         # State persistence + DB load/save
+│   ├── BotManager.js             # Client init, state facade, Gemini proxy
+│   ├── ApiKeyManager.js          # Multi-key rotation, rate-limit tracking, Gemma limits
+│   ├── QueueManager.js           # Per-user message queues
+│   └── StateManager.js           # In-memory state + DB persistence
 │
 ├── modules/
-│   ├── message/                # Message processing pipeline
-│   ├── settings/               # User & server settings UI (Discord embeds)
-│   └── shared/                 # Embed builders, utilities
+│   ├── message/
+│   │   ├── MessageProcessor.js   # Core message pipeline + queue processing
+│   │   ├── PromptBuilder.js      # System prompt assembly (personality + memory + context)
+│   │   ├── ResponseHandler.js    # Reply formatting, chunking, embed building
+│   │   ├── HistoryManager.js     # Per-user/server chat history management
+│   │   └── MediaHandler.js       # Attachment detection and routing
+│   ├── attachments/
+│   │   ├── FileUploader.js       # Gemini Files API upload pipeline
+│   │   ├── FileValidator.js      # MIME type + size validation
+│   │   └── FileConverter.js      # Format conversion (ffmpeg / sharp)
+│   ├── settings/
+│   │   ├── UserSettingsHandler.js   # User settings Discord UI
+│   │   ├── ServerSettingsHandler.js # Server settings Discord UI
+│   │   ├── SettingsRouter.js        # Settings interaction routing
+│   │   └── ActionHandlers.js        # Settings button/modal handlers
+│   ├── functions/
+│   │   ├── FunctionRegistry.js   # Gemini tool declarations (9 tools)
+│   │   └── FunctionExecutor.js   # Tool call dispatch and execution
+│   ├── shared/
+│   │   ├── embedBuilder.js       # Shared embed + component builders
+│   │   ├── messageFormatter.js   # Text formatting helpers
+│   │   ├── buttonHandlers.js     # Reusable button row builders
+│   │   ├── discordHelpers.js     # Shared Discord utility functions
+│   │   ├── retryUtils.js         # Exponential backoff retry wrapper
+│   │   ├── tempFileManager.js    # Temp file lifecycle management
+│   │   └── runtimeFlags.js       # Live feature flag toggles
+│   └── config.js                 # Module-level feature flags and constants
 │
 ├── commands/
-│   ├── birthday/               # Birthday tracking & announcements
-│   ├── reminder/               # Reminder system (once/daily/weekly/monthly)
-│   ├── fun/                    # Digest, quote, compliment, roulette, realive
-│   ├── summary/                # Conversation & YouTube summarization
-│   └── timezone/               # Timezone management
+│   ├── index.js                  # Command + interaction router
+│   ├── search.js                 # /search handler
+│   ├── timezone.js               # /timezone handler
+│   ├── realive.js                # /schedule (chat revival) handler
+│   ├── birthday/
+│   │   ├── BirthdayHandler.js    # /birthday interactive UI
+│   │   └── BirthdayScheduler.js  # Daily birthday check cron
+│   ├── reminder/
+│   │   ├── ReminderHandler.js    # /reminder interactive UI
+│   │   └── ReminderScheduler.js  # Reminder delivery cron
+│   ├── quote/
+│   │   ├── QuoteHandler.js       # /quote interactive UI
+│   │   └── QuoteScheduler.js     # Daily quote delivery cron
+│   ├── summary/
+│   │   ├── SummaryHandler.js     # /summary command entry
+│   │   ├── SummaryExecutor.js    # Summarisation logic (messages + YouTube)
+│   │   └── WeeklySummaryJob.js   # Scheduled weekly digest job
+│   ├── fun/
+│   │   ├── RouletteHandler.js    # /reaction (message reaction roulette)
+│   │   ├── DigestHandler.js      # /digest
+│   │   ├── AnniversaryHandler.js # /details (server anniversary)
+│   │   ├── StarterHandler.js     # /starter
+│   │   └── ComplimentHandler.js  # /compliment
+│   └── game/
+│       ├── GameRouter.js         # /game menu + routing
+│       ├── TruthDareSnap.js      # Truth / Dare / Situation
+│       ├── NeverHaveIEver.js     # Never Have I Ever
+│       ├── WouldYouRather.js     # Would You Rather
+│       ├── Akinator.js           # Akinator
+│       └── gameUtils.js          # Shared game helpers
 │
 ├── memory/
-│   ├── MemorySystem.js         # RAG pipeline facade
-│   ├── EmbeddingService.js     # Gemini embeddings + MRL (3072-dim)
-│   ├── ClusterEngine.js        # K-means clustering for fast vector search
-│   ├── MemoryStore.js          # Background indexing
-│   ├── MemoryCache.js          # L1/L2 semantic cache
-│   └── RedisCache.js           # L3 Redis cache
+│   ├── MemorySystem.js           # RAG pipeline facade
+│   ├── EmbeddingService.js       # Gemini embeddings (3072-dim) + MRL
+│   ├── ClusterEngine.js          # K-means clustering for vector search
+│   ├── MemoryStore.js            # Background indexing and store management
+│   ├── MemoryCache.js            # L1/L2 in-process semantic cache
+│   ├── RedisCache.js             # L3 Redis cache
+│   ├── config.js                 # Memory subsystem constants
+│   └── memoryUtils.js            # Shared memory helpers
 │
 ├── database/
-│   ├── connection.js           # MongoDB connection + collection registry
-│   ├── index.js                # Barrel export
+│   ├── connection.js             # MongoDB connection + collection registry
+│   ├── index.js                  # Barrel export
+│   ├── batchSave.js              # Batched write helper
+│   ├── indexManager.js           # Atlas index management
+│   ├── vectorSearch.js           # Atlas Vector Search query helpers
 │   └── collections/
-│       ├── settingsRepo.js     # User & server settings
-│       ├── historyRepo.js      # Chat history
-│       ├── usageRepo.js        # Usage tracking (images, quotes, summaries)
-│       ├── reminderRepo.js     # Reminders & birthdays
-│       └── vectorSearch.js     # Atlas Vector Search queries
+│       ├── settingsRepo.js       # User & server settings CRUD
+│       ├── historyRepo.js        # Chat history CRUD
+│       ├── memoryRepo.js         # Memory entry CRUD
+│       ├── usageRepo.js          # Usage tracking (images, quotes, etc.)
+│       └── featuresRepo.js       # Per-guild feature flag persistence
 │
 ├── core/
-│   └── Logger.js               # Structured logger with file sink support
+│   ├── AppError.js               # Structured error hierarchy (LuminError, RateLimitError, CircuitOpenError, …)
+│   ├── CircuitBreaker.js         # Circuit breaker for the AI API
+│   └── Logger.js                 # Structured logger with optional file sink
 │
 └── dashboard/
-    ├── server.js               # Express router + OAuth + WebSocket terminals
+    ├── server.js                 # Express router, OAuth, WebSocket, all admin API routes
     └── public/
-        ├── index.html          # Dashboard SPA shell
-        ├── lumin.png           # Favicon
-        ├── css/
-        │   └── main.css        # Complete design system
+        ├── index.html            # Dashboard SPA shell
+        ├── lumin.png             # Logo / favicon
+        ├── css/main.css          # Complete design system
         └── js/
-            ├── app.js          # Boot, OAuth flow, real-time stats stream
-            ├── config.js       # Token management + page definitions
-            ├── router.js       # Client-side navigation
-            ├── terminals.js    # xterm.js REPL terminals (Node + Mongo)
-            ├── servers.js      # Servers page
-            ├── commands.js     # Admin command cards
-            ├── announce.js     # Announcement page
-            ├── lockdown.js     # Lockdown page
-            ├── api.js          # Fetch wrapper
-            └── toast.js        # Toast notifications
+            ├── app.js            # Boot, OAuth flow, real-time stats stream
+            ├── config.js         # Token management + page definitions
+            ├── router.js         # Client-side navigation
+            ├── terminals.js      # xterm.js REPL terminals (Node + Mongo)
+            ├── commands.js       # Admin command cards
+            ├── servers.js        # Servers page
+            ├── announce.js       # Announcement page
+            ├── lockdown.js       # Lockdown page
+            ├── api.js            # Fetch wrapper
+            └── toast.js          # Toast notifications
 ```
 
 ---
 
 ## Setup
 
-### Prerequisites
+See [SETUP.md](SETUP.md) for a complete step-by-step guide covering Discord, MongoDB, Google Gemini, Google OAuth, and reCAPTCHA setup.
 
-- Node.js 20 or higher
-- A MongoDB Atlas cluster (free tier works)
-- A Discord application with a bot token
-- At least one Google Gemini API key
-
-### 1. Clone & Install
+### Quick start
 
 ```bash
-git clone https://github.com/imanki-t/Lumin.git
+git clone https://github.com/your-repo/lumin.git
 cd lumin
 npm install
+# create .env (see SETUP.md)
+npm start
 ```
 
-### 2. Environment Variables
+Lumin registers its slash commands automatically the first time it starts. No separate deploy script is needed.
 
-Create a `.env` file in the root directory:
+### Environment variables summary
 
 ```env
-# ── Discord ──────────────────────────────────────────────────────────────────
-DISCORD_BOT_TOKEN=your_discord_bot_token
+# Required
+DISCORD_BOT_TOKEN=
+GOOGLE_API_KEY1=
+MONGODB_URI=
 
-# ── Google Gemini (supports multiple keys for rotation) ──────────────────────
-GOOGLE_API_KEY1=your_first_gemini_key
-GOOGLE_API_KEY2=your_second_gemini_key   # optional, add as many as needed
+# Dashboard (required for LuminDash)
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+RECAPTCHA_SITE_KEY=
+RECAPTCHA_SECRET_KEY=
+SESSION_SECRET=
 
-# ── MongoDB ───────────────────────────────────────────────────────────────────
-MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/lumin
-
-# ── Dashboard — Google OAuth ──────────────────────────────────────────────────
-GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=GOCSPX-your_client_secret
-
-# ── Dashboard — reCAPTCHA v3 ──────────────────────────────────────────────────
-RECAPTCHA_SITE_KEY=6Lc_your_site_key
-RECAPTCHA_SECRET_KEY=6Lc_your_secret_key
-
-# ── Dashboard — Session ───────────────────────────────────────────────────────
-SESSION_SECRET=your_64_char_random_string
-
-# ── Optional ──────────────────────────────────────────────────────────────────
-REDIS_URL=redis://...          # L3 cache layer (falls back gracefully if absent)
-LOG_FILE=/var/log/lumin.log    # Persist error logs to file
-PORT=3000                      # HTTP server port (default: 3000)
+# Optional
+GOOGLE_API_KEY2=          # add more keys for rotation
+REDIS_URL=                # enables L3 Redis cache
+LOG_FILE=                 # persist logs to file path
+PORT=3000
 NODE_ENV=production
 ```
 
-### 3. Register Slash Commands
-
-```bash
-node deploy-commands.js
-```
-
-### 4. Start
-
-```bash
-# Development
-node index.js
-
-# Production (with process manager)
-pm2 start index.js --name lumin
-```
-
-The bot starts, connects to MongoDB, loads all state into memory, and the dashboard becomes available at `http://localhost:3000/dashboard`.
-
 ---
 
-## Dashboard Setup
+## MongoDB Atlas Vector Search Index
 
-The admin dashboard requires a Google OAuth app. See [lumindash-env-guide.md](lumindash-env-guide.md) for a complete step-by-step walkthrough covering:
-
-- Creating a Google Cloud project and OAuth credentials
-- Setting the correct redirect URI (`/dashboard/auth/google/callback`)
-- Registering your reCAPTCHA v3 site
-- Adding all variables to Render
-
----
-
-## MongoDB Atlas Vector Search
-
-For the RAG memory system to work at full capacity, create a vector search index on your `memoryEntries` collection:
+For full semantic RAG to work, create a vector search index named `vector_index` on your `memoryEntries` collection:
 
 ```json
 {
@@ -256,37 +405,48 @@ For the RAG memory system to work at full capacity, create a vector search index
 }
 ```
 
-Name the index `vector_index`. Without this, Lumin falls back to keyword search automatically — it still works, just without semantic retrieval.
+Without this index, Lumin falls back to keyword search — it still works, just without full semantic retrieval.
 
 ---
 
 ## Configuration
 
-Key settings live in `config.js` and `modules/config.js`:
+Key flags live in `modules/config.js`:
 
-- **Default model** — Set `DEFAULT_MODEL` to change which Gemini model is used by default
-- **Model list** — Add or remove models from `MODELS` to control what users can pick
-- **Safety settings** — All harm categories are set to `BLOCK_NONE` by default; adjust in `modules/config.js`
-- **Rate limits** — Per-model and per-key thresholds are tuned in `managers/ApiKeyManager.js`
+| Flag | Default | Description |
+|---|---|---|
+| `DEFAULT_MODEL` | `gemini-3.1-flash-lite` | Model used when user has no preference set |
+| `ENABLE_GEMMA` | `true` | Route all chat through Gemma exclusively |
+| `CYCLE_GEMMA_WITH_GEMINI` | `false` | Append Gemma to fallback chain after Gemini keys exhaust |
+| `ENABLE_RAG` | `false` | Auto-run vector search before every reply (vs. tool-calling mode) |
+| `CROSS_CONTEXT_ENABLED` | `false` | Global default for cross-server memory |
+| `ENABLE_IMAGE_PROCESSING` | `true` | Accept inline image attachments |
+| `ENABLE_VIDEO_PROCESSING` | `false` | Accept video attachments |
+| `ENABLE_AUDIO_PROCESSING` | `false` | Accept audio attachments |
+| `ENABLE_FILE_PROCESSING` | `false` | Accept generic file attachments |
+| `ENABLE_WEB_SEARCH` | `true` | Gemini grounding / web search |
+| `ENABLE_FUNCTION_CALLING` | `true` | All tool / function-call use |
+
+Safety settings (all harm categories default to `BLOCK_NONE`) and per-key/per-model rate limits are also tunable in `modules/config.js` and `managers/ApiKeyManager.js`.
 
 ---
 
 ## Deploying to Render
 
-1. Push to GitHub
-2. Create a new **Web Service** on Render pointing to your repo
-3. Set **Build Command:** `npm install`
-4. Set **Start Command:** `node index.js`
-5. Add all environment variables from the Setup section above
-6. Deploy — Render will auto-restart on crashes
+1. Push your repo to GitHub.
+2. Create a new **Web Service** on Render pointing to the repo.
+3. **Build command:** `npm install`
+4. **Start command:** `npm start`
+5. Add all environment variables from the `.env` summary above.
+6. Deploy — Render will auto-restart on crashes.
 
-> **Note:** Render free tier spins down after 15 minutes of inactivity. Upgrade to a paid plan for always-on hosting if you need consistent reminder delivery.
+> **Note:** Render's free tier spins down after 15 minutes of inactivity. Use a paid plan if you need reliable reminder and birthday delivery.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE.md](LICENSE.md) for details.
 
 ---
 
