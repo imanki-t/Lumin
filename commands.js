@@ -3,21 +3,21 @@ import { PermissionFlagsBits, ApplicationCommandOptionType } from 'discord.js';
 const commands = [
   {
     name: "settings",
-    description: "Open the bot settings dashboard."
+    description: "Configure bot settings and preferences."
   },
   {
     name: "search",
-    description: "Search with AI.",
+    description: "Search the web or ask AI anything.",
     options: [
       {
         name: "prompt",
-        description: "Your search query or prompt",
+        description: "Your search query or question",
         type: ApplicationCommandOptionType.String,
         required: false
       },
       {
         name: "file",
-        description: "Attach a file",
+        description: "Attach a file to include in your query",
         type: ApplicationCommandOptionType.Attachment,
         required: false
       }
@@ -25,81 +25,72 @@ const commands = [
   },
   {
     name: "birthday",
-    description: "Manage your birthday reminders",
-    options: [
-      {
-        name: "action",
-        description: "What do you want to do?",
-        type: ApplicationCommandOptionType.String,
-        required: true,
-        choices: [
-          { name: "Set Birthday", value: "set" },
-          { name: "Remove Birthday", value: "remove" },
-          { name: "List Birthdays", value: "list" }
-        ]
-      }
-    ]
+    description: "Manage birthday reminders."
   },
   {
     name: "reminder",
-    description: "Set reminders for yourself"
+    description: "Set personal reminders."
   },
   {
     name: "quote",
-    description: "Daily inspirational quotes"
+    description: "Schedule or receive daily inspirational quotes."
   },
   {
-    name: "roulette",
-    description: "Bot randomly reacts to messages in this channel",
+    name: "reaction",
+    description: "Toggle random AI reactions to messages in this channel.",
     dm_permission: false,
     default_member_permissions: PermissionFlagsBits.ManageGuild.toString()
   },
   {
-    name: "anniversary",
-    description: "View bot's server anniversary info",
+    name: "details",
+    description: "View server statistics and bot details.",
     dm_permission: false
   },
   {
     name: "digest",
-    description: "Get a weekly digest.",
+    description: "Get an AI-generated digest of recent server activity.",
     dm_permission: false
   },
   {
     name: "starter",
-    description: "Get a conversation starter"
+    description: "Generate a conversation starter."
   },
   {
     name: "compliment",
-    description: "Send an anonymous compliment to someone",
+    description: "Send an anonymous compliment to a server member.",
     dm_permission: false,
     options: [
       {
         name: "user",
-        description: "User to compliment",
+        description: "The member to compliment",
         type: ApplicationCommandOptionType.User,
         required: true
       }
     ]
   },
-
+  {
+    name: "game",
+    description: "Play interactive AI-powered games.",
+    dm_permission: false
+  },
   {
     name: "timezone",
     description: "Set your timezone for time-based features."
   },
   {
     name: "summary",
-    description: "Summarize a Discord conversation OR a YouTube video",
+    description: "Summarize a conversation, YouTube video, or website.",
     dm_permission: true,
     options: [
       {
         name: "link",
-        description: "Message link OR YouTube URL",
+        description: "A Discord message link or YouTube / website URL",
         type: ApplicationCommandOptionType.String,
         required: true
       },
       {
         name: "count",
-        description: "Number of messages to summarize",
+        description: "Number of messages to summarize (Discord links only)",
         type: ApplicationCommandOptionType.Integer,
         required: false,
         min_value: 1,
@@ -108,26 +99,26 @@ const commands = [
     ]
   },
   {
-    name: "realive",
-    description: "Periodically send messages to revive dead chats",
+    name: "schedule",
+    description: "Auto-send revival messages to quiet channels.",
     dm_permission: false,
     default_member_permissions: PermissionFlagsBits.ManageGuild.toString(),
     options: [
       {
         name: "action",
-        description: "Configure realive settings",
+        description: "Action to perform",
         type: ApplicationCommandOptionType.String,
         required: true,
         choices: [
-          { name: "Enable", value: "enable" },
-          { name: "Disable", value: "disable" },
+          { name: "Enable",       value: "enable"   },
+          { name: "Disable",      value: "disable"  },
           { name: "Set Interval", value: "interval" },
-          { name: "Status", value: "status" }
+          { name: "Status",       value: "status"   }
         ]
       },
       {
         name: "hours",
-        description: "Hours between interval messages.",
+        description: "Interval in hours (used with Set Interval)",
         type: ApplicationCommandOptionType.Integer,
         required: false,
         min_value: 1,

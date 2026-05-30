@@ -388,15 +388,15 @@ async function handleCommandInteraction(interaction) {
     birthday:    handleNewCommands,
     reminder:    handleNewCommands,
     quote:       handleNewCommands,
-    roulette:    handleNewCommands,
-    anniversary: handleNewCommands,
+    reaction:    handleNewCommands,
+    details:     handleNewCommands,
     digest:      handleNewCommands,
     starter:     handleNewCommands,
     compliment:  handleNewCommands,
     game:        handleNewCommands,
     timezone:    handleNewCommands,
     summary:     handleNewCommands,
-    realive:     handleNewCommands
+    schedule:    handleNewCommands
   };
 
   const handler = commandHandlers[interaction.commandName];
