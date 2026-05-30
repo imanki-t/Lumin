@@ -112,17 +112,14 @@ function buildModelSelect(customId, currentModel) {
 /**
  * 5-button nav row for server settings (5 pages).
  * « ‹ ↺ › »
+ * Each button always has a unique customId — Discord rejects duplicate IDs even on disabled buttons.
  */
 function navRow(page) {
-  const PREV_ID = { 1: 'server_settings_p1', 2: 'server_settings_p1', 3: 'server_settings_page2', 4: 'server_settings_page3', 5: 'server_settings_page4' };
-  const NEXT_ID = { 1: 'server_settings_page2', 2: 'server_settings_page3', 3: 'server_settings_page4', 4: 'server_settings_page5', 5: 'server_settings_page5' };
-  const REFR_ID = { 1: 'srv_p1_ref', 2: 'srv_p2_ref', 3: 'srv_p3_ref', 4: 'srv_p4_ref', 5: 'srv_p5_ref' };
-
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('server_settings_p1').setLabel('«').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
-    new ButtonBuilder().setCustomId(PREV_ID[page]).setLabel('‹').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
-    new ButtonBuilder().setCustomId(REFR_ID[page]).setLabel('↺').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(NEXT_ID[page]).setLabel('›').setStyle(ButtonStyle.Secondary).setDisabled(page === 5),
+    new ButtonBuilder().setCustomId(`s_prev_${page}`).setLabel('‹').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
+    new ButtonBuilder().setCustomId(`s_ref_${page}`).setLabel('↺').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`s_next_${page}`).setLabel('›').setStyle(ButtonStyle.Secondary).setDisabled(page === 5),
     new ButtonBuilder().setCustomId('server_settings_page5').setLabel('»').setStyle(ButtonStyle.Secondary).setDisabled(page === 5)
   );
 }

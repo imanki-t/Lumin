@@ -96,20 +96,15 @@ function toggle(customId, isOn) {
 /**
  * 5-button navigation row for user settings (3 pages).
  * « ‹ ↺ › »  — first/prev/refresh/next/last
+ * Each button always has a unique customId — Discord rejects duplicate IDs even on disabled buttons.
  */
 function navRow(page) {
-  const first  = page === 1;
-  const last   = page === 3;
-  const PREV   = { 1: 'user_settings_p1', 2: 'user_settings_p1', 3: 'user_settings_page2' };
-  const NEXT   = { 1: 'user_settings_page2', 2: 'user_settings_page3', 3: 'user_settings_page3' };
-  const REFR   = { 1: 'user_p1_ref', 2: 'user_p2_ref', 3: 'user_p3_ref' };
-
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('user_settings_p1').setLabel('«').setStyle(ButtonStyle.Secondary).setDisabled(first),
-    new ButtonBuilder().setCustomId(PREV[page]).setLabel('‹').setStyle(ButtonStyle.Secondary).setDisabled(first),
-    new ButtonBuilder().setCustomId(REFR[page]).setLabel('↺').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(NEXT[page]).setLabel('›').setStyle(ButtonStyle.Secondary).setDisabled(last),
-    new ButtonBuilder().setCustomId('user_settings_page3').setLabel('»').setStyle(ButtonStyle.Secondary).setDisabled(last)
+    new ButtonBuilder().setCustomId('user_settings_p1').setLabel('«').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
+    new ButtonBuilder().setCustomId(`u_prev_${page}`).setLabel('‹').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
+    new ButtonBuilder().setCustomId(`u_ref_${page}`).setLabel('↺').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`u_next_${page}`).setLabel('›').setStyle(ButtonStyle.Secondary).setDisabled(page === 3),
+    new ButtonBuilder().setCustomId('user_settings_page3').setLabel('»').setStyle(ButtonStyle.Secondary).setDisabled(page === 3)
   );
 }
 

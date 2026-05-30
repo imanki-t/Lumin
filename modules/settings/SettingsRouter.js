@@ -67,15 +67,6 @@ import {
   handleServerPersonalityModal,
   handleUserEmbedColorModal,
   handleServerEmbedColorModal as handleServerEmbedColorModalSubmit,
-  // refresh handlers
-  handleRefreshUserP1,
-  handleRefreshUserP2,
-  handleRefreshUserP3,
-  handleRefreshServerP1,
-  handleRefreshServerP2,
-  handleRefreshServerP3,
-  handleRefreshServerP4,
-  handleRefreshServerP5,
   // message actions
   downloadMessage,
   handleDeleteMessageInteraction,
@@ -122,16 +113,24 @@ const BUTTON_HANDLERS = {
   'back_to_user_p2':            (i) => showUserSettingsPage2(i, true),
   'back_to_user':               (i) => showUserSettings(i, true),
 
-  // ── User inline toggles ──────────────────────────────────────────────────
+  // ── User nav: prev (‹) — unique per page ────────────────────────────────
+  'u_prev_1':                   (i) => showUserSettings(i, true),
+  'u_prev_2':                   (i) => showUserSettings(i, true),
+  'u_prev_3':                   (i) => showUserSettingsPage2(i, true),
+
+  // ── User nav: next (›) — unique per page ────────────────────────────────
+  'u_next_1':                   (i) => showUserSettingsPage2(i, true),
+  'u_next_2':                   (i) => showUserSettingsPage3(i, true),
+  'u_next_3':                   (i) => showUserSettingsPage3(i, true),
+
+  // ── User nav: refresh (↺) — unique per page ─────────────────────────────
+  'u_ref_1':                    (i) => showUserSettings(i, true),
+  'u_ref_2':                    (i) => showUserSettingsPage2(i, true),
+  'u_ref_3':                    (i) => showUserSettingsPage3(i, true),
   'tog_uf':                     handleUserToggleFormat,
   'tog_ub':                     handleUserToggleButtons,
   'tog_ur':                     handleUserToggleContinuous,
   'tog_ux':                     handleUserToggleCrossContext,
-
-  // ── User refresh buttons ─────────────────────────────────────────────────
-  'user_p1_ref':                handleRefreshUserP1,
-  'user_p2_ref':                handleRefreshUserP2,
-  'user_p3_ref':                handleRefreshUserP3,
 
   // ── Server navigation ────────────────────────────────────────────────────
   'server_settings_page5':      (i) => showServerSettingsPage5(i, true),
@@ -145,19 +144,33 @@ const BUTTON_HANDLERS = {
   'back_to_server_p2':          (i) => showServerSettingsPage2(i, true),
   'back_to_server':             (i) => showServerSettings(i, true),
 
+  // ── Server nav: prev (‹) — unique per page ──────────────────────────────
+  's_prev_1':                   (i) => showServerSettings(i, true),
+  's_prev_2':                   (i) => showServerSettings(i, true),
+  's_prev_3':                   (i) => showServerSettingsPage2(i, true),
+  's_prev_4':                   (i) => showServerSettingsPage3(i, true),
+  's_prev_5':                   (i) => showServerSettingsPage4(i, true),
+
+  // ── Server nav: next (›) — unique per page ──────────────────────────────
+  's_next_1':                   (i) => showServerSettingsPage2(i, true),
+  's_next_2':                   (i) => showServerSettingsPage3(i, true),
+  's_next_3':                   (i) => showServerSettingsPage4(i, true),
+  's_next_4':                   (i) => showServerSettingsPage5(i, true),
+  's_next_5':                   (i) => showServerSettingsPage5(i, true),
+
+  // ── Server nav: refresh (↺) — unique per page ───────────────────────────
+  's_ref_1':                    (i) => showServerSettings(i, true),
+  's_ref_2':                    (i) => showServerSettingsPage2(i, true),
+  's_ref_3':                    (i) => showServerSettingsPage3(i, true),
+  's_ref_4':                    (i) => showServerSettingsPage4(i, true),
+  's_ref_5':                    (i) => showServerSettingsPage5(i, true),
+
   // ── Server inline toggles ────────────────────────────────────────────────
   'tog_sf':                     handleToggleServerFormat,
   'tog_sb':                     handleToggleServerButtons,
   'tog_so':                     handleToggleServerOverride,
   'tog_sc':                     handleToggleServerContinuous,
   'tog_sh':                     handleToggleServerHistory,
-
-  // ── Server refresh buttons ───────────────────────────────────────────────
-  'srv_p1_ref':                 handleRefreshServerP1,
-  'srv_p2_ref':                 handleRefreshServerP2,
-  'srv_p3_ref':                 handleRefreshServerP3,
-  'srv_p4_ref':                 handleRefreshServerP4,
-  'srv_p5_ref':                 handleRefreshServerP5,
 
   // ── Shared navigation ────────────────────────────────────────────────────
   'back_to_main':               (i) => showMainSettings(i, true),
