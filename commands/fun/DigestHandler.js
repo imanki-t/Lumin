@@ -10,7 +10,12 @@
  * @module commands/fun/DigestHandler
  */
 
-import { EmbedBuilder } from 'discord.js';
+import {
+  MessageFlags,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder
+} from 'discord.js';
 import path              from 'path';
 import fs                from 'fs/promises';
 
@@ -30,6 +35,9 @@ const TARGET_TOTAL_MESSAGES  = 100;
 const DAYS_TO_ANALYZE        = 7;
 const MAX_RETRIES             = 3;
 const MAX_UPLOAD_RETRIES      = 3;
+
+const ACCENT_COLOR     = 0xE53935;
+const IS_COMPONENTS_V2 = 1 << 15;
 
 // ============================================================================
 // COMMAND DEFINITION
@@ -63,24 +71,31 @@ export async function handleDigestCommand(interaction) {
   if (lastDigest && (now - lastDigest.timestamp) < cooldownMs) {
     const daysLeft = Math.ceil((cooldownMs - (now - lastDigest.timestamp)) / 86_400_000);
 
-    const embed = new EmbedBuilder()
-      .setColor(0xFFAA00)
-      .setTitle('⏳ Digest on Cooldown')
-      .setDescription(
-        `You can generate a new digest in **${daysLeft} day${daysLeft !== 1 ? 's' : ''}**.\n\n` +
-        `Showing your last digest summary:`
+    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `## ⏳  Digest on Cooldown\n` +
+        `Your next digest is available in **${daysLeft} day${daysLeft !== 1 ? 's' : ''}**.`
       )
-      .addFields(
-        { name: '📅 Generated',         value: new Date(lastDigest.timestamp).toLocaleString(), inline: true },
-        { name: '💬 Messages Analyzed', value: String(lastDigest.messageCount),                 inline: true },
-        { name: '📊 Days Covered',       value: String(lastDigest.daysAnalyzed),                 inline: true }
-      );
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `**📋  Last Digest**\n\n` +
+        `> 📅  **Generated**    ${new Date(lastDigest.timestamp).toLocaleString()}\n` +
+        `> 💬  **Messages**     ${lastDigest.messageCount}\n` +
+        `> 📆  **Days Covered** ${lastDigest.daysAnalyzed}` +
+        (lastDigest.summary
+          ? `\n\n**📝  Summary**\n${lastDigest.summary.slice(0, 1000)}`
+          : '')
+      )
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`-# Use /digest again in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}`)
+    );
 
-    if (lastDigest.summary) {
-      embed.addFields({ name: '📝 Summary', value: lastDigest.summary.slice(0, 1000) });
-    }
-
-    return interaction.reply({ embeds: [embed] });
+    return interaction.reply({ components: [container], flags: IS_COMPONENTS_V2 });
   }
 
   await interaction.deferReply();
@@ -145,11 +160,15 @@ export async function handleDigestCommand(interaction) {
     }
 
     if (selectedMessages.length === 0) {
-      const embed = new EmbedBuilder()
-        .setColor(0xFF5555)
-        .setTitle('📊 No Recent Activity')
-        .setDescription('No relevant conversations found in the past 7 days to analyze.');
-      return interaction.editReply({ embeds: [embed] });
+      const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          `## 📊  No Recent Activity\n` +
+          `No relevant conversations found in the past **${DAYS_TO_ANALYZE} days** to analyze.\n\n` +
+          `-# Start chatting and run /digest again next week.`
+        )
+      );
+      return interaction.editReply({ components: [container], flags: IS_COMPONENTS_V2 });
     }
 
     // --- 3. Build and write the file ---
@@ -265,31 +284,57 @@ export async function handleDigestCommand(interaction) {
     };
     await saveStateToFile();
 
-    const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle('📊 Weekly Digest')
-      .setDescription(aiSummary.slice(0, 4000))
-      .addFields(
-        { name: '💬 Messages Analyzed', value: `${selectedMessages.length} (Relevant selection)`, inline: true },
-        { name: '📅 Period',             value: `Last ${DAYS_TO_ANALYZE} days`,                     inline: true },
-        { name: '⏳ Next Digest',         value: `${COOLDOWN_DAYS} days`,                            inline: true }
-      )
-      .setFooter({
-        text: `${isDM ? 'DM Digest' : `${interaction.guild?.name} • Server Digest`} • AI-powered relevance analysis`
-      })
-      .setTimestamp();
+    const contextLabel = isDM ? 'DM Digest' : `${interaction.guild?.name}`;
+    const nextDigestTs = Math.floor((now + cooldownMs) / 1000);
 
-    await interaction.editReply({ embeds: [embed] });
+    const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+
+    // — Header ——
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `## 📊  Weekly Digest\n` +
+        `*${contextLabel}  ·  Last ${DAYS_TO_ANALYZE} days*`
+      )
+    );
+
+    // — Summary ——
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(aiSummary.slice(0, 4000))
+    );
+
+    // — Stats ——
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `> 💬  **Messages Analyzed**   ${selectedMessages.length} (relevance-selected)\n` +
+        `> 📆  **Period**              Last ${DAYS_TO_ANALYZE} days\n` +
+        `> ⏭️  **Next Digest**         <t:${nextDigestTs}:R>`
+      )
+    );
+
+    // — Footer ——
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `-# AI-powered relevance analysis  ·  Vector + chronological selection`
+      )
+    );
+
+    await interaction.editReply({ components: [container], flags: IS_COMPONENTS_V2 });
 
   } catch (error) {
     logger.error('Digest generation failed', error);
 
-    const embed = new EmbedBuilder()
-      .setColor(0xFF0000)
-      .setTitle('❌ Generation Error')
-      .setDescription(`Failed to generate digest: ${error.message}\n\nPlease try again later.`);
-
-    await interaction.editReply({ embeds: [embed] }).catch(() => {});
+    const errContainer = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
+    errContainer.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `## ❌  Generation Error\n` +
+        `Failed to generate your digest. Please try again later.\n\n` +
+        `-# ${error.message}`
+      )
+    );
+    await interaction.editReply({ components: [errContainer], flags: IS_COMPONENTS_V2 }).catch(() => {});
 
   } finally {
     if (filePath) await fs.unlink(filePath).catch(() => {});
