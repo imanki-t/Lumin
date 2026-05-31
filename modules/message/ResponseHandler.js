@@ -20,7 +20,11 @@ import {
 import { Logger }  from '../../core/Logger.js';
 import { Embeds, addGroundingFields, addUrlContextFields, GOOGLE_AI_ICON } from '../shared/embedBuilder.js';
 import { executeFunctionCalls }         from '../functions/FunctionExecutor.js';
-import { consumePendingSticker, clearPendingSticker } from '../functions/pendingMedia.js';
+import {
+  consumePendingSticker, clearPendingSticker,
+  consumePendingGif,     clearPendingGif,
+  setLastBotMessage
+} from '../functions/pendingMedia.js';
 import { getGenerationConfig, RATE_LIMIT_ERRORS, MODEL_FALLBACK_CHAIN, isGemmaModel } from '../../modules/config.js';
 import { extractFileText }              from './PromptBuilder.js';
 import { processPromptAndMediaAttachments, classifyAttachments } from './MediaHandler.js';
@@ -504,17 +508,26 @@ export async function handleModelResponse(
   const isGemini3 = (name) => /gemini-3/i.test(name);
   const isGemma   = (name) => isGemmaModel(name);
 
+  // Strip google_search fn from non-Gemma: they have native googleSearch built-in.
+  const stripGoogleSearchFn = (tools) =>
+    tools.map(t => {
+      if (!t.functionDeclarations) return t;
+      const filtered = t.functionDeclarations.filter(fn => fn.name !== 'google_search');
+      return filtered.length ? { functionDeclarations: filtered } : null;
+    }).filter(Boolean);
+
   const resolveTools = (allTools, name) => {
     if (isGemma(name)) {
-      // Gemma supports functionDeclarations natively, but tool context circulation
-      // (include_server_side_tool_invocations) is Gemini 3 ONLY. Mixing built-in
-      // server-side tools (googleSearch, urlContext, codeExecution) with
-      // functionDeclarations without that flag causes a 400 INVALID_ARGUMENT error.
-      // Fix: keep functionDeclarations only — drop all built-in server-side tools.
+      // Gemma: functionDeclarations only — no built-in server-side tools (causes 400).
+      // google_search IS included so Gemma can web-search via function calling.
       return allTools.filter(t => t.functionDeclarations);
     }
-    if (isGemini3(name)) return allTools;
-    return allTools.filter(t => t.functionDeclarations);
+    if (isGemini3(name)) {
+      // Gemini 3: all tools minus google_search fn declaration (native search handles it).
+      return stripGoogleSearchFn(allTools);
+    }
+    // Older Gemini: function declarations only, no google_search fn.
+    return stripGoogleSearchFn(allTools.filter(t => t.functionDeclarations));
   };
 
   const resolveToolConfig = (name) =>
@@ -596,7 +609,12 @@ export async function handleModelResponse(
               p.functionCall ? p.functionCall : p  // handle both shapes
             );
 
-            const functionResponses = await executeFunctionCalls(callDescriptors, userId, guildId, historyId);
+            const functionResponses = await executeFunctionCalls(
+              callDescriptors, userId, guildId, historyId,
+              channelId,
+              originalMessage.id,
+              modelName
+            );
 
             // Gemini 3: pass thought_signature + id back exactly as received (required).
             // Gemma: no thought_signature ever — pass parts as-is.
@@ -697,6 +715,11 @@ export async function handleModelResponse(
           });
         }
 
+        // ── Track bot message for edit/delete tools ──────────────────────
+        if (botMessage) {
+          setLastBotMessage(historyId, botMessage.id, channelId);
+        }
+
         // ── Deliver pending sticker (queued by get_server_stickers tool) ─
         const pendingStickerId = consumePendingSticker(historyId);
         if (pendingStickerId) {
@@ -704,6 +727,18 @@ export async function handleModelResponse(
             await originalMessage.channel.send({ stickers: [pendingStickerId] });
           } catch (stickerErr) {
             logger.warn(`Failed to send sticker ${pendingStickerId}: ${stickerErr.message}`);
+          }
+        }
+
+        // ── Deliver pending GIF as clean image embed (no URL in text) ────
+        const pendingGifUrl = consumePendingGif(historyId);
+        if (pendingGifUrl) {
+          try {
+            const { EmbedBuilder: GifEmbed } = await import('discord.js');
+            const gifEmbed = new GifEmbed().setImage(pendingGifUrl).setColor(0x2B2D31);
+            await originalMessage.channel.send({ embeds: [gifEmbed] });
+          } catch (gifErr) {
+            logger.warn(`Failed to send GIF embed: ${gifErr.message}`);
           }
         }
 
@@ -794,6 +829,7 @@ export async function handleModelResponse(
     } catch { /* swallow */ }
   } finally {
     clearPendingSticker(historyId);
+    clearPendingGif(historyId);
     cleanup();
   }
 }
