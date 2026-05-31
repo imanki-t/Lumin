@@ -24,6 +24,7 @@ import { memorySystem }               from '../../memory/MemorySystem.js';
 import * as db                        from '../../database/index.js';
 import { Logger }                     from '../../core/Logger.js';
 import { scheduleReminder }           from './ReminderScheduler.js';
+import { getUserTime }                 from '../timezone.js';
 
 const logger = Logger.get('ReminderHandler');
 
@@ -205,6 +206,9 @@ export async function handleReminderModal(interaction) {
  */
 export async function handleReminderLocationSelect(interaction) {
   try {
+    // Acknowledge immediately — DB/file-IO below can exceed the 3-second window.
+    await interaction.deferUpdate();
+
     const uniqueStepId = interaction.customId.replace('reminder_location_', '');
     const userId       = interaction.user.id;
     const tempData     = interaction.client.tempReminderData?.get(uniqueStepId);
@@ -214,14 +218,14 @@ export async function handleReminderLocationSelect(interaction) {
         .setColor(0xFF5555)
         .setTitle('❌ Expired')
         .setDescription('This reminder setup has expired. Please start again with `/reminder`');
-      return interaction.update({ embeds: [embed], components: [] });
+      return interaction.editReply({ embeds: [embed], components: [] });
     }
 
     // Ownership guard
     if (tempData.userId !== userId) {
-      return interaction.reply({
+      return interaction.editReply({
         content: 'This interaction does not belong to you.',
-        flags:   MessageFlags.Ephemeral
+        components: []
       });
     }
 
@@ -240,7 +244,35 @@ export async function handleReminderLocationSelect(interaction) {
           `Could not parse the time: "${timeStr}"\n\n${parseError.message}\n\n` +
           `Check for correct AM/PM format.`
         );
-      return interaction.update({ embeds: [embed], components: [] });
+      return interaction.editReply({ embeds: [embed], components: [] });
+    }
+
+    // --- Past-time guard (once reminders only) ---
+    if (type === 'once') {
+      const userNow  = getUserTime(userId);
+      const nowVal   =
+        userNow.getFullYear()      * 100_000_000 +
+        (userNow.getMonth() + 1)   *   1_000_000 +
+        userNow.getDate()          *      10_000 +
+        userNow.getHours()         *         100 +
+        userNow.getMinutes();
+      const targetVal =
+        parsedTime.year  * 100_000_000 +
+        parsedTime.month *   1_000_000 +
+        parsedTime.day   *      10_000 +
+        parsedTime.hour  *         100 +
+        parsedTime.minute;
+
+      if (targetVal < nowVal) {
+        const embed = new EmbedBuilder()
+          .setColor(0xFF5555)
+          .setTitle('❌ Time is in the Past')
+          .setDescription(
+            `The date/time \`${timeStr}\` has already passed.\n\n` +
+            `Please run \`/reminder\` again and enter a future date and time.`
+          );
+        return interaction.editReply({ embeds: [embed], components: [] });
+      }
     }
 
     // --- Cap check ---
@@ -253,7 +285,7 @@ export async function handleReminderLocationSelect(interaction) {
         .setColor(0xFF5555)
         .setTitle('❌ Reminder Limit Reached')
         .setDescription(`You have reached the maximum limit of ${MAX_REMINDERS_PER_USER} reminders.`);
-      return interaction.update({ embeds: [embed], components: [] });
+      return interaction.editReply({ embeds: [embed], components: [] });
     }
 
     // --- Persist ---
@@ -276,8 +308,8 @@ export async function handleReminderLocationSelect(interaction) {
     memorySystem.invalidatePersonalDataCache(userId);
     interaction.client.tempReminderData.delete(uniqueStepId);
 
-    const locationText  = { dm: 'DMs', server: 'this server', both: 'DMs and this server' }[location];
-    const timeDisplay   = formatReminderTime(type, parsedTime);
+    const locationText   = { dm: 'DMs', server: 'this server', both: 'DMs and this server' }[location];
+    const timeDisplay    = formatReminderTime(type, parsedTime);
     const newActiveCount = state.reminders[userId].filter(r => r.active).length;
 
     const embed = new EmbedBuilder()
@@ -288,11 +320,11 @@ export async function handleReminderLocationSelect(interaction) {
       )
       .setFooter({ text: `Active reminders: ${newActiveCount}/${MAX_REMINDERS_PER_USER}` });
 
-    await interaction.update({ embeds: [embed], components: [] });
+    await interaction.editReply({ embeds: [embed], components: [] });
 
   } catch (error) {
     logger.error('handleReminderLocationSelect failed', error);
-    await sendError(interaction, 'Failed to save reminder.', true);
+    await sendError(interaction, 'Failed to save reminder.');
   }
 }
 
@@ -302,6 +334,9 @@ export async function handleReminderLocationSelect(interaction) {
  */
 export async function handleReminderDeleteSelect(interaction) {
   try {
+    // Acknowledge immediately — DB/file-IO below can exceed the 3-second window.
+    await interaction.deferUpdate();
+
     const reminderId = interaction.values[0];
     const userId     = interaction.user.id;
 
@@ -311,7 +346,7 @@ export async function handleReminderDeleteSelect(interaction) {
       container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent('❌ **Reminder Not Found**\nCould not find that reminder.')
       );
-      return interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
+      return interaction.editReply({ components: [container], flags: IS_COMPONENTS_V2 });
     }
 
     const reminder = state.reminders[userId][idx];
@@ -337,10 +372,10 @@ export async function handleReminderDeleteSelect(interaction) {
       )
     );
 
-    await interaction.update({ components: [container], flags: IS_COMPONENTS_V2 });
+    await interaction.editReply({ components: [container], flags: IS_COMPONENTS_V2 });
   } catch (error) {
     logger.error('handleReminderDeleteSelect failed', error);
-    await sendError(interaction, 'Failed to delete reminder.', true, true);
+    await sendError(interaction, 'Failed to delete reminder.');
   }
 }
 
@@ -613,6 +648,7 @@ function formatReminderTime(type, t) {
 
 /**
  * Send a standardised error response, picking the right interaction method.
+ * Priority: deferred/replied → editReply; else isUpdate → update; else → reply.
  * @param {import('discord.js').Interaction} interaction
  * @param {string}  message
  * @param {boolean} [isUpdate=false]
@@ -620,7 +656,12 @@ function formatReminderTime(type, t) {
  */
 async function sendError(interaction, message, isUpdate = false, v2 = false) {
   try {
-    if (isUpdate) {
+    // If the interaction is already deferred or replied (e.g. after deferUpdate),
+    // we must use editReply — calling update/reply again would throw 40060/10062.
+    if (interaction.deferred || interaction.replied) {
+      const embed = new EmbedBuilder().setColor(0xFF0000).setTitle('❌ Error').setDescription(message);
+      await interaction.editReply({ embeds: [embed], components: [] });
+    } else if (isUpdate) {
       if (v2) {
         const container = new ContainerBuilder().setAccentColor(0xFF0000);
         container.addTextDisplayComponents(
@@ -631,9 +672,6 @@ async function sendError(interaction, message, isUpdate = false, v2 = false) {
         const embed = new EmbedBuilder().setColor(0xFF0000).setTitle('❌ Error').setDescription(message);
         await interaction.update({ embeds: [embed], components: [] });
       }
-    } else if (interaction.deferred || interaction.replied) {
-      const embed = new EmbedBuilder().setColor(0xFF0000).setTitle('❌ Error').setDescription(message);
-      await interaction.editReply({ embeds: [embed], components: [] });
     } else {
       const embed = new EmbedBuilder().setColor(0xFF0000).setTitle('❌ Error').setDescription(message);
       await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
