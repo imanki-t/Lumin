@@ -147,9 +147,9 @@ router.get('/auth/google', (req, res) => {
 
 router.get('/auth/google/callback', async (req, res) => {
   const { code, state: stateKey, error } = req.query;
-  if (error || !code) return res.redirect('/dashboard/?auth=error');
+  if (error || !code) return res.redirect('/gate?auth=error');
   const stateData = oauthStates.get(stateKey);
-  if (!stateData) return res.redirect('/dashboard/?auth=invalid_state');
+  if (!stateData) return res.redirect('/gate?auth=invalid_state');
   oauthStates.delete(stateKey);
   try {
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -160,15 +160,15 @@ router.get('/auth/google/callback', async (req, res) => {
     if (!tokens.access_token) throw new Error(`Token exchange failed: ${JSON.stringify(tokens)}`);
     const userRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: `Bearer ${tokens.access_token}` } });
     const user    = await userRes.json();
-    if (user.email !== ALLOWED_EMAIL) return res.redirect('/dashboard/?auth=denied');
+    if (user.email !== ALLOWED_EMAIL) return res.redirect('/gate?auth=denied');
     const sessionToken = makeToken();
     sessions.set(sessionToken, { email: user.email, name: user.name, picture: user.picture, expires: Date.now() + SESSION_TTL });
     const secure    = req.headers['x-forwarded-proto'] === 'https';
     const cookieVal = `lumin_session=${sessionToken}; Path=/dashboard; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL/1000}${secure?'; Secure':''}`;
     res.setHeader('Set-Cookie', cookieVal);
-    const dest = `/dashboard/?token=${encodeURIComponent(sessionToken)}`;
+    const dest = `/gate?token=${encodeURIComponent(sessionToken)}`;
     res.send(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,viewport-fit=cover"><script>location.replace(${JSON.stringify(dest)})</script></head></html>`);
-  } catch (err) { logger.error('OAuth callback error', err); res.redirect('/dashboard/?auth=error'); }
+  } catch (err) { logger.error('OAuth callback error', err); res.redirect('/gate?auth=error'); }
 });
 
 router.get('/auth/me', authenticate, (req, res) => {
@@ -1407,6 +1407,31 @@ router.get('/api/cmd/migrate/fields', authenticate, async (req, res) => {
 export function mountDashboard(app, httpServer) {
   app.use('/dashboard', router);
   app.get('/dashboard', (_req, res) => res.redirect('/dashboard/'));
+
+  // ── Next.js frontend proxy ─────────────────────────────────────────────────
+  const FRONTEND = 'http://localhost:3001';
+
+  async function proxyToFrontend(req, res) {
+    try {
+      const url  = `${FRONTEND}${req.originalUrl}`;
+      const hdrs = { ...req.headers, host: 'localhost:3001' };
+      delete hdrs['content-length'];
+      const resp = await fetch(url, { headers: hdrs, redirect: 'manual' });
+      res.status(resp.status);
+      resp.headers.forEach((val, key) => {
+        if (!['transfer-encoding', 'connection'].includes(key)) res.setHeader(key, val);
+      });
+      const buf = await resp.arrayBuffer();
+      res.end(Buffer.from(buf));
+    } catch {
+      res.status(503).send('Frontend starting up — please refresh in a moment.');
+    }
+  }
+
+  app.get('/', (_req, res) => res.redirect('/gate'));
+  app.use(['/gate', '/app'], proxyToFrontend);
+  app.use(['/_next', '/favicon.ico'], proxyToFrontend);
+  // ──────────────────────────────────────────────────────────────────────────
 
   httpServer.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost');
