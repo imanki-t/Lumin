@@ -20,7 +20,7 @@ export default function OverviewPage() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/dashboard/ws/stats?token=${encodeURIComponent(token)}`);
     ws.onmessage = (e) => {
-      try { const d = JSON.parse(e.data); if (d.type === 'stats') setStats(d.data); } catch {}
+      try { const d = JSON.parse(e.data); if (d.type === 'stats') setStats(d.data); } catch (_e) {}
     };
     ws.onclose = () => {};
     return () => ws.close();
@@ -41,7 +41,7 @@ export default function OverviewPage() {
       const r: any = await fn();
       if (r?.success || r?.ok) toast.success(successMsg);
       else toast.error('Action failed', r?.error || 'Unknown error');
-    } catch { toast.error('Request failed'); }
+    } catch (_e) { toast.error('Request failed'); }
     finally { setLoadingAction(null); }
   };
 
