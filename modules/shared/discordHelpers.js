@@ -28,6 +28,12 @@ import {
 import { PermissionError }  from '../../core/AppError.js';
 import { Logger }           from '../../core/Logger.js';
 import { Embeds }           from './embedBuilder.js';
+import {
+  formatUser,
+  formatChannel,
+  formatRole,
+  resolveAllMentions,
+} from './mentionFormatter.js';
 
 const log = Logger.get('DiscordHelpers');
 
@@ -261,52 +267,29 @@ export function isSendable(channel) {
 
 // ============================================================================
 // MENTION REPLACEMENT
+// All formatting is delegated to the global mentionFormatter so the canonical
+// display format (userId | @username | displayName | serverName, etc.) stays
+// consistent across every part of the bot. These wrappers preserve the
+// existing call-sites' signatures (guild-only / message-based) while routing
+// through the single source of truth.
 // ============================================================================
 
 /**
- * Replace all user mentions (<@id>, <@!id>) in a string with display names.
- * Falls back to the raw mention string if the member isn't in cache.
+ * Replace all user mentions (<@id>, <@!id>) in a string.
+ * Uses the global canonical format: [userId | @username | displayName | serverName]
  *
- * @param {string}                          text  - Text containing raw mentions
- * @param {import('discord.js').Guild|null} guild - Guild for member lookups (null in DMs)
- * @returns {Promise<string>} Text with mentions replaced
- *
- * @example
- * const clean = await replaceMentions('Hey <@123456789>!', message.guild);
- * // → 'Hey Alice!'
+ * @param {string}                          text
+ * @param {import('discord.js').Guild|null} guild
+ * @returns {Promise<string>}
  */
 export async function replaceMentions(text, guild) {
   if (!text || !guild) return text ?? '';
-
-  const mentionRegex = /<@!?(\d+)>/g;
-  const matches      = [...text.matchAll(mentionRegex)];
-
-  if (matches.length === 0) return text;
-
-  let result = text;
-
-  await Promise.all(
-    matches.map(async ([full, userId]) => {
-      try {
-        const member = guild.members.cache.get(userId)
-          ?? await guild.members.fetch(userId).catch(() => null);
-
-        const displayName = member?.displayName
-          ?? member?.user?.username
-          ?? full; // fallback to raw mention
-
-        result = result.replaceAll(full, displayName);
-      } catch {
-        // Leave raw mention if lookup fails
-      }
-    }),
-  );
-
-  return result;
+  // Build a minimal message-like object so resolveAllMentions can access the guild
+  return resolveAllMentions(text, { guild }, { appendReference: false });
 }
 
 /**
- * Replace all role mentions (<@&id>) with role names.
+ * Replace all role mentions (<@&id>) with the canonical format: [roleId | @roleName]
  *
  * @param {string}                          text
  * @param {import('discord.js').Guild|null} guild
@@ -314,40 +297,29 @@ export async function replaceMentions(text, guild) {
  */
 export async function replaceRoleMentions(text, guild) {
   if (!text || !guild) return text ?? '';
-
-  const roleRegex = /<@&(\d+)>/g;
-  const matches   = [...text.matchAll(roleRegex)];
-
-  if (matches.length === 0) return text;
-
-  let result = text;
-
-  for (const [full, roleId] of matches) {
-    const role = guild.roles.cache.get(roleId);
-    result = result.replaceAll(full, role?.name ?? full);
-  }
-
-  return result;
+  // Only role mentions present — resolveAllMentions handles them correctly
+  return resolveAllMentions(text, { guild }, { appendReference: false });
 }
 
 /**
- * Replace all channel mentions (<#id>) with channel names.
+ * Replace all channel mentions (<#id>) with the canonical format: [channelId | #channelName]
  *
  * @param {string}                          text
  * @param {import('discord.js').Guild|null} guild
- * @returns {string}
+ * @returns {string | Promise<string>}
  */
 export function replaceChannelMentions(text, guild) {
   if (!text || !guild) return text ?? '';
-
-  return text.replace(/<#(\d+)>/g, (full, channelId) => {
-    const channel = guild.channels.cache.get(channelId);
-    return channel ? `#${channel.name}` : full;
-  });
+  // Delegate to resolveAllMentions (returns a Promise — callers should await)
+  return resolveAllMentions(text, { guild }, { appendReference: false });
 }
 
 /**
  * Replace ALL mention types (users, roles, channels) in one pass.
+ * Uses the global mentionFormatter as the single source of truth.
+ *
+ * For AI prompt contexts, use resolveAllMentions() from mentionFormatter directly
+ * (with appendReference: true) so the model also gets the ping-format reference block.
  *
  * @param {string}                          text
  * @param {import('discord.js').Guild|null} guild
@@ -358,11 +330,12 @@ export function replaceChannelMentions(text, guild) {
  */
 export async function replaceAllMentions(text, guild) {
   if (!text) return '';
-  let result = await replaceMentions(text, guild);
-  result     = await replaceRoleMentions(result, guild);
-  result     = replaceChannelMentions(result, guild);
-  return result;
+  return resolveAllMentions(text, { guild }, { appendReference: false });
 }
+
+// Re-export the primitive formatters so callers that only need the string
+// format (no API fetch) can import them directly from discordHelpers.
+export { formatUser, formatChannel, formatRole };
 
 // ============================================================================
 // MESSAGE CONTENT HELPERS
