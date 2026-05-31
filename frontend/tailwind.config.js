@@ -1,0 +1,78 @@
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: [
+    './app/**/*.{js,ts,jsx,tsx,mdx}',
+    './components/**/*.{js,ts,jsx,tsx,mdx}',
+    './pages/**/*.{js,ts,jsx,tsx,mdx}',
+  ],
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['Geist', 'system-ui', 'sans-serif'],
+        mono: ['Geist Mono', 'Menlo', 'monospace'],
+      },
+      colors: {
+        // Geist Gray Scale (dark: dark values, light: light values)
+        'gray-1': 'var(--gray-1)',
+        'gray-2': 'var(--gray-2)',
+        'gray-3': 'var(--gray-3)',
+        'gray-4': 'var(--gray-4)',
+        'gray-5': 'var(--gray-5)',
+        'gray-6': 'var(--gray-6)',
+        'gray-7': 'var(--gray-7)',
+        'gray-8': 'var(--gray-8)',
+        'gray-9': 'var(--gray-9)',
+        'gray-10': 'var(--gray-10)',
+        'bg-1': 'var(--bg-1)',
+        'bg-2': 'var(--bg-2)',
+        accent: 'var(--accent)',
+        'accent-2': 'var(--accent-2)',
+        'fg': 'var(--fg)',
+        'fg-2': 'var(--fg-2)',
+        'fg-3': 'var(--fg-3)',
+        'border': 'var(--border)',
+        'border-2': 'var(--border-2)',
+        success: 'var(--success)',
+        warning: 'var(--warning)',
+        error: 'var(--error)',
+        info: 'var(--info)',
+        'lumin': '#6D5AE6',
+        'lumin-light': '#8B77FF',
+      },
+      borderRadius: {
+        DEFAULT: '6px',
+        sm: '4px',
+        md: '8px',
+        lg: '12px',
+        xl: '16px',
+      },
+      boxShadow: {
+        'sm': '0 1px 2px rgba(0,0,0,0.1)',
+        DEFAULT: '0 1px 3px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.08)',
+        'md': '0 2px 8px rgba(0,0,0,0.15), 0 8px 24px rgba(0,0,0,0.1)',
+        'lg': '0 8px 24px rgba(0,0,0,0.2), 0 24px 64px rgba(0,0,0,0.15)',
+        'dark-sm': '0 1px 2px rgba(0,0,0,0.4)',
+        'dark': '0 1px 3px rgba(0,0,0,0.5), 0 4px 12px rgba(0,0,0,0.3)',
+        'dark-md': '0 2px 8px rgba(0,0,0,0.6), 0 8px 24px rgba(0,0,0,0.4)',
+        'dark-lg': '0 8px 24px rgba(0,0,0,0.7), 0 24px 64px rgba(0,0,0,0.5)',
+      },
+      animation: {
+        'fade-in': 'fadeIn 0.15s ease',
+        'slide-up': 'slideUp 0.4s cubic-bezier(0.16,1,0.3,1)',
+        'slide-in': 'slideIn 0.2s cubic-bezier(0.16,1,0.3,1)',
+        'pulse-dot': 'pulseDot 2.5s infinite',
+      },
+      keyframes: {
+        fadeIn: { from: { opacity: 0, transform: 'translateY(4px)' }, to: { opacity: 1, transform: 'none' } },
+        slideUp: { from: { opacity: 0, transform: 'translateY(20px)' }, to: { opacity: 1, transform: 'none' } },
+        slideIn: { from: { opacity: 0, transform: 'translateX(-8px)' }, to: { opacity: 1, transform: 'none' } },
+        pulseDot: { '0%,100%': { boxShadow: '0 0 0 0 rgba(34,197,94,0.5)' }, '50%': { boxShadow: '0 0 0 4px rgba(34,197,94,0)' } },
+      },
+      transitionTimingFunction: {
+        'spring': 'cubic-bezier(0.16, 1, 0.3, 1)',
+      },
+    },
+  },
+  plugins: [],
+};
