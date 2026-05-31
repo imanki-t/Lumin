@@ -14,6 +14,7 @@ import {
 } from 'discord.js';
 
 import { state }  from '../../managers/BotManager.js';
+import * as db    from '../../database/index.js';
 import { Logger } from '../../core/Logger.js';
 
 const logger = Logger.get('AnniversaryHandler');
@@ -104,15 +105,18 @@ export async function handleAnniversaryCommand(interaction) {
     return interaction.reply({ components: [container], flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2 });
   }
 
+  // Defer since we make DB calls
+  await interaction.deferReply();
+
   try {
+    const guild = interaction.guild;
+
     // ── Fetch owner username (no ping/mention) ───────────────────────────────
-    let ownerName = `ID: ${interaction.guild.ownerId}`;
+    let ownerName = `ID: ${guild.ownerId}`;
     try {
-      const owner = await interaction.client.users.fetch(interaction.guild.ownerId);
+      const owner = await interaction.client.users.fetch(guild.ownerId);
       ownerName = owner.username;
     } catch { /* fallback to raw ID */ }
-
-    const guild = interaction.guild;
 
     // ── Bot membership duration ──────────────────────────────────────────────
     const botMember = guild.members.cache.get(interaction.client.user.id);
@@ -146,7 +150,6 @@ export async function handleAnniversaryCommand(interaction) {
     const totalMembers = guild.memberCount;
     const cachedBots   = guild.members.cache.filter(m => m.user.bot).size;
     const cachedHumans = guild.members.cache.filter(m => !m.user.bot).size;
-    // Show exact split only when the cache is complete
     const memberDetail = guild.members.cache.size >= totalMembers
       ? `${cachedHumans.toLocaleString()} humans · ${cachedBots.toLocaleString()} bots`
       : `~${cachedHumans.toLocaleString()} humans · ~${cachedBots.toLocaleString()} bots (partial cache)`;
@@ -161,13 +164,30 @@ export async function handleAnniversaryCommand(interaction) {
     const iconURL   = guild.iconURL({ size: 512, extension: 'png' });
     const bannerURL = guild.bannerURL({ size: 1024, extension: 'png' });
 
-    // ── In-memory conversation stats ─────────────────────────────────────────
-    const guildHistory     = state.chatHistories?.[guild.id] ?? {};
+    // ── Parallel DB fetches ──────────────────────────────────────────────────
+    const [dbHistory, serverFacts, indexedCounts] = await Promise.all([
+      db.getChatHistory(guild.id).catch(() => null),
+      db.getServerFacts(guild.id).catch(() => []),
+      db.getIndexedCounts().catch(() => [])
+    ]);
+
+    // ── All-time conversation stats ──────────────────────────────────────────
+    // Session cache is authoritative if it has been loaded this session
+    // (it contains the DB baseline + any new unsaved messages).
+    // Otherwise fall back to the DB snapshot for all-time historical data.
+    const guildHistory = (
+      state.chatHistories?.[guild.id] &&
+      Object.keys(state.chatHistories[guild.id]).length > 0
+    ) ? state.chatHistories[guild.id] : (dbHistory ?? {});
+
     let totalMessages      = 0;
     let userMessages       = 0;
     let botMessages        = 0;
     const activeChannels   = new Set();
     const channelMsgCounts = {};
+    const uniqueUsers      = new Set();
+    let firstMessageTs     = Infinity;
+    let lastMessageTs      = 0;
 
     for (const [channelId, messages] of Object.entries(guildHistory)) {
       if (!Array.isArray(messages)) continue;
@@ -177,18 +197,42 @@ export async function handleAnniversaryCommand(interaction) {
           userMessages++;
           activeChannels.add(channelId);
           channelMsgCounts[channelId] = (channelMsgCounts[channelId] ?? 0) + 1;
+          if (msg.userId) uniqueUsers.add(msg.userId);
+          if (msg.timestamp) {
+            if (msg.timestamp < firstMessageTs) firstMessageTs = msg.timestamp;
+            if (msg.timestamp > lastMessageTs)  lastMessageTs  = msg.timestamp;
+          }
         } else if (msg.role === 'assistant') {
           botMessages++;
         }
       }
     }
 
-    const mostActiveChannel = Object.entries(channelMsgCounts).sort(([, a], [, b]) => b - a)[0];
-    const avgPerDay         = daysSince > 0 ? (totalMessages / daysSince).toFixed(1) : '0';
+    const mostActiveChannel = Object.entries(channelMsgCounts)
+      .sort(([, a], [, b]) => b - a)[0];
+    const avgPerDay = daysSince > 0 ? (userMessages / daysSince).toFixed(1) : '0';
 
-    const topChannelLine = mostActiveChannel && activeChannels.size > 0
-      ? `\n> **Most Active**    <#${mostActiveChannel[0]}> — ${mostActiveChannel[1].toLocaleString()} messages`
-      : '';
+    // ── Memory index stats ───────────────────────────────────────────────────
+    const indexedEntry  = indexedCounts.find(e => e.historyId === guild.id);
+    const indexedTotal  = indexedEntry?.count ?? 0;
+    const factsCount    = serverFacts.length;
+
+    // ── Feature states ───────────────────────────────────────────────────────
+    // Last digest (DigestHandler stores under userDigests with key `server_${guildId}`)
+    const lastDigest = state.serverDigests?.[guild.id]
+      ?? state.userDigests?.[`server_${guild.id}`];
+
+    // Realive: keyed directly by guildId
+    const realiveActive = state.realive?.[guild.id]?.enabled ?? false;
+    const realiveInterval = state.realive?.[guild.id]?.intervalHours ?? null;
+
+    // Roulette: keyed by channelId but carries guildId
+    const rouletteActive = Object.values(state.roulette ?? {})
+      .filter(cfg => cfg.guildId === guild.id && cfg.active).length;
+
+    // Daily quotes: keyed by quoteKey but carries guildId
+    const quotesActive = Object.values(state.dailyQuotes ?? {})
+      .filter(q => q.guildId === guild.id && q.active).length;
 
     // ── Build container ──────────────────────────────────────────────────────
     const container = new ContainerBuilder().setAccentColor(ACCENT_COLOR);
@@ -253,26 +297,74 @@ export async function handleAnniversaryCommand(interaction) {
       );
     }
 
-    // — Section 6: Lumin stats ——
+    // — Section 6: Lumin — All-Time Conversation Stats ——
+    const firstActivityLine = firstMessageTs !== Infinity
+      ? `\n> **First Message**      ${ts(new Date(firstMessageTs))}`
+      : '';
+    const lastActivityLine = lastMessageTs > 0
+      ? `\n> **Last Activity**      ${ts(new Date(lastMessageTs))}`
+      : '';
+    const uniqueChattersLine = uniqueUsers.size > 0
+      ? `\n> **Unique Chatters**    ${uniqueUsers.size.toLocaleString()}`
+      : '';
+    const topChannelLine = mostActiveChannel && activeChannels.size > 0
+      ? `\n> **Most Active**        <#${mostActiveChannel[0]}> — ${mostActiveChannel[1].toLocaleString()} messages`
+      : '';
+
     addSection(container,
-      `**Lumin — Server History**\n\n` +
-      `> **Joined**          ${ts(joinDate)}\n` +
-      `> **Time Together**   ${timeDisplay}  (${daysSince} days)\n` +
-      `> **Messages**        ${userMessages.toLocaleString()} from users · ${botMessages.toLocaleString()} from Lumin  *(session only)*\n` +
-      `> **Active in**       ${activeChannels.size} channel${activeChannels.size !== 1 ? 's' : ''}\n` +
-      `> **Avg / Day**       ${avgPerDay}` +
+      `**Lumin — Conversation History**\n\n` +
+      `> **Joined**              ${ts(joinDate)}\n` +
+      `> **Time Together**       ${timeDisplay}  (${daysSince} days)\n` +
+      `> **User Messages**       ${userMessages.toLocaleString()}\n` +
+      `> **Lumin Messages**      ${botMessages.toLocaleString()}\n` +
+      `> **Active Channels**     ${activeChannels.size}` +
+      uniqueChattersLine +
+      `\n> **Avg / Day**           ${avgPerDay}` +
+      firstActivityLine +
+      lastActivityLine +
       topChannelLine
     );
+
+    // — Section 7: Lumin — Features & Memory ——
+    const hasFeatureData = indexedTotal > 0 || factsCount > 0 || lastDigest
+      || realiveActive || rouletteActive > 0 || quotesActive > 0;
+
+    if (hasFeatureData) {
+      const digestLine = lastDigest
+        ? `\n> **Last Digest**         ${ts(new Date(lastDigest.timestamp))}  —  ${lastDigest.messageCount} messages`
+        : '';
+      const reliveLine = realiveActive && realiveInterval
+        ? `\n> **Realive**             Active  (every ${realiveInterval}h)`
+        : realiveActive
+          ? `\n> **Realive**             Active`
+          : '';
+      const rouletteLine = rouletteActive > 0
+        ? `\n> **Roulette**            ${rouletteActive} active channel${rouletteActive !== 1 ? 's' : ''}`
+        : '';
+      const quotesLine = quotesActive > 0
+        ? `\n> **Daily Quotes**        ${quotesActive} schedule${quotesActive !== 1 ? 's' : ''}`
+        : '';
+
+      addSection(container,
+        `**Lumin — Features & Memory**\n\n` +
+        `> **Indexed Messages**    ${indexedTotal.toLocaleString()}\n` +
+        `> **Server Facts**        ${factsCount}` +
+        digestLine +
+        reliveLine +
+        rouletteLine +
+        quotesLine
+      );
+    }
 
     // — Footer subtext ——
     container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     container.addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `-# Message counts reflect the current in-memory session only, not historical totals.`
+        `-# Conversation counts reflect all stored history. Indexed messages are those analyzed for memory recall.`
       )
     );
 
-    await interaction.reply({ components: [container], flags: IS_COMPONENTS_V2 });
+    await interaction.editReply({ components: [container], flags: IS_COMPONENTS_V2 });
 
   } catch (error) {
     logger.error('handleAnniversaryCommand failed', error);
@@ -280,6 +372,6 @@ export async function handleAnniversaryCommand(interaction) {
     container.addTextDisplayComponents(
       new TextDisplayBuilder().setContent('**Error**\nFailed to retrieve server details. Please try again later.')
     );
-    await interaction.reply({ components: [container], flags: MessageFlags.Ephemeral | IS_COMPONENTS_V2 });
+    await interaction.editReply({ components: [container], flags: IS_COMPONENTS_V2 });
   }
 }
