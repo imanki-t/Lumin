@@ -11,6 +11,7 @@ import { getTextExtractor } from 'office-text-extractor';
 import { client, genAI, TEMP_DIR } from '../../managers/BotManager.js';
 import { Logger }                  from '../../core/Logger.js';
 import { Embeds }                  from '../shared/embedBuilder.js';
+import { resolveAllMentions }      from '../shared/mentionFormatter.js';
 import {
   TENOR_GIPHY_REGEX,
   GIF_EMBED_DELAY_MS,
@@ -58,184 +59,7 @@ function getBotMentionRegex() {
   return _botMentionRegex || /<@!?\d+>/g; // fallback before ready
 }
 
-// ============================================================================
-// MENTION REPLACEMENT
-// ============================================================================
 
-/**
- * Replace user mentions <@uid> / <@!uid> with full display name + username + ID.
- * Returns { text, mentions[] } so replaceAllMentions can build a combined guide.
- *
- * M-2 fix: collect all IDs first, then fetch in parallel instead of sequentially.
- * M-3 fix: prefer GuildMember (has server display name) over bare User.
- */
-async function replaceUserMentions(content, message) {
-  const matches = [...content.matchAll(/<@!?(\d+)>/g)];
-  if (matches.length === 0) return { text: content, mentions: [] };
-
-  const uniqueIds = [...new Set(matches.map(m => m[1]))];
-
-  // Try to fetch as GuildMember first (richer info), fall back to User
-  const fetched = await Promise.allSettled(
-    uniqueIds.map(id => {
-      if (message.guild) {
-        return message.guild.members.fetch(id)
-          .catch(() => client.users.fetch(id).catch(() => null));
-      }
-      return client.users.fetch(id).catch(() => null);
-    })
-  );
-
-  const replacements = new Map();
-  const mentions     = [];
-
-  uniqueIds.forEach((uid, i) => {
-    const entity = fetched[i].status === 'fulfilled' ? fetched[i].value : null;
-    if (!entity) { replacements.set(uid, `<@${uid}>`); return; }
-
-    // GuildMember exposes .user; plain User does not
-    const isGuildMember = !!entity.user;
-    const user          = isGuildMember ? entity.user : entity;
-    const displayName   = isGuildMember ? entity.displayName : (user.globalName || user.username);
-    const username      = user.username;
-
-    // Format: DisplayName (@username) [ID: uid]
-    replacements.set(uid, `${displayName} (@${username}) [ID: ${uid}]`);
-    mentions.push({ type: 'user', id: uid, displayName, username });
-  });
-
-  let text = content;
-  for (const [uid, label] of replacements) {
-    text = text.replace(new RegExp(`<@!?${uid}>`, 'g'), label);
-  }
-
-  return { text, mentions };
-}
-
-/**
- * Replace channel mentions <#cid> with name + ID.
- * Returns { text, mentions[] }.
- */
-async function replaceChannelMentions(content, message) {
-  const matches = [...content.matchAll(/<#(\d+)>/g)];
-  if (matches.length === 0) return { text: content, mentions: [] };
-
-  const uniqueIds = [...new Set(matches.map(m => m[1]))];
-
-  const fetched = await Promise.allSettled(
-    uniqueIds.map(id => client.channels.fetch(id).catch(() => null))
-  );
-
-  const replacements = new Map();
-  const mentions     = [];
-
-  uniqueIds.forEach((cid, i) => {
-    const channel = fetched[i].status === 'fulfilled' ? fetched[i].value : null;
-    if (channel?.name) {
-      // Format: #channelname [ID: cid]
-      replacements.set(cid, `#${channel.name} [ID: ${cid}]`);
-      mentions.push({ type: 'channel', id: cid, name: channel.name });
-    } else {
-      replacements.set(cid, `<#${cid}>`);
-    }
-  });
-
-  let text = content;
-  for (const [cid, label] of replacements) {
-    text = text.replace(new RegExp(`<#${cid}>`, 'g'), label);
-  }
-
-  return { text, mentions };
-}
-
-/**
- * Replace role mentions <@&rid> with name + ID.
- * Returns { text, mentions[] }.
- */
-async function replaceRoleMentions(content, message) {
-  const matches = [...content.matchAll(/<@&(\d+)>/g)];
-  if (matches.length === 0) return { text: content, mentions: [] };
-
-  const uniqueIds = [...new Set(matches.map(m => m[1]))];
-
-  const replacements = new Map();
-  const mentions     = [];
-
-  if (message.guild) {
-    const fetched = await Promise.allSettled(
-      uniqueIds.map(id => message.guild.roles.fetch(id).catch(() => null))
-    );
-    uniqueIds.forEach((rid, i) => {
-      const role = fetched[i].status === 'fulfilled' ? fetched[i].value : null;
-      if (role?.name) {
-        // Format: @rolename [ID: rid]
-        replacements.set(rid, `@${role.name} [ID: ${rid}]`);
-        mentions.push({ type: 'role', id: rid, name: role.name });
-      } else {
-        replacements.set(rid, `<@&${rid}>`);
-      }
-    });
-  } else {
-    uniqueIds.forEach(rid => replacements.set(rid, `<@&${rid}>`));
-  }
-
-  let text = content;
-  for (const [rid, label] of replacements) {
-    text = text.replace(new RegExp(`<@&${rid}>`, 'g'), label);
-  }
-
-  return { text, mentions };
-}
-
-/**
- * Replace all Discord mention formats (<@uid>, <#cid>, <@&rid>) with readable names
- * that include both the human-readable label AND the underlying ID. Appends a
- * consolidated "Discord Mention Reference" block so the model always knows the exact
- * format to use when it needs to mention/reference a user, channel, or role in its reply.
- *
- * @param {string} content
- * @param {import('discord.js').Message} message
- * @returns {Promise<string>}
- */
-export async function replaceAllMentions(content, message) {
-  if (!content) return content ?? '';
-
-  const userResult    = await replaceUserMentions(content, message);
-  const channelResult = await replaceChannelMentions(userResult.text, message);
-  const roleResult    = await replaceRoleMentions(channelResult.text, message);
-
-  const allMentions = [...userResult.mentions, ...channelResult.mentions, ...roleResult.mentions];
-  if (allMentions.length === 0) return roleResult.text;
-
-  // Build a consolidated reference block for the model
-  const lines = ['\n\n[Discord Mention Reference — use these exact formats in your reply:]'];
-
-  const users    = allMentions.filter(m => m.type === 'user');
-  const channels = allMentions.filter(m => m.type === 'channel');
-  const roles    = allMentions.filter(m => m.type === 'role');
-
-  if (users.length > 0) {
-    lines.push('Users (mention with <@ID>):');
-    for (const u of users) {
-      lines.push(`  • ${u.displayName} (@${u.username}) — ID: ${u.id} → use <@${u.id}> to ping them`);
-    }
-  }
-  if (channels.length > 0) {
-    lines.push('Channels (reference with <#ID>):');
-    for (const c of channels) {
-      lines.push(`  • #${c.name} — ID: ${c.id} → use <#${c.id}> to link the channel`);
-    }
-  }
-  if (roles.length > 0) {
-    lines.push('Roles (mention with <@&ID>):');
-    for (const r of roles) {
-      lines.push(`  • @${r.name} — ID: ${r.id} → use <@&${r.id}> to ping the role`);
-    }
-  }
-
-  lines.push(']');
-  return roleResult.text + lines.join('\n');
-}
 
 // ============================================================================
 // FORWARDED MESSAGE CONTENT
@@ -260,15 +84,15 @@ export async function extractForwardedContent(message) {
   let forwardedText = '';
 
   if (snapshot.content) {
-    forwardedText = await replaceAllMentions(snapshot.content, message);
+    forwardedText = await resolveAllMentions(snapshot.content, message);
   }
 
   if (snapshot.embeds?.length) {
     const texts = await Promise.all(
       snapshot.embeds.map(async (embed) => {
         let t = '';
-        if (embed.title)       t += `**${await replaceAllMentions(embed.title, message)}**\n`;
-        if (embed.description) t += await replaceAllMentions(embed.description, message);
+        if (embed.title)       t += `**${await resolveAllMentions(embed.title, message)}**\n`;
+        if (embed.description) t += await resolveAllMentions(embed.description, message);
         return t;
       })
     );
@@ -431,7 +255,7 @@ export async function prepareMessageContent(message) {
   const botMentionRe = getBotMentionRegex();
 
   let messageContent = message.content.replace(botMentionRe, '').trim();
-  messageContent = await replaceAllMentions(messageContent, message);
+  messageContent = await resolveAllMentions(messageContent, message);
 
   // Wait for Tenor/Giphy embeds to load if the link is bare in the message
   const gifRegex = new RegExp(TENOR_GIPHY_REGEX.source, TENOR_GIPHY_REGEX.flags);
@@ -440,7 +264,7 @@ export async function prepareMessageContent(message) {
     try {
       message = await message.channel.messages.fetch(message.id);
       messageContent = message.content.replace(botMentionRe, '').trim();
-      messageContent = await replaceAllMentions(messageContent, message);
+      messageContent = await resolveAllMentions(messageContent, message);
     } catch { /* best-effort refetch */ }
   }
 
@@ -456,16 +280,16 @@ export async function prepareMessageContent(message) {
         let ctx = `[Context - Replying to ${repliedMsg.author.username}]:\n`;
 
         if (repliedMsg.content) {
-          ctx += `${await replaceAllMentions(repliedMsg.content, message)}\n`;
+          ctx += `${await resolveAllMentions(repliedMsg.content, message)}\n`;
         }
 
         for (const [i, embed] of repliedMsg.embeds.entries()) {
           ctx += `[Embed ${i + 1} Content]:\n`;
-          if (embed.title)       ctx += `Title: ${await replaceAllMentions(embed.title, message)}\n`;
-          if (embed.description) ctx += `Description: ${await replaceAllMentions(embed.description, message)}\n`;
+          if (embed.title)       ctx += `Title: ${await resolveAllMentions(embed.title, message)}\n`;
+          if (embed.description) ctx += `Description: ${await resolveAllMentions(embed.description, message)}\n`;
           if (embed.fields?.length) {
             for (const field of embed.fields) {
-              ctx += `${await replaceAllMentions(field.name, message)}: ${await replaceAllMentions(field.value, message)}\n`;
+              ctx += `${await resolveAllMentions(field.name, message)}: ${await resolveAllMentions(field.value, message)}\n`;
             }
           }
         }
@@ -503,7 +327,7 @@ export async function prepareMessageContent(message) {
   }
 
   // ── GIF links ──────────────────────────────────────────────────────────────
-  const gifResult = await processGifLinks(messageContent, message, replaceAllMentions);
+  const gifResult = await processGifLinks(messageContent, message, resolveAllMentions);
   messageContent  = gifResult.messageContent;
   const gifLinkAttachments = gifResult.gifLinkAttachments;
 
