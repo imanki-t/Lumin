@@ -21,7 +21,7 @@ async function req<T = unknown>(
   const res = await fetch(`${BASE}${path}`, opts);
   let data: T;
   try { data = await res.json(); }
-  catch { data = { error: `HTTP ${res.status}` } as T; }
+  catch (_e) { data = { error: `HTTP ${res.status}` } as T; }
   if (res.status === 401) {
     sessionStorage.removeItem('lumin_dash_token');
     window.location.href = '/gate';
