@@ -1412,25 +1412,35 @@ export function mountDashboard(app, httpServer) {
   const FRONTEND = 'http://localhost:3001';
 
   async function proxyToFrontend(req, res) {
-    try {
-      const url  = `${FRONTEND}${req.originalUrl}`;
-      const hdrs = { ...req.headers, host: 'localhost:3001' };
-      delete hdrs['content-length'];
-      const resp = await fetch(url, { headers: hdrs, redirect: 'manual' });
-      res.status(resp.status);
-      resp.headers.forEach((val, key) => {
-        if (!['transfer-encoding', 'connection'].includes(key)) res.setHeader(key, val);
-      });
-      const buf = await resp.arrayBuffer();
-      res.end(Buffer.from(buf));
-    } catch {
-      res.status(503).send('Frontend starting up — please refresh in a moment.');
+    const url  = `${FRONTEND}${req.originalUrl}`;
+    const hdrs = { ...req.headers, host: 'localhost:3001' };
+    delete hdrs['content-length'];
+
+    for (let attempt = 0; attempt < 15; attempt++) {
+      try {
+        const resp = await fetch(url, { headers: hdrs, redirect: 'manual' });
+        res.status(resp.status);
+        resp.headers.forEach((val, key) => {
+          if (!['transfer-encoding', 'connection'].includes(key)) res.setHeader(key, val);
+        });
+        const buf = await resp.arrayBuffer();
+        return res.end(Buffer.from(buf));
+      } catch {
+        if (attempt < 14) await new Promise(r => setTimeout(r, 1000));
+      }
     }
+    res.status(503).send('Frontend unavailable — please refresh.');
   }
 
-  app.get('/', (_req, res) => res.redirect('/gate'));
-  app.use(['/gate', '/app'], proxyToFrontend);
-  app.use(['/_next', '/favicon.ico'], proxyToFrontend);
+  // Root → gate (registered via use so it fires even though index.js owns app.get('/'))
+  app.use('/', (req, res, next) => {
+    if (req.path === '/' && req.method === 'GET') return res.redirect('/gate');
+    next();
+  });
+  app.use('/gate', proxyToFrontend);
+  app.use('/app', proxyToFrontend);
+  app.use('/_next', proxyToFrontend);
+  app.use('/favicon.ico', proxyToFrontend);
   // ──────────────────────────────────────────────────────────────────────────
 
   httpServer.on('upgrade', (req, socket, head) => {
