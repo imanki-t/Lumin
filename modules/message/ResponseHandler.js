@@ -730,15 +730,13 @@ export async function handleModelResponse(
           }
         }
 
-        // ── Deliver pending GIF as clean image embed (no URL in text) ────
+        // ── Deliver pending GIF/meme as plain URL — Discord renders it natively ──
         const pendingGifUrl = consumePendingGif(historyId);
         if (pendingGifUrl) {
           try {
-            const { EmbedBuilder: GifEmbed } = await import('discord.js');
-            const gifEmbed = new GifEmbed().setImage(pendingGifUrl).setColor(0x2B2D31);
-            await originalMessage.channel.send({ embeds: [gifEmbed] });
+            await originalMessage.channel.send(pendingGifUrl);
           } catch (gifErr) {
-            logger.warn(`Failed to send GIF embed: ${gifErr.message}`);
+            logger.warn(`Failed to send GIF: ${gifErr.message}`);
           }
         }
 
