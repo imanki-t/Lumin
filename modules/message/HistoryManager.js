@@ -65,6 +65,13 @@ export async function saveMessageHistory({
             timestamp: prepared.timestamp
           };
 
+          // Prefer server-specific display name (nickname if set, else globalName, else username)
+          // over the account-level author.displayName so history entries show exactly
+          // the name everyone on this server sees for this person.
+          const msgDisplayName = msg.member?.displayName
+            ?? msg.author.globalName
+            ?? msg.author.displayName;
+
           if (isLast) {
             // Last message carries both user entry and the assistant response
             updateChatHistory(
@@ -75,7 +82,7 @@ export async function saveMessageHistory({
               ],
               botMessageId,
               msg.author.username,
-              msg.author.displayName
+              msgDisplayName
             );
           } else {
             // Earlier messages in the batch: user entry only
@@ -84,18 +91,21 @@ export async function saveMessageHistory({
               [userEntry],
               msg.id,
               msg.author.username,
-              msg.author.displayName
+              msgDisplayName
             );
           }
         }
       } else {
         // ── Single turn ─────────────────────────────────────────────────
+        const origDisplayName = originalMessage.member?.displayName
+          ?? originalMessage.author.globalName
+          ?? originalMessage.author.displayName;
         updateChatHistory(
           historyId,
           newHistory,
           botMessageId,
           originalMessage.author.username,
-          originalMessage.author.displayName
+          origDisplayName
         );
       }
 

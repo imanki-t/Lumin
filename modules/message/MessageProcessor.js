@@ -174,7 +174,28 @@ async function buildSystemInstruction(message, effectiveSettings, serverSettings
     ? `\n\nADDITIONAL PERSONALITY:\n${customInstructions}`
     : `\n\n${config.defaultPersonality}`;
 
-  const userInfo = `Username: \`${message.author.username}\`\nDisplay Name: \`${message.author.displayName}\``;
+  // Build a rich user identity block so the bot always knows exactly who it's
+  // talking to. In guild contexts we prefer the server-specific display name
+  // (member.displayName = nickname if set, else globalName, else username)
+  // over the account-level author.displayName, because that's what everyone
+  // on this server actually sees for this person.
+  const globalDisplayName   = message.author.globalName ?? message.author.username;
+  const serverDisplayName   = message.member?.displayName ?? globalDisplayName;
+  const userInfoLines = [
+    `Username: \`${message.author.username}\``,
+    `User ID: \`${message.author.id}\``,
+    `Global Display Name: \`${globalDisplayName}\``,
+  ];
+  if (guildId) {
+    // Only show server display name separately when it differs from the global one
+    // (i.e. the user has a custom server nickname set)
+    if (serverDisplayName !== globalDisplayName) {
+      userInfoLines.push(`Server Display Name (nickname on this server): \`${serverDisplayName}\``);
+    } else {
+      userInfoLines.push(`Server Display Name: \`${serverDisplayName}\``);
+    }
+  }
+  const userInfo = userInfoLines.join('\n');
 
   if (guildId) {
     instructions += `\nYou are currently engaging with users in the ${message.guild.name} Discord server.\n\n## Current User Information\n${userInfo}`;
