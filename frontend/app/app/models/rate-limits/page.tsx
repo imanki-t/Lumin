@@ -33,7 +33,7 @@ export default function RateLimitsPage() {
   const save = async () => {
     let overrides: any;
     try { overrides = JSON.parse(cfg.modelOverrides); }
-    catch { toast.error('Invalid JSON in model overrides'); return; }
+    catch (_e) { toast.error('Invalid JSON in model overrides'); return; }
     setSaving(true);
     const r: any = await api.setRuntimeConfig({
       rateLimits: {
