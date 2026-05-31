@@ -46,7 +46,7 @@ export default function DatabasePage() {
       const r: any = await api.dbUpdateDoc(selected, editing.id, data);
       if (r?.success) { toast.success('Document updated'); loadDocs(selected, page); setEditing(null); }
       else toast.error('Failed to update', r?.error);
-    } catch { toast.error('Invalid JSON'); }
+    } catch (_e) { toast.error('Invalid JSON'); }
   };
 
   const deleteDoc = async (id: string) => {
