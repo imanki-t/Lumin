@@ -9,8 +9,7 @@ import {
   TextDisplayBuilder,
   SeparatorBuilder,
   MediaGalleryBuilder,
-  MediaGalleryItemBuilder,
-  ChannelType
+  MediaGalleryItemBuilder
 } from 'discord.js';
 
 import { state }  from '../../managers/BotManager.js';
@@ -136,16 +135,6 @@ export async function handleAnniversaryCommand(interaction) {
       durationParts.push(`${finalDays} day${finalDays !== 1 ? 's' : ''}`);
     const timeDisplay = durationParts.join(', ');
 
-    // ── Channel counts ───────────────────────────────────────────────────────
-    const channels      = guild.channels.cache;
-    const textCount     = channels.filter(c => c.type === ChannelType.GuildText).size;
-    const voiceCount    = channels.filter(c => c.type === ChannelType.GuildVoice).size;
-    const stageCount    = channels.filter(c => c.type === ChannelType.GuildStageVoice).size;
-    const forumCount    = channels.filter(c => c.type === ChannelType.GuildForum).size;
-    const categoryCount = channels.filter(c => c.type === ChannelType.GuildCategory).size;
-    const announcCount  = channels.filter(c => c.type === ChannelType.GuildAnnouncement).size;
-    const totalChannels = channels.size;
-
     // ── Member counts ────────────────────────────────────────────────────────
     const totalMembers = guild.memberCount;
     const cachedBots   = guild.members.cache.filter(m => m.user.bot).size;
@@ -252,74 +241,59 @@ export async function handleAnniversaryCommand(interaction) {
       new TextDisplayBuilder().setContent(
         `# ${guild.name}\n` +
         (guild.description ? `*${guild.description}*\n\n` : '\n') +
-        `> **ID**       \`${guild.id}\`\n` +
-        `> **Founded**  ${ts(guild.createdAt)}\n` +
-        `> **Locale**   \`${guild.preferredLocale}\``
+        `> 🆔 **ID** — \`${guild.id}\`\n` +
+        `> 📅 **Founded** — ${ts(guild.createdAt)}\n` +
+        `> 🌐 **Locale** — \`${guild.preferredLocale}\``
       )
     );
 
     // — Section 2: Community ——
     addSection(container,
-      `**Community**\n\n` +
-      `> **Members**   ${totalMembers.toLocaleString()}  —  ${memberDetail}\n` +
-      `> **Owner**     ${ownerName}\n` +
-      `> **Boosts**    ${BOOST_TIER_LABELS[guild.premiumTier] ?? 'None'}  ·  ${guild.premiumSubscriptionCount ?? 0} boost${guild.premiumSubscriptionCount !== 1 ? 's' : ''}`
+      `**👥 Community**\n\n` +
+      `> 🧑‍🤝‍🧑 **Members** — \`${totalMembers.toLocaleString()}\`  —  ${memberDetail}\n` +
+      `> 👑 **Owner** — ${ownerName}\n` +
+      `> 🚀 **Boosts** — ${BOOST_TIER_LABELS[guild.premiumTier] ?? 'None'}  ·  \`${guild.premiumSubscriptionCount ?? 0}\` boost${guild.premiumSubscriptionCount !== 1 ? 's' : ''}`
     );
 
     // — Section 3: Security ——
     addSection(container,
-      `**Security**\n\n` +
-      `> **Verification**      ${VERIFICATION_LABELS[guild.verificationLevel] ?? guild.verificationLevel}\n` +
-      `> **Content Filter**    ${CONTENT_FILTER_LABELS[guild.explicitContentFilter] ?? guild.explicitContentFilter}\n` +
-      `> **NSFW Level**        \`${guild.nsfwLevel}\``
+      `**🔒 Security**\n\n` +
+      `> 🛡️ **Verification** — ${VERIFICATION_LABELS[guild.verificationLevel] ?? guild.verificationLevel}\n` +
+      `> 🔍 **Content Filter** — ${CONTENT_FILTER_LABELS[guild.explicitContentFilter] ?? guild.explicitContentFilter}\n` +
+      `> 🔞 **NSFW Level** — \`${guild.nsfwLevel}\``
     );
 
-    // — Section 4: Structure ——
-    addSection(container,
-      `**Channels & Roles**\n\n` +
-      `> **Text Channels**       ${textCount}\n` +
-      `> **Voice Channels**      ${voiceCount}\n` +
-      `> **Stage Channels**      ${stageCount}\n` +
-      `> **Forum Channels**      ${forumCount}\n` +
-      `> **Announcement**        ${announcCount}\n` +
-      `> **Categories**          ${categoryCount}\n` +
-      `> **Total Channels**      ${totalChannels}\n` +
-      `> **Roles**               ${guild.roles.cache.size}\n` +
-      `> **Emojis**              ${guild.emojis.cache.size}\n` +
-      `> **Stickers**            ${guild.stickers.cache.size}`
-    );
-
-    // — Section 5: Features ——
+    // — Section 4: Features ——
     if (activeFeatures !== 'None') {
       addSection(container,
-        `**Server Features**\n\n` +
-        activeFeatures
+        `**✨ Server Features**\n\n` +
+        `> ${activeFeatures}`
       );
     }
 
     // — Section 6: Lumin — All-Time Conversation Stats ——
     const firstActivityLine = firstMessageTs !== Infinity
-      ? `\n> **First Message**      ${ts(new Date(firstMessageTs))}`
+      ? `\n> 🏁 **First Message** — ${ts(new Date(firstMessageTs))}`
       : '';
     const lastActivityLine = lastMessageTs > 0
-      ? `\n> **Last Activity**      ${ts(new Date(lastMessageTs))}`
+      ? `\n> 🕐 **Last Activity** — ${ts(new Date(lastMessageTs))}`
       : '';
     const uniqueChattersLine = uniqueUsers.size > 0
-      ? `\n> **Unique Chatters**    ${uniqueUsers.size.toLocaleString()}`
+      ? `\n> 👥 **Unique Chatters** — \`${uniqueUsers.size.toLocaleString()}\``
       : '';
     const topChannelLine = mostActiveChannel && activeChannels.size > 0
-      ? `\n> **Most Active**        <#${mostActiveChannel[0]}> — ${mostActiveChannel[1].toLocaleString()} messages`
+      ? `\n> 🏆 **Most Active** — <#${mostActiveChannel[0]}> · \`${mostActiveChannel[1].toLocaleString()}\` messages`
       : '';
 
     addSection(container,
-      `**Lumin — Conversation History**\n\n` +
-      `> **Joined**              ${ts(joinDate)}\n` +
-      `> **Time Together**       ${timeDisplay}  (${daysSince} days)\n` +
-      `> **User Messages**       ${userMessages.toLocaleString()}\n` +
-      `> **Lumin Messages**      ${botMessages.toLocaleString()}\n` +
-      `> **Active Channels**     ${activeChannels.size}` +
+      `**💬 Lumin — Conversation History**\n\n` +
+      `> 📅 **Joined** — ${ts(joinDate)}\n` +
+      `> ⏳ **Time Together** — ${timeDisplay}  (\`${daysSince}\` days)\n` +
+      `> 📨 **User Messages** — \`${userMessages.toLocaleString()}\`\n` +
+      `> 🤖 **Lumin Messages** — \`${botMessages.toLocaleString()}\`\n` +
+      `> 📡 **Active Channels** — \`${activeChannels.size}\`` +
       uniqueChattersLine +
-      `\n> **Avg / Day**           ${avgPerDay}` +
+      `\n> 📊 **Avg / Day** — \`${avgPerDay}\`` +
       firstActivityLine +
       lastActivityLine +
       topChannelLine
@@ -331,24 +305,24 @@ export async function handleAnniversaryCommand(interaction) {
 
     if (hasFeatureData) {
       const digestLine = lastDigest
-        ? `\n> **Last Digest**         ${ts(new Date(lastDigest.timestamp))}  —  ${lastDigest.messageCount} messages`
+        ? `\n> 📰 **Last Digest** — ${ts(new Date(lastDigest.timestamp))}  ·  \`${lastDigest.messageCount}\` messages`
         : '';
       const reliveLine = realiveActive && realiveInterval
-        ? `\n> **Realive**             Active  (every ${realiveInterval}h)`
+        ? `\n> 🔄 **Realive** — Active  (every \`${realiveInterval}h\`)`
         : realiveActive
-          ? `\n> **Realive**             Active`
+          ? `\n> 🔄 **Realive** — Active`
           : '';
       const rouletteLine = rouletteActive > 0
-        ? `\n> **Roulette**            ${rouletteActive} active channel${rouletteActive !== 1 ? 's' : ''}`
+        ? `\n> 🎲 **Roulette** — \`${rouletteActive}\` active channel${rouletteActive !== 1 ? 's' : ''}`
         : '';
       const quotesLine = quotesActive > 0
-        ? `\n> **Daily Quotes**        ${quotesActive} schedule${quotesActive !== 1 ? 's' : ''}`
+        ? `\n> 💭 **Daily Quotes** — \`${quotesActive}\` schedule${quotesActive !== 1 ? 's' : ''}`
         : '';
 
       addSection(container,
-        `**Lumin — Features & Memory**\n\n` +
-        `> **Indexed Messages**    ${indexedTotal.toLocaleString()}\n` +
-        `> **Server Facts**        ${factsCount}` +
+        `**🧠 Lumin — Features & Memory**\n\n` +
+        `> 🗂️ **Indexed Messages** — \`${indexedTotal.toLocaleString()}\`\n` +
+        `> 📌 **Server Facts** — \`${factsCount}\`` +
         digestLine +
         reliveLine +
         rouletteLine +
