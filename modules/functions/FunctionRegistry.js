@@ -191,8 +191,6 @@ export const functionTools = [
         description: [
           'Search for a GIF to express a reaction. Use RARELY — only for genuinely exciting news,',
           'peak funny moments, or celebratory beats. NOT for every message or generic greetings.',
-          'The GIF will be sent automatically as an image — do NOT include any URL in your text response.',
-          'If the result seems off, just respond without mentioning the GIF.',
         ].join(' '),
         parameters: {
           type: O,
@@ -424,7 +422,6 @@ export const functionTools = [
         description: [
           'Fetch a random meme from Reddit. Use when the user asks for a meme or the vibe genuinely calls for it.',
           'Optionally specify a subreddit (e.g. "memes", "dankmemes", "me_irl"). Defaults to a random popular meme sub.',
-          'The meme image and title are sent as an embed automatically — do NOT include any URL in your text response.',
         ].join(' '),
         parameters: {
           type: O,
@@ -438,8 +435,7 @@ export const functionTools = [
         name: FUNCTION_NAMES.SEARCH_GIPHY_STICKER,
         description: [
           'Search GIPHY for an animated sticker (transparent GIF). Use SPARINGLY — only when a sticker would genuinely',
-          'add flair to the moment. The sticker is sent automatically as an image after your reply.',
-          'Do NOT include any URL or link in your text response.',
+          'add flair to the moment.',
         ].join(' '),
         parameters: {
           type: O,

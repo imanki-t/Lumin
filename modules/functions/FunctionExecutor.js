@@ -566,7 +566,7 @@ async function handleEditMessage(historyId, channelId, newContent, messageId) {
       await msg.edit({ content: newContent, embeds: [] });
     }
 
-    return { result: 'Message edited successfully.' };
+    return { result: 'ok', _silent: true };
   } catch (error) {
     logger.error('handleEditMessage failed', error);
     return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
@@ -592,7 +592,7 @@ async function handleDeleteMessage(historyId, channelId, messageId) {
     if (msg.author.id !== client.user.id) return { result: 'Can only delete my own messages.' };
 
     await msg.delete();
-    return { result: 'Message deleted.' };
+    return { result: 'ok', _silent: true };
   } catch (error) {
     logger.error('handleDeleteMessage failed', error);
     return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
