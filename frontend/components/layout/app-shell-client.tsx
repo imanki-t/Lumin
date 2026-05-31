@@ -63,7 +63,7 @@ export default function AppShellClient({ children }: { children: React.ReactNode
             setWsStatus(d.data.wsStatus || 'Unknown');
             setLockdownActive(!!d.data.globalLockdown);
           }
-        } catch {}
+        } catch (_e) {}
       };
       ws.onclose = () => setTimeout(connect, 3000);
       ws.onerror = () => ws.close();
