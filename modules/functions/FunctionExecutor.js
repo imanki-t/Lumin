@@ -329,23 +329,69 @@ async function handleGetServerStickers(guildId, historyId, stickerId) {
 
 // ── Profile ───────────────────────────────────────────────────────────────────
 
+/** Map Discord.js UserFlags enum keys to human-readable badge labels. */
+const USER_FLAG_LABELS = Object.freeze({
+  Staff:                  '👨‍💼 Discord Staff',
+  Partner:                '🤝 Partnered Server Owner',
+  Hypesquad:              '🏠 HypeSquad Events Member',
+  BugHunterLevel1:        '🐛 Bug Hunter (Level 1)',
+  BugHunterLevel2:        '🐛 Bug Hunter (Level 2)',
+  HypeSquadOnlineHouse1:  '🏆 HypeSquad Bravery',
+  HypeSquadOnlineHouse2:  '🏆 HypeSquad Brilliance',
+  HypeSquadOnlineHouse3:  '🏆 HypeSquad Balance',
+  PremiumEarlySupporter:  '⭐ Early Nitro Supporter',
+  TeamPseudoUser:         '👥 Team Account',
+  VerifiedBot:            '✅ Verified Bot',
+  VerifiedDeveloper:      '🔧 Early Verified Bot Developer',
+  CertifiedModerator:     '🛡️ Discord Certified Moderator',
+  ActiveDeveloper:        '🔨 Active Developer',
+  Spammer:                '🚫 Flagged as Spammer',
+  DisablePremium:         '🔒 Nitro Disabled',
+  Quarantined:            '⚠️ Quarantined Account',
+});
+
 async function handleCheckProfile(targetUserId, guildId) {
   try {
-    const user = await client.users.fetch(targetUserId, { force: true });
+    // force: true bypasses cache to get the latest avatar/banner data
+    const user   = await client.users.fetch(targetUserId, { force: true });
     const isSelf = targetUserId === client.user?.id;
 
+    // ── Global user info ────────────────────────────────────────────────────
+    const globalName = user.globalName || user.displayName || user.username;
     const lines = [
-      `**${user.displayName}** (@${user.username})`,
+      `**${globalName}** (@${user.username})`,
       `🆔 ID: ${user.id}`,
       `🤖 Bot: ${user.bot ? 'Yes' : 'No'}`,
       `📅 Account created: ${fmtDate(user.createdAt)}`,
-      `🖼️ Avatar: ${user.displayAvatarURL({ size: 256 })}`,
     ];
 
-    if (user.banner) lines.push(`🎨 Banner: ${user.bannerURL({ size: 512 })}`);
-    if (user.accentColor) lines.push(`🎨 Accent colour: #${user.accentColor.toString(16).padStart(6, '0')}`);
+    // Avatar — global
+    lines.push(`🖼️ Global avatar: ${user.displayAvatarURL({ size: 256, forceStatic: false })}`);
 
-    // Guild-specific info
+    // Banner (requires force: true fetch so bannerHash is populated)
+    if (user.banner) {
+      lines.push(`🎨 Banner: ${user.bannerURL({ size: 512 })}`);
+    } else if (user.accentColor != null) {
+      lines.push(`🎨 Banner colour: #${user.accentColor.toString(16).padStart(6, '0')}`);
+    }
+
+    // Avatar decoration (Nitro/special cosmetic)
+    if (user.avatarDecoration) {
+      lines.push(`✨ Avatar decoration: Yes`);
+    }
+
+    // Badges / public flags
+    const flagsArray = user.flags?.toArray?.() ?? [];
+    if (flagsArray.length > 0) {
+      const badgeLabels = flagsArray
+        .map(f => USER_FLAG_LABELS[f] ?? f)
+        .filter(Boolean);
+      if (badgeLabels.length > 0) {
+        lines.push(`🏅 Badges: ${badgeLabels.join(' · ')}`);
+      }
+    }
+
+    // ── Guild-specific info ─────────────────────────────────────────────────
     if (guildId) {
       const guild = client.guilds.cache.get(guildId);
       if (guild) {
@@ -353,61 +399,107 @@ async function handleCheckProfile(targetUserId, guildId) {
         try { member = await guild.members.fetch(targetUserId); } catch { /* not in guild */ }
 
         if (member) {
-          if (member.nickname) lines.push(`📛 Server nickname: ${member.nickname}`);
+          // member.displayName is what Discord actually shows for this user in this server:
+          // nickname (if set) → globalName → username. Always show it so Lumin knows
+          // exactly what name everyone in the server sees for this person.
+          lines.push(`📝 Server display name: ${member.displayName}`);
+
+          // If a custom nickname is set, also show it so there's no ambiguity
+          if (member.nickname) {
+            lines.push(`📛 Server nickname (custom): ${member.nickname}`);
+          }
+
+          // Server-specific avatar — shown separately from global avatar
+          if (member.avatar) {
+            lines.push(`🖼️ Server avatar: ${member.displayAvatarURL({ size: 256, forceStatic: false })}`);
+          }
+
+          // Per-server banner (Discord.js ≥ 14.14 — distinct from the global user banner)
+          if (member.banner) {
+            lines.push(`🎨 Server banner: ${member.bannerURL({ size: 512 })}`);
+          }
+
           lines.push(`📅 Joined server: ${fmtDate(member.joinedAt)}`);
 
-          // Roles (exclude @everyone)
+          // Boost info
+          if (member.premiumSince) {
+            lines.push(`🚀 Server boosting since: ${fmtDate(member.premiumSince)}`);
+          }
+
+          // Roles (exclude @everyone), sorted by hierarchy
           const roles = member.roles.cache
             .filter(r => r.id !== guild.id)
             .sort((a, b) => b.position - a.position)
-            .map(r => r.name);
-          if (roles.length) lines.push(`🏷️ Roles: ${roles.slice(0, 10).join(', ')}${roles.length > 10 ? ` (+${roles.length - 10} more)` : ''}`);
+            .map(r => `${r.name} [ID: ${r.id}]`);
+          if (roles.length) {
+            const shown   = roles.slice(0, 10);
+            const overflow = roles.length > 10 ? ` (+${roles.length - 10} more)` : '';
+            lines.push(`🏷️ Roles: ${shown.join(', ')}${overflow}`);
+          }
 
-          // Presence (requires GuildPresences intent)
+          // ── Presence ──────────────────────────────────────────────────────
           const presence = member.presence;
           if (presence) {
-            const statusEmoji = { online: '🟢', idle: '🌙', dnd: '🔴', offline: '⚫' };
-            lines.push(`${statusEmoji[presence.status] || '⚫'} Status: ${presence.status}`);
+            const STATUS_EMOJI = { online: '🟢', idle: '🌙', dnd: '🔴', offline: '⚫', invisible: '⚫' };
+            const statusLabel  = { online: 'Online', idle: 'Idle', dnd: 'Do Not Disturb', offline: 'Offline', invisible: 'Invisible' };
+            lines.push(`${STATUS_EMOJI[presence.status] ?? '⚫'} Status: ${statusLabel[presence.status] ?? presence.status}`);
 
-            const activities = presence.activities;
-            if (activities?.length) {
-              for (const act of activities) {
-                if (act.type === 4) {
-                  // Custom status
-                  const emoji = act.emoji ? `${act.emoji.toString()} ` : '';
-                  lines.push(`💬 Custom status: ${emoji}${act.state || act.name || ''}`);
-                } else if (act.type === 0) {
-                  lines.push(`🎮 Playing: ${act.name}${act.details ? ` — ${act.details}` : ''}`);
-                } else if (act.type === 1) {
-                  lines.push(`📺 Streaming: ${act.name}${act.url ? ` (${act.url})` : ''}`);
-                } else if (act.type === 2) {
-                  lines.push(`🎵 Listening to: ${act.name}${act.details ? ` — ${act.details}` : ''}`);
-                } else if (act.type === 3) {
-                  lines.push(`📺 Watching: ${act.name}`);
-                } else if (act.type === 5) {
-                  lines.push(`🏆 Competing in: ${act.name}`);
-                }
+            const activities = presence.activities ?? [];
+            for (const act of activities) {
+              switch (act.type) {
+                case 0: // Playing
+                  lines.push([
+                    `🎮 Playing: **${act.name}**`,
+                    act.details  && ` — ${act.details}`,
+                    act.state    && ` (${act.state})`,
+                    act.timestamps?.start && ` | started ${fmtDate(act.timestamps.start)}`
+                  ].filter(Boolean).join(''));
+                  break;
+                case 1: // Streaming
+                  lines.push(`📺 Streaming: **${act.name}**${act.url ? ` → ${act.url}` : ''}`);
+                  break;
+                case 2: // Listening
+                  lines.push([
+                    `🎵 Listening to: **${act.name}**`,
+                    act.details  && ` — ${act.details}`,
+                    act.state    && ` by ${act.state}`,
+                  ].filter(Boolean).join(''));
+                  break;
+                case 3: // Watching
+                  lines.push(`📺 Watching: **${act.name}**`);
+                  break;
+                case 4: // Custom status
+                  {
+                    const emojiStr = act.emoji ? `${act.emoji.toString()} ` : '';
+                    const text     = act.state || act.name || '';
+                    if (emojiStr || text) lines.push(`💬 Custom status: ${emojiStr}${text}`);
+                  }
+                  break;
+                case 5: // Competing
+                  lines.push(`🏆 Competing in: **${act.name}**`);
+                  break;
               }
             }
           } else if (!isSelf) {
-            lines.push(`⚫ Status: offline / not cached (GuildPresences intent may be needed)`);
+            lines.push(`⚫ Status: offline / not cached (ensure GuildPresences intent is enabled)`);
           }
 
-          // Voice state
-          const voiceState = member.voice;
-          if (voiceState?.channel) {
-            const vc = voiceState.channel;
+          // ── Voice state ────────────────────────────────────────────────────
+          if (member.voice?.channel) {
+            const vc    = member.voice.channel;
             const flags = [
-              voiceState.deaf    && '🔇 Server-deafened',
-              voiceState.selfDeaf && '🔇 Self-deafened',
-              voiceState.mute    && '🔕 Server-muted',
-              voiceState.selfMute && '🔕 Self-muted',
-              voiceState.streaming && '📡 Live',
+              member.voice.serverDeaf  && '🔇 Server-deafened',
+              member.voice.selfDeaf    && '🔇 Self-deafened',
+              member.voice.serverMute  && '🔕 Server-muted',
+              member.voice.selfMute    && '🔕 Self-muted',
+              member.voice.streaming   && '📡 Live stream',
+              member.voice.selfVideo   && '📷 Camera on',
             ].filter(Boolean).join(', ');
-            lines.push(`🔊 In voice: ${vc.name}${flags ? ` (${flags})` : ''}`);
+            lines.push(`🔊 In voice: **${vc.name}** [ID: ${vc.id}]${flags ? ` (${flags})` : ''}`);
           }
+
         } else {
-          lines.push(`ℹ️ This user is not a member of this server.`);
+          lines.push(`ℹ️ This user is not currently a member of this server.`);
         }
       }
     }
@@ -818,30 +910,206 @@ async function handleGetChannelInfo(currentChannelId, targetChannelId) {
 
 const MEME_SUBREDDITS = ['memes', 'dankmemes', 'me_irl', 'wholesomememes', 'AdviceAnimals', 'ProgrammerHumor'];
 
-async function handleFetchMeme(historyId, subreddit) {
+/**
+ * Topic → candidate subreddits mapping.
+ * Keys are lowercase; values are ordered from most-specific to most-general.
+ */
+const TOPIC_SUBREDDIT_MAP = new Map([
+  // ── Anime / manga ──────────────────────────────────────────────────────────
+  ['gojo',          ['JuJutsuKaisen', 'animememes', 'anime_irl']],
+  ['jjk',           ['JuJutsuKaisen', 'animememes', 'anime_irl']],
+  ['jujutsu',       ['JuJutsuKaisen', 'animememes']],
+  ['sukuna',        ['JuJutsuKaisen', 'animememes']],
+  ['naruto',        ['Naruto', 'animememes', 'anime_irl']],
+  ['sasuke',        ['Naruto', 'animememes']],
+  ['onepiece',      ['OnePiece', 'animememes', 'anime_irl']],
+  ['one piece',     ['OnePiece', 'animememes']],
+  ['luffy',         ['OnePiece', 'animememes']],
+  ['aot',           ['ShingekiNoKyojin', 'animememes']],
+  ['attack on titan', ['ShingekiNoKyojin', 'animememes']],
+  ['levi',          ['ShingekiNoKyojin', 'animememes']],
+  ['bleach',        ['bleach', 'animememes', 'anime']],
+  ['demon slayer',  ['KimetsuNoYaiba', 'animememes']],
+  ['kny',           ['KimetsuNoYaiba', 'animememes']],
+  ['tanjiro',       ['KimetsuNoYaiba', 'animememes']],
+  ['dbz',           ['dbz', 'animememes', 'anime']],
+  ['dragon ball',   ['dbz', 'animememes']],
+  ['goku',          ['dbz', 'animememes']],
+  ['bnha',          ['BokuNoHeroAcademia', 'animememes']],
+  ['mha',           ['BokuNoHeroAcademia', 'animememes']],
+  ['my hero',       ['BokuNoHeroAcademia', 'animememes']],
+  ['deku',          ['BokuNoHeroAcademia', 'animememes']],
+  ['pokemon',       ['pokemon', 'pokemonmemes', 'animememes']],
+  ['anime',         ['animememes', 'anime_irl', 'anime']],
+  ['manga',         ['manga', 'animememes']],
+  // ── Gaming ─────────────────────────────────────────────────────────────────
+  ['minecraft',     ['Minecraft', 'MinecraftMemes']],
+  ['among us',      ['AmongUs', 'gaming']],
+  ['valorant',      ['VALORANT', 'ValorantMemes']],
+  ['genshin',       ['Genshin_Impact', 'GenshinMemes']],
+  ['fortnite',      ['FortNiteBR', 'gaming']],
+  ['league',        ['leagueoflegends', 'leaguememes']],
+  ['lol',           ['leagueoflegends', 'leaguememes']],
+  ['gaming',        ['gaming', 'Gamingmemes', 'pcmasterrace']],
+  // ── Programming / tech ─────────────────────────────────────────────────────
+  ['programming',   ['ProgrammerHumor', 'softwaregore']],
+  ['coding',        ['ProgrammerHumor', 'shittyprogramming']],
+  ['python',        ['ProgrammerHumor', 'learnpython']],
+  ['javascript',    ['ProgrammerHumor', 'webdev']],
+  ['ai',            ['ProgrammerHumor', 'ChatGPT']],
+  // ── Animals ────────────────────────────────────────────────────────────────
+  ['cat',           ['catswhoyell', 'MEOW_IRL', 'catmemes']],
+  ['cats',          ['catswhoyell', 'MEOW_IRL', 'catmemes']],
+  ['dog',           ['dogmemes', 'rarepuppers', 'DOG']],
+  ['dogs',          ['dogmemes', 'rarepuppers', 'DOG']],
+  // ── Mood / style ───────────────────────────────────────────────────────────
+  ['dark',          ['darkhumor', 'dankmemes']],
+  ['wholesome',     ['wholesomememes', 'MadeMeSmile']],
+  ['relatable',     ['me_irl', 'AdviceAnimals', 'facepalm']],
+  ['sarcastic',     ['facepalm', 'dankmemes', 'Showerthoughts']],
+  ['school',        ['me_irl', 'StudentProblems', 'facepalm']],
+  ['work',          ['ProgrammerHumor', 'facepalm', 'workmemes']],
+]);
+
+/** Maximum size (bytes) for inline image we'll download for bot to see. */
+const MEME_VISION_MAX_BYTES = 6 * 1024 * 1024; // 6 MB
+
+/**
+ * Find subreddits that best match a free-text topic string.
+ * @param {string} topic - lowercase topic string
+ * @returns {string[]}
+ */
+function topicToSubreddits(topic) {
+  // Exact key match
+  if (TOPIC_SUBREDDIT_MAP.has(topic)) return TOPIC_SUBREDDIT_MAP.get(topic);
+
+  // Partial match — topic contains a key or key contains topic
+  for (const [key, subs] of TOPIC_SUBREDDIT_MAP) {
+    if (topic.includes(key) || key.includes(topic)) return subs;
+  }
+
+  // Keyword heuristics
+  if (/anime|manga|weeb/i.test(topic)) return ['animememes', 'anime_irl'];
+  if (/game|gam/i.test(topic))         return ['gaming', 'Gamingmemes'];
+  if (/code|program|dev/i.test(topic)) return ['ProgrammerHumor'];
+
+  // Fall back: try the topic itself as a subreddit name + general fallback
+  const candidateSub = topic.replace(/\s+/g, '');
+  return [candidateSub, 'memes', 'dankmemes'];
+}
+
+/**
+ * Fetch a meme with optional topic-based search.
+ * After finding an image, downloads it as base64 so Gemini can actually see it
+ * before writing the response.
+ *
+ * @param {string|null} historyId
+ * @param {string|null} subreddit  - Explicit subreddit (overrides topic)
+ * @param {string|null} topic      - Free-text topic (e.g. "gojo", "dark humor")
+ */
+async function handleFetchMeme(historyId, subreddit, topic) {
   try {
-    const sub = subreddit?.trim() || MEME_SUBREDDITS[Math.floor(Math.random() * MEME_SUBREDDITS.length)];
+    // ── Determine subreddit list ─────────────────────────────────────────────
+    let subreddits  = [];
+    let searchTopic = null;
 
-    // meme-api.com proxies Reddit without auth requirements or server-side 403s
-    const url = `https://meme-api.com/gimme/${encodeURIComponent(sub)}`;
-    const { data } = await axios.get(url, {
-      headers: { 'User-Agent': 'LuminBot/1.0' },
-      timeout: 6000
-    });
+    if (subreddit?.trim()) {
+      subreddits = [subreddit.trim()];
+    } else if (topic?.trim()) {
+      searchTopic = topic.trim().toLowerCase();
+      subreddits  = topicToSubreddits(searchTopic);
+    } else {
+      subreddits = [MEME_SUBREDDITS[Math.floor(Math.random() * MEME_SUBREDDITS.length)]];
+    }
 
-    if (!data?.url) return { result: 'No meme found — try again in a moment.' };
-    if (data.nsfw)  return { result: 'The fetched meme was NSFW — skipped. Try again or specify a different subreddit.' };
-    if (data.spoiler) return { result: 'Fetched post is marked as a spoiler — skipped. Try again.' };
+    // ── Fetch & filter ───────────────────────────────────────────────────────
+    for (const sub of subreddits) {
+      let posts = [];
+      try {
+        // Fetch up to 5 posts when topic-searching so we can pick the best match
+        const count   = searchTopic ? 5 : 1;
+        const apiUrl  = `https://meme-api.com/gimme/${encodeURIComponent(sub)}${count > 1 ? `/${count}` : ''}`;
+        const { data } = await axios.get(apiUrl, {
+          headers: { 'User-Agent': 'LuminBot/1.0' },
+          timeout: 7000
+        });
 
-    const isImage = /\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(data.url);
-    if (!isImage) return { result: 'Fetched post has no direct image. Try again.' };
+        // meme-api returns either a single post or { memes: [...], count: N }
+        posts = data?.memes ?? (data?.url ? [data] : []);
+      } catch (subErr) {
+        logger.warn(`Meme fetch from r/${sub} failed: ${subErr.message}`);
+        continue;
+      }
 
-    // Queue for ResponseHandler to send as a clean image embed
-    if (historyId) setPendingGif(historyId, data.url);
+      if (!posts.length) continue;
 
-    const title   = (data.title || 'Meme').slice(0, 200);
-    const upvotes = data.ups ?? 0;
-    return { result: `Meme from r/${data.subreddit || sub}: "${title}" (${upvotes.toLocaleString()} upvotes)` };
+      // Filter: no NSFW / spoilers, must be a direct image URL
+      const cleanPosts = posts.filter(p => {
+        if (p.nsfw || p.spoiler) return false;
+        return /\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(p.url);
+      });
+
+      if (!cleanPosts.length) continue;
+
+      // Prefer posts whose title contains the search topic
+      let bestPost = null;
+      if (searchTopic) {
+        const topicWords = searchTopic.split(/\s+/).filter(w => w.length > 2);
+        bestPost = cleanPosts.find(p => {
+          const t = (p.title || '').toLowerCase();
+          return topicWords.some(w => t.includes(w));
+        });
+      }
+      if (!bestPost) bestPost = cleanPosts[0];
+
+      // ── Download image for bot to see (Gemini vision) ──────────────────────
+      let imageBase64  = null;
+      let imageMimeType = 'image/jpeg';
+      try {
+        const imgResp = await axios.get(bestPost.url, {
+          responseType:       'arraybuffer',
+          timeout:            10000,
+          maxContentLength:   MEME_VISION_MAX_BYTES,
+          headers:            { 'User-Agent': 'LuminBot/1.0' }
+        });
+
+        // Resolve MIME from URL extension or Content-Type header
+        const ext = bestPost.url.match(/\.(jpe?g|png|gif|webp)/i)?.[1]?.toLowerCase();
+        const mimeFromExt  = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
+        const mimeFromHdr  = imgResp.headers?.['content-type']?.split(';')[0]?.trim();
+        imageMimeType = mimeFromExt[ext] || mimeFromHdr || 'image/jpeg';
+
+        imageBase64 = Buffer.from(imgResp.data).toString('base64');
+        logger.debug(`Meme image downloaded for vision: ${bestPost.url} (${Math.round(imgResp.data.byteLength / 1024)} KB)`);
+      } catch (imgErr) {
+        logger.warn(`Could not download meme image for bot vision: ${imgErr.message}`);
+      }
+
+      // Queue image URL for final delivery to Discord channel
+      if (historyId) setPendingGif(historyId, bestPost.url);
+
+      const title   = (bestPost.title || 'Meme').slice(0, 200);
+      const upvotes = bestPost.ups ?? 0;
+
+      const resultObj = {
+        result: [
+          `Meme fetched from r/${bestPost.subreddit || sub}: "${title}" (${upvotes.toLocaleString()} upvotes).`,
+          imageBase64
+            ? `The meme image is embedded below — look at it carefully, describe what you see, relate it to what the user asked for, and then send it.`
+            : `Image could not be pre-loaded for preview; it will still be sent to the channel.`,
+        ].join(' ')
+      };
+
+      // Attach inline image data so Gemini can see the meme before replying
+      if (imageBase64) {
+        resultObj._inlineImageData  = imageBase64;
+        resultObj._inlineImageMime  = imageMimeType;
+      }
+
+      return resultObj;
+    }
+
+    return { result: 'No suitable meme found. Try a different topic or subreddit.' };
   } catch (error) {
     logger.error('handleFetchMeme failed', error);
     return { result: `Meme fetch failed: ${error.message}` };
@@ -1007,7 +1275,7 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId, ch
 
           // ── Meme / GIPHY sticker ────────────────────────────────────────────
           case FUNCTION_NAMES.FETCH_MEME:
-            response = await handleFetchMeme(historyId, args.subreddit ?? null);
+            response = await handleFetchMeme(historyId, args.subreddit ?? null, args.topic ?? null);
             break;
           case FUNCTION_NAMES.SEARCH_GIPHY_STICKER:
             response = await handleSearchGiphySticker(args.query, historyId);
@@ -1068,7 +1336,27 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId, ch
         response = { error: `${MSG.OPERATION_FAILED}: ${error.message}` };
       }
 
-      return { functionResponse: { name: call.name, response } };
+      // ── Inline image extraction ────────────────────────────────────────────
+      // Some handlers (e.g. fetch_meme) attach base64 image data to the response
+      // object so Gemini can actually *see* the media before writing its reply.
+      // We extract those private fields here, strip them from the JSON response
+      // (they're not serialisable as part of the functionResponse), and add them
+      // as separate inlineData parts in the same user turn.
+      const extraParts = [];
+      if (response._inlineImageData) {
+        extraParts.push({
+          inlineData: {
+            mimeType: response._inlineImageMime || 'image/jpeg',
+            data:     response._inlineImageData
+          }
+        });
+        // Clean private fields so they don't appear in the model's function result JSON
+        const { _inlineImageData, _inlineImageMime, ...cleanResponse } = response;
+        response = cleanResponse;
+      }
+
+      // Return as an array of parts so results.flat() works cleanly downstream
+      return [{ functionResponse: { name: call.name, response } }, ...extraParts];
     })
-  );
+  ).then(results => results.flat());
 }

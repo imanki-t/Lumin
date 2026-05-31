@@ -420,13 +420,16 @@ export const functionTools = [
       {
         name: FUNCTION_NAMES.FETCH_MEME,
         description: [
-          'Fetch a random meme from Reddit. Use when the user asks for a meme or the vibe genuinely calls for it.',
-          'Optionally specify a subreddit (e.g. "memes", "dankmemes", "me_irl"). Defaults to a random popular meme sub.',
+          'Fetch a meme. Supports topic-based search — specify a topic like "gojo", "programming",',
+          '"dark humor", "cats", "anime", "minecraft" to get a thematically relevant meme.',
+          'The bot will receive the actual image and describe/react to it before sending.',
+          'Optionally specify a subreddit directly (overrides topic). Defaults to a popular meme sub.',
         ].join(' '),
         parameters: {
           type: O,
           properties: {
-            subreddit: { type: S, description: 'Optional subreddit to fetch from (e.g. "memes", "dankmemes"). Omit for a random pick.' }
+            topic:     { type: S, description: 'Free-text topic for the meme (e.g. "gojo", "dark humor", "programming", "cat"). Used to find relevant subreddits and filter posts by title.' },
+            subreddit: { type: S, description: 'Optional specific subreddit to fetch from (e.g. "memes", "JuJutsuKaisen"). Takes precedence over topic when provided.' }
           }
         }
       },
