@@ -62,109 +62,179 @@ function getBotMentionRegex() {
 // MENTION REPLACEMENT
 // ============================================================================
 
-// M-2 fix: collect all IDs first, then fetch in parallel instead of sequentially
+/**
+ * Replace user mentions <@uid> / <@!uid> with full display name + username + ID.
+ * Returns { text, mentions[] } so replaceAllMentions can build a combined guide.
+ *
+ * M-2 fix: collect all IDs first, then fetch in parallel instead of sequentially.
+ * M-3 fix: prefer GuildMember (has server display name) over bare User.
+ */
 async function replaceUserMentions(content, message) {
   const matches = [...content.matchAll(/<@!?(\d+)>/g)];
-  if (matches.length === 0) return content;
+  if (matches.length === 0) return { text: content, mentions: [] };
 
-  // Deduplicate IDs
   const uniqueIds = [...new Set(matches.map(m => m[1]))];
 
-  // Fetch all users in parallel
+  // Try to fetch as GuildMember first (richer info), fall back to User
   const fetched = await Promise.allSettled(
-    uniqueIds.map(id => client.users.fetch(id).catch(() => null))
+    uniqueIds.map(id => {
+      if (message.guild) {
+        return message.guild.members.fetch(id)
+          .catch(() => client.users.fetch(id).catch(() => null));
+      }
+      return client.users.fetch(id).catch(() => null);
+    })
   );
 
   const replacements = new Map();
-  const userIds = [];
+  const mentions     = [];
+
   uniqueIds.forEach((uid, i) => {
-    const user = fetched[i].status === 'fulfilled' ? fetched[i].value : null;
-    if (user) {
-      replacements.set(uid, `@${user.username} (ID: ${uid})`);
-      userIds.push({ username: user.username, id: uid });
-    } else {
-      replacements.set(uid, `<@${uid}>`);
-    }
+    const entity = fetched[i].status === 'fulfilled' ? fetched[i].value : null;
+    if (!entity) { replacements.set(uid, `<@${uid}>`); return; }
+
+    // GuildMember exposes .user; plain User does not
+    const isGuildMember = !!entity.user;
+    const user          = isGuildMember ? entity.user : entity;
+    const displayName   = isGuildMember ? entity.displayName : (user.globalName || user.username);
+    const username      = user.username;
+
+    // Format: DisplayName (@username) [ID: uid]
+    replacements.set(uid, `${displayName} (@${username}) [ID: ${uid}]`);
+    mentions.push({ type: 'user', id: uid, displayName, username });
   });
 
-  let result = content;
-  for (const [uid, name] of replacements) {
-    result = result.replace(new RegExp(`<@!?${uid}>`, 'g'), name);
+  let text = content;
+  for (const [uid, label] of replacements) {
+    text = text.replace(new RegExp(`<@!?${uid}>`, 'g'), label);
   }
 
-  if (userIds.length > 0) {
-    result += '\n\n[Mention Guide: To tag/mention users, use the format: <@USER_ID>]';
-    result += '\nExample: To mention the user(s) above, use:';
-    for (const u of userIds) result += `\n  • <@${u.id}> for @${u.username}`;
-  }
-
-  return result;
+  return { text, mentions };
 }
 
+/**
+ * Replace channel mentions <#cid> with name + ID.
+ * Returns { text, mentions[] }.
+ */
 async function replaceChannelMentions(content, message) {
   const matches = [...content.matchAll(/<#(\d+)>/g)];
-  if (matches.length === 0) return content;
+  if (matches.length === 0) return { text: content, mentions: [] };
 
   const uniqueIds = [...new Set(matches.map(m => m[1]))];
 
-  // M-2 fix: fetch all channels in parallel
   const fetched = await Promise.allSettled(
     uniqueIds.map(id => client.channels.fetch(id).catch(() => null))
   );
 
   const replacements = new Map();
+  const mentions     = [];
+
   uniqueIds.forEach((cid, i) => {
     const channel = fetched[i].status === 'fulfilled' ? fetched[i].value : null;
-    replacements.set(cid, channel?.name ? `#${channel.name}` : `<#${cid}>`);
+    if (channel?.name) {
+      // Format: #channelname [ID: cid]
+      replacements.set(cid, `#${channel.name} [ID: ${cid}]`);
+      mentions.push({ type: 'channel', id: cid, name: channel.name });
+    } else {
+      replacements.set(cid, `<#${cid}>`);
+    }
   });
 
-  let result = content;
-  for (const [cid, name] of replacements) {
-    result = result.replace(new RegExp(`<#${cid}>`, 'g'), name);
+  let text = content;
+  for (const [cid, label] of replacements) {
+    text = text.replace(new RegExp(`<#${cid}>`, 'g'), label);
   }
-  return result;
+
+  return { text, mentions };
 }
 
+/**
+ * Replace role mentions <@&rid> with name + ID.
+ * Returns { text, mentions[] }.
+ */
 async function replaceRoleMentions(content, message) {
   const matches = [...content.matchAll(/<@&(\d+)>/g)];
-  if (matches.length === 0) return content;
+  if (matches.length === 0) return { text: content, mentions: [] };
 
   const uniqueIds = [...new Set(matches.map(m => m[1]))];
 
-  // M-2 fix: fetch all roles in parallel if in a guild
-  let replacements = new Map();
+  const replacements = new Map();
+  const mentions     = [];
+
   if (message.guild) {
     const fetched = await Promise.allSettled(
       uniqueIds.map(id => message.guild.roles.fetch(id).catch(() => null))
     );
     uniqueIds.forEach((rid, i) => {
       const role = fetched[i].status === 'fulfilled' ? fetched[i].value : null;
-      replacements.set(rid, role?.name ? `@${role.name}` : `<@&${rid}>`);
+      if (role?.name) {
+        // Format: @rolename [ID: rid]
+        replacements.set(rid, `@${role.name} [ID: ${rid}]`);
+        mentions.push({ type: 'role', id: rid, name: role.name });
+      } else {
+        replacements.set(rid, `<@&${rid}>`);
+      }
     });
   } else {
     uniqueIds.forEach(rid => replacements.set(rid, `<@&${rid}>`));
   }
 
-  let result = content;
-  for (const [rid, name] of replacements) {
-    result = result.replace(new RegExp(`<@&${rid}>`, 'g'), name);
+  let text = content;
+  for (const [rid, label] of replacements) {
+    text = text.replace(new RegExp(`<@&${rid}>`, 'g'), label);
   }
-  return result;
+
+  return { text, mentions };
 }
 
 /**
- * Replace all Discord mention formats (<@uid>, <#cid>, <@&rid>) with readable names.
+ * Replace all Discord mention formats (<@uid>, <#cid>, <@&rid>) with readable names
+ * that include both the human-readable label AND the underlying ID. Appends a
+ * consolidated "Discord Mention Reference" block so the model always knows the exact
+ * format to use when it needs to mention/reference a user, channel, or role in its reply.
+ *
  * @param {string} content
  * @param {import('discord.js').Message} message
  * @returns {Promise<string>}
  */
 export async function replaceAllMentions(content, message) {
   if (!content) return content ?? '';
-  let result = content;
-  result = await replaceUserMentions(result, message);
-  result = await replaceChannelMentions(result, message);
-  result = await replaceRoleMentions(result, message);
-  return result;
+
+  const userResult    = await replaceUserMentions(content, message);
+  const channelResult = await replaceChannelMentions(userResult.text, message);
+  const roleResult    = await replaceRoleMentions(channelResult.text, message);
+
+  const allMentions = [...userResult.mentions, ...channelResult.mentions, ...roleResult.mentions];
+  if (allMentions.length === 0) return roleResult.text;
+
+  // Build a consolidated reference block for the model
+  const lines = ['\n\n[Discord Mention Reference — use these exact formats in your reply:]'];
+
+  const users    = allMentions.filter(m => m.type === 'user');
+  const channels = allMentions.filter(m => m.type === 'channel');
+  const roles    = allMentions.filter(m => m.type === 'role');
+
+  if (users.length > 0) {
+    lines.push('Users (mention with <@ID>):');
+    for (const u of users) {
+      lines.push(`  • ${u.displayName} (@${u.username}) — ID: ${u.id} → use <@${u.id}> to ping them`);
+    }
+  }
+  if (channels.length > 0) {
+    lines.push('Channels (reference with <#ID>):');
+    for (const c of channels) {
+      lines.push(`  • #${c.name} — ID: ${c.id} → use <#${c.id}> to link the channel`);
+    }
+  }
+  if (roles.length > 0) {
+    lines.push('Roles (mention with <@&ID>):');
+    for (const r of roles) {
+      lines.push(`  • @${r.name} — ID: ${r.id} → use <@&${r.id}> to ping the role`);
+    }
+  }
+
+  lines.push(']');
+  return roleResult.text + lines.join('\n');
 }
 
 // ============================================================================
