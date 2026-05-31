@@ -20,6 +20,7 @@ import {
 import { Logger }  from '../../core/Logger.js';
 import { Embeds, addGroundingFields, addUrlContextFields, GOOGLE_AI_ICON } from '../shared/embedBuilder.js';
 import { executeFunctionCalls }         from '../functions/FunctionExecutor.js';
+import { consumePendingSticker, clearPendingSticker } from '../functions/pendingMedia.js';
 import { getGenerationConfig, RATE_LIMIT_ERRORS, MODEL_FALLBACK_CHAIN, isGemmaModel } from '../../modules/config.js';
 import { extractFileText }              from './PromptBuilder.js';
 import { processPromptAndMediaAttachments, classifyAttachments } from './MediaHandler.js';
@@ -696,6 +697,16 @@ export async function handleModelResponse(
           });
         }
 
+        // ── Deliver pending sticker (queued by get_server_stickers tool) ─
+        const pendingStickerId = consumePendingSticker(historyId);
+        if (pendingStickerId) {
+          try {
+            await originalMessage.channel.send({ stickers: [pendingStickerId] });
+          } catch (stickerErr) {
+            logger.warn(`Failed to send sticker ${pendingStickerId}: ${stickerErr.message}`);
+          }
+        }
+
         cleanup();
         return; // success
 
@@ -782,6 +793,7 @@ export async function handleModelResponse(
       });
     } catch { /* swallow */ }
   } finally {
+    clearPendingSticker(historyId);
     cleanup();
   }
 }
