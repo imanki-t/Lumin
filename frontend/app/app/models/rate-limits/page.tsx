@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/providers/toast-provider';
 
+type FieldChange = React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>;
+
 export default function RateLimitsPage() {
   const toast = useToast();
   const [cfg, setCfg] = useState({
@@ -51,7 +53,7 @@ export default function RateLimitsPage() {
     setSaving(false);
   };
 
-  const up = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+  const up = (key: string) => (e: FieldChange) =>
     setCfg(c => ({ ...c, [key]: e.target.value }));
 
   return (
@@ -89,7 +91,7 @@ export default function RateLimitsPage() {
         </Card>
       </div>
 
-      <Card title="Per-Model RPM Overrides" description="JSON object — use null for unlimited. e.g. {\"gemini-flash-lite\": null}">
+      <Card title="Per-Model RPM Overrides" description={'JSON object — use null for unlimited. e.g. {"gemini-flash-lite": null}'}>
         <textarea
           value={cfg.modelOverrides}
           onChange={up('modelOverrides')}
