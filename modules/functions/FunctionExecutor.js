@@ -31,7 +31,7 @@ const MSG = Object.freeze({
   TIMEZONE_SET:         'Timezone set to',
   TIME_CHECKED:         'Time elapsed since last message:',
   OPERATION_FAILED:     'Failed',
-  GIF_NO_API_KEY:       'GIF search is unavailable: TENOR_API_KEY is not configured.',
+  GIF_NO_API_KEY:       'GIF search is unavailable: GIPHY_API_KEY is not configured.',
   GIF_NO_RESULTS:       'No GIF found for that search. Skip the GIF this time.',
   GIF_API_ERROR:        'GIF search failed. Skip the GIF this time.',
   NO_GUILD:             'This tool is only available in server channels, not DMs.',
@@ -416,35 +416,34 @@ function isGifBlocked(title, tags) {
  * Returns the Tenor page URL to the model so it can decide whether to include
  * it at the end of its reply. Discord auto-embeds Tenor URLs.
  *
- * Requires TENOR_API_KEY in environment. Uses contentfilter=medium at the API
+ * Requires GIPHY_API_KEY in environment. Uses rating=pg at the API
  * level plus a local term blocklist for extra safety.
  *
  * @param {string} query  - Search terms (2–4 words)
  * @returns {Promise<{ result: string }>}
  */
 async function handleSearchGif(query) {
-  const apiKey = process.env.TENOR_API_KEY;
+  const apiKey = process.env.GIPHY_API_KEY;
   if (!apiKey) return { result: MSG.GIF_NO_API_KEY };
 
   try {
-    const { data } = await axios.get('https://tenor.googleapis.com/v2/search', {
+    const { data } = await axios.get('https://api.giphy.com/v1/gifs/search', {
       params: {
-        q:             query,
-        key:           apiKey,
-        limit:         5,
-        contentfilter: 'medium',   // server-side content filter
-        media_filter:  'gif',
-        ar_range:      'wide'
+        q:       query,
+        api_key: apiKey,
+        limit:   5,
+        rating:  'pg',     // server-side content filter: g, pg, pg-13, r
+        lang:    'en'
       },
       timeout: 5000
     });
 
-    const results = data?.results;
+    const results = data?.data;
     if (!results?.length) return { result: MSG.GIF_NO_RESULTS };
 
     // Pick first safe result
     for (const item of results) {
-      const title = item.content_description || item.title || '';
+      const title = item.title || '';
       const tags  = item.tags || [];
 
       if (isGifBlocked(title, tags)) {
