@@ -105,7 +105,9 @@ export const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.DirectMessages
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildVoiceStates,   // needed for voice channel member lists
+    GatewayIntentBits.GuildPresences,     // PRIVILEGED — enable in Discord Dev Portal first
   ],
   partials: [Partials.Channel],
 
@@ -136,8 +138,8 @@ export const client = new Client({
     // Presences are never used by Lumin — zero them out entirely
     PresenceManager: 0,
 
-    // Reactions not used — zero out
-    ReactionManager: 0,
+    // Reactions — small cache for recent reactions; 0 would prevent react operations
+    ReactionManager: 10,
 
     // Stage instances not used — zero out
     StageInstanceManager: 0,
