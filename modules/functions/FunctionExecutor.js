@@ -89,15 +89,100 @@ function fmtDate(d) {
 }
 
 // ============================================================================
+// ENTITY RESOLUTION HELPER
+// ============================================================================
+
+/**
+ * Scan a fact/memory string for raw Discord mention patterns and replace them
+ * with fully-labelled identifiers before anything is written to the database.
+ * This runs at save-time so every stored fact is uniformly formatted regardless
+ * of what text the AI passed in.
+ *
+ * Patterns resolved:
+ *   <@uid> / <@!uid>  →  DisplayName/GlobalName (@username) [ID: uid]
+ *   <#cid>            →  #channel-name [ID: cid]
+ *   <@&rid>           →  @role-name [ID: rid]
+ *
+ * @param {string}      text    - The raw info string from the AI tool call.
+ * @param {string|null} guildId - Current guild ID (null in DM context).
+ * @returns {Promise<string>}   - Text with all mentions expanded.
+ */
+async function resolveEntitiesInText(text, guildId) {
+  if (!text) return text;
+
+  const guild = guildId ? client.guilds.cache.get(guildId) : null;
+
+  // ── Users <@uid> / <@!uid> ────────────────────────────────────────────────
+  const userIds = [...new Set([...text.matchAll(/<@!?(\d+)>/g)].map(m => m[1]))];
+  if (userIds.length) {
+    const resolved = await Promise.allSettled(
+      userIds.map(id =>
+        guild
+          ? guild.members.fetch(id).catch(() => client.users.fetch(id).catch(() => null))
+          : client.users.fetch(id).catch(() => null)
+      )
+    );
+    userIds.forEach((uid, i) => {
+      const entity = resolved[i].status === 'fulfilled' ? resolved[i].value : null;
+      if (!entity) return;
+      const isGuildMember  = !!entity.user;
+      const user           = isGuildMember ? entity.user : entity;
+      const serverDisplay  = isGuildMember ? entity.displayName : null;
+      const globalDisplay  = user.globalName ?? user.username;
+      // Build: ServerNick/GlobalName (@username) [ID: uid]
+      const namePart = (serverDisplay && serverDisplay !== globalDisplay)
+        ? `${serverDisplay}/${globalDisplay}`
+        : globalDisplay;
+      const label = `${namePart} (@${user.username}) [ID: ${uid}]`;
+      text = text.replace(new RegExp(`<@!?${uid}>`, 'g'), label);
+    });
+  }
+
+  // ── Channels <#cid> ───────────────────────────────────────────────────────
+  const channelIds = [...new Set([...text.matchAll(/<#(\d+)>/g)].map(m => m[1]))];
+  if (channelIds.length) {
+    const resolved = await Promise.allSettled(
+      channelIds.map(id => client.channels.fetch(id).catch(() => null))
+    );
+    channelIds.forEach((cid, i) => {
+      const channel = resolved[i].status === 'fulfilled' ? resolved[i].value : null;
+      if (channel?.name) {
+        text = text.replace(new RegExp(`<#${cid}>`, 'g'), `#${channel.name} [ID: ${cid}]`);
+      }
+    });
+  }
+
+  // ── Roles <@&rid> ─────────────────────────────────────────────────────────
+  const roleIds = [...new Set([...text.matchAll(/<@&(\d+)>/g)].map(m => m[1]))];
+  if (roleIds.length && guild) {
+    const resolved = await Promise.allSettled(
+      roleIds.map(id => guild.roles.fetch(id).catch(() => null))
+    );
+    roleIds.forEach((rid, i) => {
+      const role = resolved[i].status === 'fulfilled' ? resolved[i].value : null;
+      if (role?.name) {
+        text = text.replace(new RegExp(`<@&${rid}>`, 'g'), `@${role.name} [ID: ${rid}]`);
+      }
+    });
+  }
+
+  return text;
+}
+
+// ============================================================================
 // INDIVIDUAL FUNCTION HANDLERS
 // ============================================================================
 
 // ── Memory ────────────────────────────────────────────────────────────────────
 
-async function handleManageMemory(userId, action, info) {
+async function handleManageMemory(userId, action, info, guildId = null) {
+  // Resolve any raw Discord mentions to full identifiers before storing
+  const resolvedInfo = action === MEMORY_ACTIONS.ADD
+    ? await resolveEntitiesInText(info, guildId)
+    : info;
   if (action === MEMORY_ACTIONS.ADD) {
-    await memorySystem.addPersonalData(userId, info);
-    return { result: `${MSG.MEMORY_ADD_SUCCESS}: ${info}` };
+    await memorySystem.addPersonalData(userId, resolvedInfo);
+    return { result: `${MSG.MEMORY_ADD_SUCCESS}: ${resolvedInfo}` };
   }
   await memorySystem.removePersonalData(userId, info);
   return { result: `${MSG.MEMORY_REMOVE_SUCCESS}: ${info}` };
@@ -107,8 +192,10 @@ async function handleManageServerFact(guildId, action, info, category = 'general
   if (!guildId) return { result: 'Server facts are only available in guild channels, not DMs.' };
   try {
     if (action === MEMORY_ACTIONS.ADD) {
-      await db.saveServerFact(guildId, info, category);
-      return { result: `Server fact saved [${category}]: ${info}` };
+      // Resolve any raw Discord mentions to full identifiers before storing
+      const resolvedInfo = await resolveEntitiesInText(info, guildId);
+      await db.saveServerFact(guildId, resolvedInfo, category);
+      return { result: `Server fact saved [${category}]: ${resolvedInfo}` };
     }
     const deleted = await db.deleteServerFact(guildId, info);
     return { result: deleted > 0 ? `Server fact removed (${deleted} entries)` : 'No matching server fact found.' };
@@ -243,6 +330,9 @@ function isGifBlocked(title, tags) {
  * Search for a GIF and store its URL in pendingGif (keyed by historyId).
  * The GIF is sent as a clean image embed by ResponseHandler — no URL in text.
  */
+// Maximum bytes to download for GIF vision preview (same cap as meme tool)
+const GIF_VISION_MAX_BYTES = 6 * 1024 * 1024; // 6 MB
+
 async function handleSearchGif(query, historyId) {
   const apiKey = process.env.GIPHY_API_KEY;
   if (!apiKey) return { result: MSG.GIF_NO_API_KEY };
@@ -268,10 +358,49 @@ async function handleSearchGif(query, historyId) {
         || item.url;
       if (!gifUrl) continue;
 
-      // Store for ResponseHandler to send as clean embed image
+      // ── Download GIF for bot vision (same pattern as fetch_meme) ──────────
+      // This lets Gemini actually see the GIF before writing its reply,
+      // so it can describe/react to the content rather than sending blindly.
+      let imageBase64   = null;
+      let imageMimeType = 'image/gif';
+      try {
+        const imgResp = await axios.get(gifUrl, {
+          responseType:     'arraybuffer',
+          timeout:          8000,
+          maxContentLength: GIF_VISION_MAX_BYTES,
+          headers:          { 'User-Agent': 'LuminBot/1.0' }
+        });
+        // Resolve MIME from URL extension or Content-Type header
+        const ext          = gifUrl.match(/\.(gif|webp|mp4)(\\?|$)/i)?.[1]?.toLowerCase();
+        const mimeFromExt  = { gif: 'image/gif', webp: 'image/webp', mp4: 'video/mp4' };
+        const mimeFromHdr  = imgResp.headers?.['content-type']?.split(';')[0]?.trim();
+        imageMimeType      = mimeFromExt[ext] || mimeFromHdr || 'image/gif';
+
+        imageBase64 = Buffer.from(imgResp.data).toString('base64');
+        logger.debug(`GIF image downloaded for vision: ${gifUrl} (${Math.round(imgResp.data.byteLength / 1024)} KB)`);
+      } catch (imgErr) {
+        logger.warn(`Could not download GIF for vision preview: ${imgErr.message}`);
+      }
+
+      // Store URL for ResponseHandler to send as clean embed image
       if (historyId) setPendingGif(historyId, gifUrl);
 
-      return { result: `GIF found: "${title}"` };
+      const resultObj = {
+        result: [
+          `GIF found: "${title}".`,
+          imageBase64
+            ? `The GIF is embedded below — look at it carefully, then send it with a reaction that fits the vibe.`
+            : `GIF could not be pre-loaded for preview; it will still be sent to the channel.`
+        ].join(' ')
+      };
+
+      // Attach inline image data so Gemini can see the GIF before replying
+      if (imageBase64) {
+        resultObj._inlineImageData = imageBase64;
+        resultObj._inlineImageMime = imageMimeType;
+      }
+
+      return resultObj;
     }
 
     return { result: MSG.GIF_NO_RESULTS };
@@ -1233,7 +1362,7 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId, ch
         switch (call.name) {
           // ── Memory ────────────────────────────────────────────────────────
           case FUNCTION_NAMES.MANAGE_MEMORY:
-            response = await handleManageMemory(userId, args.action, args.info);
+            response = await handleManageMemory(userId, args.action, args.info, guildId);
             break;
           case FUNCTION_NAMES.MANAGE_SERVER_FACT:
             response = await handleManageServerFact(guildId, args.action, args.info, args.category);
