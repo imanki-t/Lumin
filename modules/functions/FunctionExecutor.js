@@ -13,6 +13,8 @@ import { parseRelativeTime }     from '../../utils.js';
 import { formatDuration }        from '../shared/messageFormatter.js';
 import { Logger }                from '../../core/Logger.js';
 import { FUNCTION_NAMES, MEMORY_ACTIONS } from './FunctionRegistry.js';
+import { setPendingSticker }     from './pendingMedia.js';
+import axios                     from 'axios';
 
 const logger = Logger.get('FunctionExecutor');
 
@@ -21,14 +23,20 @@ const logger = Logger.get('FunctionExecutor');
 // ============================================================================
 
 const MSG = Object.freeze({
-  MEMORY_ADD_SUCCESS:  'Memory added',
-  MEMORY_REMOVE_SUCCESS: 'Memory removed',
-  NO_MEMORIES_FOUND:   'No relevant memories found.',
-  REMINDER_SET:        'Reminder set for',
-  BIRTHDAY_SET:        'Birthday set to',
-  TIMEZONE_SET:        'Timezone set to',
-  TIME_CHECKED:        'Time elapsed since last message:',
-  OPERATION_FAILED:    'Failed'
+  MEMORY_ADD_SUCCESS:   'Memory added',
+  MEMORY_REMOVE_SUCCESS:'Memory removed',
+  NO_MEMORIES_FOUND:    'No relevant memories found.',
+  REMINDER_SET:         'Reminder set for',
+  BIRTHDAY_SET:         'Birthday set to',
+  TIMEZONE_SET:         'Timezone set to',
+  TIME_CHECKED:         'Time elapsed since last message:',
+  OPERATION_FAILED:     'Failed',
+  GIF_NO_API_KEY:       'GIF search is unavailable: TENOR_API_KEY is not configured.',
+  GIF_NO_RESULTS:       'No GIF found for that search. Skip the GIF this time.',
+  GIF_API_ERROR:        'GIF search failed. Skip the GIF this time.',
+  NO_GUILD:             'This tool is only available in server channels, not DMs.',
+  STICKER_QUEUED:       'Sticker queued for delivery.',
+  STICKER_NOT_FOUND:    'Sticker not found on this server.'
 });
 
 // ============================================================================
@@ -379,6 +387,186 @@ function handleGetCurrentDatetime(userId) {
   };
 }
 
+// ── Simple word-based content filter for GIF titles/tags ──────────────────────
+// Tenor's contentfilter=medium handles most cases at the API level.
+// This is a last-line defence for edge cases that slip through.
+const GIF_BLOCK_TERMS = new Set([
+  'nsfw', 'sexy', 'nude', 'naked', 'porn', 'sex', 'hentai',
+  'gore', 'blood', 'dead', 'kill', 'murder', 'shoot',
+  'slur', 'racist', 'hate'
+]);
+
+/**
+ * Returns true if the GIF title or tags contain a blocked term.
+ * @param {string}   title
+ * @param {string[]} tags
+ * @returns {boolean}
+ */
+function isGifBlocked(title, tags) {
+  const haystack = [title, ...tags].join(' ').toLowerCase();
+  for (const term of GIF_BLOCK_TERMS) {
+    if (haystack.includes(term)) return true;
+  }
+  return false;
+}
+
+/**
+ * Handle `search_gif` — search Tenor for a GIF and validate it.
+ *
+ * Returns the Tenor page URL to the model so it can decide whether to include
+ * it at the end of its reply. Discord auto-embeds Tenor URLs.
+ *
+ * Requires TENOR_API_KEY in environment. Uses contentfilter=medium at the API
+ * level plus a local term blocklist for extra safety.
+ *
+ * @param {string} query  - Search terms (2–4 words)
+ * @returns {Promise<{ result: string }>}
+ */
+async function handleSearchGif(query) {
+  const apiKey = process.env.TENOR_API_KEY;
+  if (!apiKey) return { result: MSG.GIF_NO_API_KEY };
+
+  try {
+    const { data } = await axios.get('https://tenor.googleapis.com/v2/search', {
+      params: {
+        q:             query,
+        key:           apiKey,
+        limit:         5,
+        contentfilter: 'medium',   // server-side content filter
+        media_filter:  'gif',
+        ar_range:      'wide'
+      },
+      timeout: 5000
+    });
+
+    const results = data?.results;
+    if (!results?.length) return { result: MSG.GIF_NO_RESULTS };
+
+    // Pick first safe result
+    for (const item of results) {
+      const title = item.content_description || item.title || '';
+      const tags  = item.tags || [];
+
+      if (isGifBlocked(title, tags)) {
+        logger.debug(`GIF blocked by content filter: "${title}"`);
+        continue;
+      }
+
+      const pageUrl = item.url;
+      if (!pageUrl) continue;
+
+      const tagList = tags.slice(0, 6).join(', ') || 'none';
+      return {
+        result: [
+          `GIF found!`,
+          `Title: "${title}"`,
+          `Tags: [${tagList}]`,
+          `URL: ${pageUrl}`,
+          ``,
+          `If this GIF fits the moment, put the URL on its own line at the very END of your message.`,
+          `If it doesn't feel right, just don't include it — no explanation needed.`
+        ].join('\n')
+      };
+    }
+
+    return { result: MSG.GIF_NO_RESULTS };
+
+  } catch (error) {
+    logger.error('GIF search failed', error);
+    return { result: MSG.GIF_API_ERROR };
+  }
+}
+
+/**
+ * Handle `get_server_emojis` — return all custom emojis in the guild.
+ *
+ * Returns the ready-to-use Discord format string for each emoji so the model
+ * can copy-paste it directly into its reply text. Discord renders these as images.
+ *
+ * @param {string|null} guildId
+ * @returns {{ result: string }}
+ */
+function handleGetServerEmojis(guildId) {
+  if (!guildId) return { result: MSG.NO_GUILD };
+
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) return { result: 'Could not access server emoji list.' };
+
+  const emojis = guild.emojis.cache;
+  if (!emojis.size) return { result: 'This server has no custom emojis.' };
+
+  const lines = emojis.map(e => {
+    const fmt = e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`;
+    return `${e.name}: ${fmt}`;
+  });
+
+  return {
+    result: [
+      `Server has ${emojis.size} custom emoji(s). Use the format exactly as shown:`,
+      '',
+      ...lines,
+      '',
+      'Copy the format string directly into your message text — Discord renders it.'
+    ].join('\n')
+  };
+}
+
+/**
+ * Handle `get_server_stickers` — list guild stickers, and optionally queue one.
+ *
+ * When called WITHOUT sticker_id: returns names and IDs of all server stickers.
+ * When called WITH sticker_id: validates the sticker exists and parks it in
+ * pendingMedia so ResponseHandler sends it as a follow-up after the text reply.
+ *
+ * @param {string|null} guildId
+ * @param {string|null} historyId
+ * @param {string|null} stickerId  - If provided, queue this sticker for sending
+ * @returns {Promise<{ result: string }>}
+ */
+async function handleGetServerStickers(guildId, historyId, stickerId) {
+  if (!guildId) return { result: MSG.NO_GUILD };
+
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) return { result: 'Could not access server sticker list.' };
+
+  // Fetch from Discord API to ensure cache is fresh (stickers aren't always in cache)
+  let stickers;
+  try {
+    stickers = await guild.stickers.fetch();
+  } catch {
+    stickers = guild.stickers.cache;
+  }
+
+  if (!stickers.size) return { result: 'This server has no custom stickers.' };
+
+  // SEND mode: validate and queue
+  if (stickerId) {
+    const sticker = stickers.get(stickerId);
+    if (!sticker) return { result: MSG.STICKER_NOT_FOUND };
+
+    setPendingSticker(historyId, stickerId);
+    return {
+      result: `${MSG.STICKER_QUEUED} Will send sticker "${sticker.name}" after your reply.`
+    };
+  }
+
+  // BROWSE mode: return the list
+  const lines = stickers.map(s =>
+    `"${s.name}" — ID: ${s.id}${s.description ? ` (${s.description})` : ''}`
+  );
+
+  return {
+    result: [
+      `Server has ${stickers.size} sticker(s):`,
+      '',
+      ...lines,
+      '',
+      'To send one, call this tool again with the chosen sticker_id.',
+      'The sticker will be sent as a follow-up to your text reply.'
+    ].join('\n')
+  };
+}
+
 
 
 /**
@@ -439,6 +627,18 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId) {
 
           case FUNCTION_NAMES.GET_CURRENT_DATETIME:
             response = handleGetCurrentDatetime(userId);
+            break;
+
+          case FUNCTION_NAMES.SEARCH_GIF:
+            response = await handleSearchGif(args.query);
+            break;
+
+          case FUNCTION_NAMES.GET_SERVER_EMOJIS:
+            response = handleGetServerEmojis(guildId);
+            break;
+
+          case FUNCTION_NAMES.GET_SERVER_STICKERS:
+            response = await handleGetServerStickers(guildId, historyId, args.sticker_id ?? null);
             break;
 
           default:

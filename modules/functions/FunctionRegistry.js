@@ -19,7 +19,10 @@ export const FUNCTION_NAMES = Object.freeze({
   SET_TIMEZONE:         'set_timezone',
   CHECK_TIME:           'check_time_elapsed',
   GET_TIMESTAMP:        'get_message_timestamp',
-  GET_CURRENT_DATETIME: 'get_current_datetime'
+  GET_CURRENT_DATETIME: 'get_current_datetime',
+  SEARCH_GIF:           'search_gif',
+  GET_SERVER_EMOJIS:    'get_server_emojis',
+  GET_SERVER_STICKERS:  'get_server_stickers'
 });
 
 export const MEMORY_ACTIONS = Object.freeze({
@@ -230,6 +233,80 @@ export const functionTools = [
           type:       PARAMETER_TYPES.OBJECT,
           properties: {}
           // No parameters needed — timezone is resolved server-side from the user's stored setting
+        }
+      },
+      // ── Media / expression tools ──────────────────────────────────────────
+      {
+        name: FUNCTION_NAMES.SEARCH_GIF,
+        description: [
+          'Search Tenor for a GIF to send alongside your message.',
+          '',
+          'IMPORTANT — use this RARELY and only when a GIF would genuinely elevate the moment:',
+          '  • Someone shares exciting news you\'re actually hyped about',
+          '  • A conversation reaches a peak funny moment that earns a reaction',
+          '  • A rare celebratory or comforting beat where a GIF fits naturally',
+          '',
+          'DO NOT call this for:',
+          '  • Every message or even most messages — silence is fine',
+          '  • Generic greetings, hellos, or casual chat',
+          '  • Anything where a GIF would feel forced or performative',
+          '',
+          'After finding the GIF, you will receive its title and tags.',
+          'If the result seems off or irrelevant, DO NOT include the URL in your message.',
+          'If it fits, append the Tenor URL on its own line at the very END of your reply — Discord will auto-embed it.',
+          'Never mention the URL as text or describe it — just place it on its own line.',
+        ].join('\n'),
+        parameters: {
+          type: PARAMETER_TYPES.OBJECT,
+          properties: {
+            query: {
+              type:        PARAMETER_TYPES.STRING,
+              description: 'Short Tenor search term (2–4 descriptive words, e.g. "excited jumping", "shocked face", "disappointed sigh")'
+            }
+          },
+          required: ['query']
+        }
+      },
+      {
+        name: FUNCTION_NAMES.GET_SERVER_EMOJIS,
+        description: [
+          'Get the list of custom emojis available in this Discord server.',
+          'Returns each emoji\'s name and its ready-to-use Discord format (<:name:id> or <a:name:id> for animated).',
+          'Call this when you want to react with a server-specific emoji that fits the moment.',
+          'Use these naturally in your message text exactly as returned — Discord will render them.',
+          'Only call once per conversation turn; cache the list mentally for the rest of the chat.',
+          'Do NOT call this in DMs — server emojis are only available in guild channels.',
+        ].join('\n'),
+        parameters: {
+          type:       PARAMETER_TYPES.OBJECT,
+          properties: {}
+        }
+      },
+      {
+        name: FUNCTION_NAMES.GET_SERVER_STICKERS,
+        description: [
+          'Get the list of stickers available in this Discord server, and optionally queue one to send.',
+          '',
+          'TWO MODES:',
+          '  1. BROWSE (no sticker_id): Returns all sticker names and IDs so you can pick one.',
+          '  2. SEND   (sticker_id set): Queues that sticker to be delivered after your text reply.',
+          '',
+          'Workflow:',
+          '  Step 1 — Call with no sticker_id to see the list.',
+          '  Step 2 — If a sticker fits the moment, call again with the chosen sticker_id.',
+          '',
+          'Use stickers only when they genuinely match the mood — not for every message.',
+          'The sticker arrives as a follow-up to your text, so keep the text self-contained.',
+          'Only call this in guild channels, not DMs.',
+        ].join('\n'),
+        parameters: {
+          type: PARAMETER_TYPES.OBJECT,
+          properties: {
+            sticker_id: {
+              type:        PARAMETER_TYPES.STRING,
+              description: 'Optional. ID of the sticker to send after your reply. Omit to just browse the list.'
+            }
+          }
         }
       }
     ]
