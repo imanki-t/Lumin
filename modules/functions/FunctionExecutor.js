@@ -5,16 +5,17 @@
  * @module modules/functions/FunctionExecutor
  */
 
-import * as db                   from '../../database/index.js';
-import { memorySystem }          from '../../memory/MemorySystem.js';
-import { state, saveStateToFile, client } from '../../managers/BotManager.js';
-import { scheduleReminder }      from '../../commands/reminder/ReminderScheduler.js';
-import { parseRelativeTime }     from '../../utils.js';
-import { formatDuration }        from '../shared/messageFormatter.js';
-import { Logger }                from '../../core/Logger.js';
+import * as db                       from '../../database/index.js';
+import { memorySystem }              from '../../memory/MemorySystem.js';
+import { state, saveStateToFile, client, genAI, BOT_CONFIG } from '../../managers/BotManager.js';
+import { scheduleReminder }          from '../../commands/reminder/ReminderScheduler.js';
+import { parseRelativeTime }         from '../../utils.js';
+import { formatDuration }            from '../shared/messageFormatter.js';
+import { Logger }                    from '../../core/Logger.js';
 import { FUNCTION_NAMES, MEMORY_ACTIONS } from './FunctionRegistry.js';
-import { setPendingSticker }     from './pendingMedia.js';
-import axios                     from 'axios';
+import { setPendingSticker, setPendingGif, getLastBotMessage } from './pendingMedia.js';
+import { isGemmaModel }                  from '../config.js';
+import axios                             from 'axios';
 
 const logger = Logger.get('FunctionExecutor');
 
@@ -32,90 +33,67 @@ const MSG = Object.freeze({
   TIME_CHECKED:         'Time elapsed since last message:',
   OPERATION_FAILED:     'Failed',
   GIF_NO_API_KEY:       'GIF search is unavailable: GIPHY_API_KEY is not configured.',
-  GIF_NO_RESULTS:       'No GIF found for that search. Skip the GIF this time.',
-  GIF_API_ERROR:        'GIF search failed. Skip the GIF this time.',
+  GIF_NO_RESULTS:       'No GIF found for that search.',
+  GIF_API_ERROR:        'GIF search failed.',
   NO_GUILD:             'This tool is only available in server channels, not DMs.',
+  NO_DMS:               'This tool is only available in DM conversations.',
   STICKER_QUEUED:       'Sticker queued for delivery.',
-  STICKER_NOT_FOUND:    'Sticker not found on this server.'
+  STICKER_NOT_FOUND:    'Sticker not found on this server.',
+  NO_PERMISSION:        'Missing permission to perform this action.',
+  NOT_FOUND:            'Not found.'
 });
 
 // ============================================================================
 // PRIVATE HELPERS
 // ============================================================================
 
-/**
- * Left-pad a date component to a fixed width.
- * @param {number} value
- * @param {number} padLength
- * @returns {string}
- */
 function padDateComponent(value, padLength) {
   return String(value).padStart(padLength, '0');
 }
 
-/** M-11 fix: generate collision-safe reminder ID (timestamp + random suffix). */
 function generateReminderId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/**
- * Build a new reminder object with all required fields.
- * @param {string}      userId
- * @param {string}      message
- * @param {Date}        timeDate
- * @param {string|null} [channelId]
- * @returns {object}
- */
 function createReminderObject(userId, message, timeDate, channelId = null) {
-  return {
-    id:        generateReminderId(),
-    userId,
-    message,
-    time:      timeDate.getTime(),
-    channelId,
-    active:    true
-  };
+  return { id: generateReminderId(), userId, message, time: timeDate.getTime(), channelId, active: true };
 }
 
-/**
- * Ensure `state.reminders[userId]` is initialised.
- * @param {string} userId
- */
 function initializeUserReminders(userId) {
   if (!state.reminders) state.reminders = {};
   if (!state.reminders[userId]) state.reminders[userId] = [];
 }
 
-/**
- * Build the birthday data object for DB persistence.
- * Stores month/day as zero-padded strings for consistent DB format.
- * L-16 fix: document that month/day must be parsed with parseInt when read back.
- * @param {number}      month
- * @param {number}      day
- * @param {string|null} guildId
- * @returns {object}
- */
 function createBirthdayData(month, day, guildId) {
   return {
-    month:      padDateComponent(parseInt(month, 10), 2),  // L-16: ensure int before padding
-    day:        padDateComponent(parseInt(day, 10), 2),
+    month:      padDateComponent(parseInt(month, 10), 2),
+    day:        padDateComponent(parseInt(day, 10),   2),
     nameType:   'self',
     preference: 'both',
     guildId
   };
 }
 
+/** Format bytes to human-readable size. */
+function fmtBytes(b) {
+  if (!b) return '0 B';
+  const k = 1024, units = ['B','KB','MB','GB'];
+  const i = Math.floor(Math.log(b) / Math.log(k));
+  return `${(b / Math.pow(k, i)).toFixed(1)} ${units[i]}`;
+}
+
+/** Format a Date to a readable string. */
+function fmtDate(d) {
+  if (!d) return 'Unknown';
+  return new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
 // ============================================================================
 // INDIVIDUAL FUNCTION HANDLERS
 // ============================================================================
 
-/**
- * Handle `manage_personal_memory` — add or remove a user fact.
- * @param {string} userId
- * @param {string} action - 'add' | 'remove'
- * @param {string} info
- * @returns {Promise<{ result: string }>}
- */
+// ── Memory ────────────────────────────────────────────────────────────────────
+
 async function handleManageMemory(userId, action, info) {
   if (action === MEMORY_ACTIONS.ADD) {
     await memorySystem.addPersonalData(userId, info);
@@ -125,21 +103,8 @@ async function handleManageMemory(userId, action, info) {
   return { result: `${MSG.MEMORY_REMOVE_SUCCESS}: ${info}` };
 }
 
-/**
- * Handle `manage_server_fact` — add or remove a guild-scoped shared fact.
- * These facts are visible to ALL users in the server, making it possible
- * to give consistent answers about inter-member relationships and server context.
- *
- * @param {string|null} guildId
- * @param {string}      action   - 'add' | 'remove'
- * @param {string}      info
- * @param {string}      [category='general']
- * @returns {Promise<{ result: string }>}
- */
 async function handleManageServerFact(guildId, action, info, category = 'general') {
-  if (!guildId) {
-    return { result: 'Server facts are only available in guild (server) channels, not DMs.' };
-  }
+  if (!guildId) return { result: 'Server facts are only available in guild channels, not DMs.' };
   try {
     if (action === MEMORY_ACTIONS.ADD) {
       await db.saveServerFact(guildId, info, category);
@@ -153,136 +118,58 @@ async function handleManageServerFact(guildId, action, info, category = 'general
   }
 }
 
-/**
- * Handle `search_memory` — unified parallel search across all memory stores.
- *
- * Resolves cross-context parameters from the Discord client here so that
- * MemorySystem.searchMemory() remains framework-agnostic.  All actual search
- * logic, parallelism, timeouts, and deduplication live in searchMemory().
- *
- * Standard search (always):
- *   • Vector RAG memories (current context)
- *   • User personal facts
- *   • Personal data (timezone, birthday, etc.)
- *   • Current server facts
- *
- * Cross-context search (crossContextEnabled only):
- *   • RAG memories from other servers / DMs this user appears in
- *   • Server facts from other guilds the user is in
- *
- * @param {string}      userId
- * @param {string|null} guildId
- * @param {string}      historyId
- * @param {string}      query
- * @returns {Promise<{ result: string }>}
- */
 async function handleSearchMemory(userId, guildId, historyId, query) {
-  // ── Resolve cross-context settings ───────────────────────────────────────
   const crossContextEnabled = state.userSettings?.[userId]?.crossContextEnabled ?? false;
-
-  // Pre-compute other guild IDs from the Discord client cache.
-  // Only pay this cost when cross-context is actually on; skipped entirely otherwise.
   let otherGuildIds = [];
   if (crossContextEnabled && userId) {
     try {
       otherGuildIds = client.guilds.cache
         .filter(g => g.members.cache.has(userId) && g.id !== guildId)
         .map(g => g.id);
-    } catch { /* non-fatal — cross-guild is best-effort */ }
+    } catch { /* non-fatal */ }
   }
-
-  // ── Delegate to fully parallel searchMemory ───────────────────────────────
-  const results = await memorySystem.searchMemory(
-    userId,
-    guildId,
-    historyId,
-    query,
-    { crossContextEnabled, otherGuildIds }
-  );
-
-  return {
-    result: results.length > 0 ? results.join('\n') : MSG.NO_MEMORIES_FOUND
-  };
+  const results = await memorySystem.searchMemory(userId, guildId, historyId, query, { crossContextEnabled, otherGuildIds });
+  return { result: results.length > 0 ? results.join('\n') : MSG.NO_MEMORIES_FOUND };
 }
 
-/**
- * Handle `set_reminder` — parse relative time, persist, and schedule.
- * @param {string} userId
- * @param {string} message
- * @param {string} timeRelative  - e.g. "5 minutes", "tomorrow at 10am"
- * @returns {Promise<{ result: string }>}
- */
+// ── Scheduling ────────────────────────────────────────────────────────────────
+
 async function handleSetReminder(userId, message, timeRelative) {
   const timeDate = parseRelativeTime(timeRelative);
   const reminder = createReminderObject(userId, message, timeDate);
-
   initializeUserReminders(userId);
   state.reminders[userId].push(reminder);
-
-  // L-15 fix: only save the specific reminder — no need for full saveStateToFile()
   await db.saveReminder(userId, reminder);
-
   scheduleReminder(client, reminder);
   memorySystem.invalidatePersonalDataCache(userId);
-
   return { result: `${MSG.REMINDER_SET} ${timeDate.toLocaleString()}` };
 }
 
-/**
- * Handle `set_birthday` — persist the user's birthday.
- * @param {string}      userId
- * @param {number}      month
- * @param {number}      day
- * @param {string|null} guildId
- * @returns {Promise<{ result: string }>}
- */
 async function handleSetBirthday(userId, month, day, guildId) {
   const birthdayKey  = `${userId}_${month}_${day}`;
   const birthdayData = createBirthdayData(month, day, guildId);
-
   await db.saveBirthday(birthdayKey, birthdayData);
   memorySystem.invalidatePersonalDataCache(userId);
-
   return { result: `${MSG.BIRTHDAY_SET} ${month}/${day}` };
 }
 
-/**
- * Handle `set_timezone` — persist the user's IANA timezone.
- * @param {string} userId
- * @param {string} timezone
- * @returns {Promise<{ result: string }>}
- */
 async function handleSetTimezone(userId, timezone) {
   await db.saveUserTimezone(userId, timezone);
   memorySystem.invalidatePersonalDataCache(userId);
-
   return { result: `${MSG.TIMEZONE_SET} ${timezone}` };
 }
 
-/**
- * Handle `check_time_elapsed` — calculate time since the last history entry.
- * @param {string|null} historyId
- * @param {string}      userId
- * @param {string|null} guildId
- * @returns {Promise<{ result: string }>}
- */
 async function handleCheckTimeElapsed(historyId, userId, guildId) {
   const targetId = historyId || guildId || userId;
   try {
     const allHistory = await db.getChatHistory(targetId);
     if (!allHistory) return { result: 'No conversation history found.' };
-
     const historyArray = [];
-    for (const key of Object.keys(allHistory)) {
-      historyArray.push(...(allHistory[key] || []));
-    }
-
+    for (const key of Object.keys(allHistory)) historyArray.push(...(allHistory[key] || []));
     if (historyArray.length === 0) return { result: 'No previous messages found.' };
-
     historyArray.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
     const lastMsg = historyArray[historyArray.length - 1];
     const diff    = Date.now() - (lastMsg.timestamp || Date.now());
-
     return { result: `${MSG.TIME_CHECKED} ${formatDuration(diff)}` };
   } catch (error) {
     logger.error('Error checking time elapsed', error);
@@ -290,38 +177,22 @@ async function handleCheckTimeElapsed(historyId, userId, guildId) {
   }
 }
 
-/**
- * Handle `get_message_timestamp` — find the exact timestamp of a message matching a query.
- * Uses vector search to locate the closest memory entry, then returns its stored timestamp.
- *
- * @param {string}      userId
- * @param {string|null} guildId
- * @param {string|null} historyId
- * @param {string}      query
- * @returns {Promise<{ result: string }>}
- */
 async function handleGetMessageTimestamp(userId, guildId, historyId, query) {
   try {
     const targetId = historyId || guildId || userId;
     const { embeddingService } = await import('../../memory/EmbeddingService.js');
     const { findSimilarMemories } = await import('../../database/vectorSearch.js');
-
     const queryEmbedding = await embeddingService.generateEmbedding(query, 'RETRIEVAL_QUERY');
     if (!queryEmbedding) return { result: 'Could not generate embedding for timestamp search.' };
-
     const results = await findSimilarMemories(targetId, queryEmbedding, 1);
     if (!results?.length) return { result: 'No matching message found in memory.' };
-
     const entry = results[0];
     if (!entry.timestamp) return { result: 'Message found but timestamp not recorded.' };
-
-    const date = new Date(entry.timestamp);
+    const date      = new Date(entry.timestamp);
     const formatted = date.toLocaleString('en-US', {
       weekday: 'long', year: 'numeric', month: 'long',
       day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
     });
-
-    // Extract a snippet of the matched message text
     const snippet = entry.text ? ` (about: "${entry.text.slice(0, 80)}...")` : '';
     return { result: `That message was sent on: ${formatted}${snippet}` };
   } catch (error) {
@@ -330,78 +201,36 @@ async function handleGetMessageTimestamp(userId, guildId, historyId, query) {
   }
 }
 
-/**
- * Handle `get_current_datetime` — return the live current date and time.
- *
- * Critically, `new Date()` is called at invocation time, NOT at bot startup,
- * so the result is always fresh regardless of how long the bot has been running.
- * The user's stored IANA timezone (if any) is applied so the response reflects
- * their local time instead of the server's system clock.
- *
- * @param {string} userId
- * @returns {{ result: string }}
- */
 function handleGetCurrentDatetime(userId) {
-  // `state` is top-level imported — read .userTimezones at call-time, never at startup
   const timezone = state.userTimezones?.[userId] || 'UTC';
-  const now      = new Date();  // fresh every single call, never stale from startup
-
+  const now = new Date();
   let formatted, tzLabel;
   try {
-    // Full human-readable datetime in the user's timezone
     formatted = now.toLocaleString('en-US', {
-      timeZone:     timezone,
-      weekday:      'long',
-      year:         'numeric',
-      month:        'long',
-      day:          'numeric',
-      hour:         '2-digit',
-      minute:       '2-digit',
-      second:       '2-digit',
-      hour12:       true,
-      timeZoneName: 'short'
+      timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long',
+      day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: true, timeZoneName: 'short'
     });
-
     tzLabel = timezone === 'UTC'
       ? 'UTC (no timezone saved — use /timezone to personalise)'
       : timezone;
-
   } catch {
-    // Fallback: the IANA string stored for this user is unrecognised — use server local time
     formatted = now.toLocaleString('en-US', {
-      weekday:      'long',
-      year:         'numeric',
-      month:        'long',
-      day:          'numeric',
-      hour:         '2-digit',
-      minute:       '2-digit',
-      second:       '2-digit',
-      hour12:       true,
-      timeZoneName: 'short'
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short'
     });
     tzLabel = 'UTC (stored timezone was invalid — please use /timezone to fix it)';
   }
-
-  return {
-    result: `Current date/time: ${formatted} | Timezone used: ${tzLabel}`
-  };
+  return { result: `Current date/time: ${formatted} | Timezone used: ${tzLabel}` };
 }
 
-// ── Simple word-based content filter for GIF titles/tags ──────────────────────
-// Tenor's contentfilter=medium handles most cases at the API level.
-// This is a last-line defence for edge cases that slip through.
+// ── GIF ───────────────────────────────────────────────────────────────────────
+
 const GIF_BLOCK_TERMS = new Set([
   'nsfw', 'sexy', 'nude', 'naked', 'porn', 'sex', 'hentai',
-  'gore', 'blood', 'dead', 'kill', 'murder', 'shoot',
-  'slur', 'racist', 'hate'
+  'gore', 'blood', 'dead', 'kill', 'murder', 'shoot', 'slur', 'racist', 'hate'
 ]);
 
-/**
- * Returns true if the GIF title or tags contain a blocked term.
- * @param {string}   title
- * @param {string[]} tags
- * @returns {boolean}
- */
 function isGifBlocked(title, tags) {
   const haystack = [title, ...tags].join(' ').toLowerCase();
   for (const term of GIF_BLOCK_TERMS) {
@@ -411,233 +240,841 @@ function isGifBlocked(title, tags) {
 }
 
 /**
- * Handle `search_gif` — search Tenor for a GIF and validate it.
- *
- * Returns the Tenor page URL to the model so it can decide whether to include
- * it at the end of its reply. Discord auto-embeds Tenor URLs.
- *
- * Requires GIPHY_API_KEY in environment. Uses rating=pg at the API
- * level plus a local term blocklist for extra safety.
- *
- * @param {string} query  - Search terms (2–4 words)
- * @returns {Promise<{ result: string }>}
+ * Search for a GIF and store its URL in pendingGif (keyed by historyId).
+ * The GIF is sent as a clean image embed by ResponseHandler — no URL in text.
  */
-async function handleSearchGif(query) {
+async function handleSearchGif(query, historyId) {
   const apiKey = process.env.GIPHY_API_KEY;
   if (!apiKey) return { result: MSG.GIF_NO_API_KEY };
 
   try {
     const { data } = await axios.get('https://api.giphy.com/v1/gifs/search', {
-      params: {
-        q:       query,
-        api_key: apiKey,
-        limit:   5,
-        rating:  'pg',     // server-side content filter: g, pg, pg-13, r
-        lang:    'en'
-      },
+      params: { q: query, api_key: apiKey, limit: 5, rating: 'pg', lang: 'en' },
       timeout: 5000
     });
 
     const results = data?.data;
     if (!results?.length) return { result: MSG.GIF_NO_RESULTS };
 
-    // Pick first safe result
     for (const item of results) {
       const title = item.title || '';
-      const tags  = item.tags || [];
+      const tags  = item.tags  || [];
+      if (isGifBlocked(title, tags)) { logger.debug(`GIF blocked: "${title}"`); continue; }
 
-      if (isGifBlocked(title, tags)) {
-        logger.debug(`GIF blocked by content filter: "${title}"`);
-        continue;
-      }
+      // Prefer the MP4 URL for Discord (better quality), fallback to GIF
+      const gifUrl = item.images?.fixed_height?.mp4
+        || item.images?.original?.url
+        || item.url;
+      if (!gifUrl) continue;
 
-      const pageUrl = item.url;
-      if (!pageUrl) continue;
+      // Store for ResponseHandler to send as clean embed image
+      if (historyId) setPendingGif(historyId, gifUrl);
 
-      const tagList = tags.slice(0, 6).join(', ') || 'none';
+      const tagList = tags.slice(0, 5).join(', ') || 'none';
       return {
         result: [
-          `GIF found!`,
-          `Title: "${title}"`,
-          `Tags: [${tagList}]`,
-          `URL: ${pageUrl}`,
-          ``,
-          `If this GIF fits the moment, put the URL on its own line at the very END of your message.`,
-          `If it doesn't feel right, just don't include it — no explanation needed.`
+          `GIF found: "${title}" [${tagList}]`,
+          `It will be sent as an image automatically after your reply.`,
+          `Do NOT include any URL or link in your text response.`
         ].join('\n')
       };
     }
 
     return { result: MSG.GIF_NO_RESULTS };
-
   } catch (error) {
     logger.error('GIF search failed', error);
     return { result: MSG.GIF_API_ERROR };
   }
 }
 
-/**
- * Handle `get_server_emojis` — return all custom emojis in the guild.
- *
- * Returns the ready-to-use Discord format string for each emoji so the model
- * can copy-paste it directly into its reply text. Discord renders these as images.
- *
- * @param {string|null} guildId
- * @returns {{ result: string }}
- */
+// ── Emojis / stickers ─────────────────────────────────────────────────────────
+
 function handleGetServerEmojis(guildId) {
   if (!guildId) return { result: MSG.NO_GUILD };
-
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return { result: 'Could not access server emoji list.' };
-
   const emojis = guild.emojis.cache;
   if (!emojis.size) return { result: 'This server has no custom emojis.' };
-
   const lines = emojis.map(e => {
     const fmt = e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`;
     return `${e.name}: ${fmt}`;
   });
-
   return {
     result: [
       `Server has ${emojis.size} custom emoji(s). Use the format exactly as shown:`,
-      '',
-      ...lines,
-      '',
+      '', ...lines, '',
       'Copy the format string directly into your message text — Discord renders it.'
     ].join('\n')
   };
 }
 
-/**
- * Handle `get_server_stickers` — list guild stickers, and optionally queue one.
- *
- * When called WITHOUT sticker_id: returns names and IDs of all server stickers.
- * When called WITH sticker_id: validates the sticker exists and parks it in
- * pendingMedia so ResponseHandler sends it as a follow-up after the text reply.
- *
- * @param {string|null} guildId
- * @param {string|null} historyId
- * @param {string|null} stickerId  - If provided, queue this sticker for sending
- * @returns {Promise<{ result: string }>}
- */
 async function handleGetServerStickers(guildId, historyId, stickerId) {
   if (!guildId) return { result: MSG.NO_GUILD };
-
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return { result: 'Could not access server sticker list.' };
-
-  // Fetch from Discord API to ensure cache is fresh (stickers aren't always in cache)
   let stickers;
-  try {
-    stickers = await guild.stickers.fetch();
-  } catch {
-    stickers = guild.stickers.cache;
-  }
-
+  try { stickers = await guild.stickers.fetch(); }
+  catch { stickers = guild.stickers.cache; }
   if (!stickers.size) return { result: 'This server has no custom stickers.' };
-
-  // SEND mode: validate and queue
   if (stickerId) {
     const sticker = stickers.get(stickerId);
     if (!sticker) return { result: MSG.STICKER_NOT_FOUND };
-
     setPendingSticker(historyId, stickerId);
-    return {
-      result: `${MSG.STICKER_QUEUED} Will send sticker "${sticker.name}" after your reply.`
-    };
+    return { result: `${MSG.STICKER_QUEUED} Will send sticker "${sticker.name}" after your reply.` };
   }
-
-  // BROWSE mode: return the list
   const lines = stickers.map(s =>
     `"${s.name}" — ID: ${s.id}${s.description ? ` (${s.description})` : ''}`
   );
-
   return {
     result: [
-      `Server has ${stickers.size} sticker(s):`,
-      '',
-      ...lines,
-      '',
-      'To send one, call this tool again with the chosen sticker_id.',
-      'The sticker will be sent as a follow-up to your text reply.'
+      `Server has ${stickers.size} sticker(s):`, '', ...lines, '',
+      'To send one, call this tool again with the chosen sticker_id.'
     ].join('\n')
   };
 }
 
+// ── Profile ───────────────────────────────────────────────────────────────────
 
+async function handleCheckProfile(targetUserId, guildId) {
+  try {
+    const user = await client.users.fetch(targetUserId, { force: true });
+    const isSelf = targetUserId === client.user?.id;
+
+    const lines = [
+      `**${user.displayName}** (@${user.username})`,
+      `🆔 ID: ${user.id}`,
+      `🤖 Bot: ${user.bot ? 'Yes' : 'No'}`,
+      `📅 Account created: ${fmtDate(user.createdAt)}`,
+      `🖼️ Avatar: ${user.displayAvatarURL({ size: 256 })}`,
+    ];
+
+    if (user.banner) lines.push(`🎨 Banner: ${user.bannerURL({ size: 512 })}`);
+    if (user.accentColor) lines.push(`🎨 Accent colour: #${user.accentColor.toString(16).padStart(6, '0')}`);
+
+    // Guild-specific info
+    if (guildId) {
+      const guild = client.guilds.cache.get(guildId);
+      if (guild) {
+        let member;
+        try { member = await guild.members.fetch(targetUserId); } catch { /* not in guild */ }
+
+        if (member) {
+          if (member.nickname) lines.push(`📛 Server nickname: ${member.nickname}`);
+          lines.push(`📅 Joined server: ${fmtDate(member.joinedAt)}`);
+
+          // Roles (exclude @everyone)
+          const roles = member.roles.cache
+            .filter(r => r.id !== guild.id)
+            .sort((a, b) => b.position - a.position)
+            .map(r => r.name);
+          if (roles.length) lines.push(`🏷️ Roles: ${roles.slice(0, 10).join(', ')}${roles.length > 10 ? ` (+${roles.length - 10} more)` : ''}`);
+
+          // Presence (requires GuildPresences intent)
+          const presence = member.presence;
+          if (presence) {
+            const statusEmoji = { online: '🟢', idle: '🌙', dnd: '🔴', offline: '⚫' };
+            lines.push(`${statusEmoji[presence.status] || '⚫'} Status: ${presence.status}`);
+
+            const activities = presence.activities;
+            if (activities?.length) {
+              for (const act of activities) {
+                if (act.type === 4) {
+                  // Custom status
+                  const emoji = act.emoji ? `${act.emoji.toString()} ` : '';
+                  lines.push(`💬 Custom status: ${emoji}${act.state || act.name || ''}`);
+                } else if (act.type === 0) {
+                  lines.push(`🎮 Playing: ${act.name}${act.details ? ` — ${act.details}` : ''}`);
+                } else if (act.type === 1) {
+                  lines.push(`📺 Streaming: ${act.name}${act.url ? ` (${act.url})` : ''}`);
+                } else if (act.type === 2) {
+                  lines.push(`🎵 Listening to: ${act.name}${act.details ? ` — ${act.details}` : ''}`);
+                } else if (act.type === 3) {
+                  lines.push(`📺 Watching: ${act.name}`);
+                } else if (act.type === 5) {
+                  lines.push(`🏆 Competing in: ${act.name}`);
+                }
+              }
+            }
+          } else if (!isSelf) {
+            lines.push(`⚫ Status: offline / not cached (GuildPresences intent may be needed)`);
+          }
+
+          // Voice state
+          const voiceState = member.voice;
+          if (voiceState?.channel) {
+            const vc = voiceState.channel;
+            const flags = [
+              voiceState.deaf    && '🔇 Server-deafened',
+              voiceState.selfDeaf && '🔇 Self-deafened',
+              voiceState.mute    && '🔕 Server-muted',
+              voiceState.selfMute && '🔕 Self-muted',
+              voiceState.streaming && '📡 Live',
+            ].filter(Boolean).join(', ');
+            lines.push(`🔊 In voice: ${vc.name}${flags ? ` (${flags})` : ''}`);
+          }
+        } else {
+          lines.push(`ℹ️ This user is not a member of this server.`);
+        }
+      }
+    }
+
+    return { result: lines.join('\n') };
+  } catch (error) {
+    logger.error('handleCheckProfile failed', error);
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+// ── Poll ──────────────────────────────────────────────────────────────────────
+
+async function handleCreatePoll(guildId, channelId, question, answersStr, durationHours = 24, allowMultiselect = false) {
+  if (!guildId) return { result: MSG.NO_GUILD };
+
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel?.isTextBased()) return { result: 'Cannot create a poll in this channel type.' };
+
+    const answers = answersStr
+      .split(',')
+      .map(a => a.trim())
+      .filter(Boolean)
+      .slice(0, 10);
+
+    if (answers.length < 2) return { result: 'A poll needs at least 2 answer options. Separate them with commas.' };
+
+    const duration = Math.max(1, Math.min(168, Math.round(durationHours)));
+
+    await channel.send({
+      poll: {
+        question:         { text: question.slice(0, 300) },
+        answers:          answers.map(a => ({ poll_media: { text: a.slice(0, 55) } })),
+        duration,
+        allow_multiselect: Boolean(allowMultiselect)
+      }
+    });
+
+    return { result: `Poll created with ${answers.length} options, running for ${duration}h.` };
+  } catch (error) {
+    logger.error('handleCreatePoll failed', error);
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+// ── DM / server messaging ─────────────────────────────────────────────────────
+
+async function handleSendDm(guildId, targetUserId, content) {
+  if (!guildId) return { result: 'send_dm can only be called from a server channel, not DMs.' };
+
+  try {
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) return { result: 'Could not access the current server.' };
+
+    // Verify target is in this server
+    let targetMember;
+    try { targetMember = await guild.members.fetch(targetUserId); }
+    catch { return { result: 'That user is not a member of this server.' }; }
+
+    const targetUser = await client.users.fetch(targetUserId);
+    await targetUser.send(content);
+
+    return { result: `DM sent to ${targetMember.displayName} (@${targetUser.username}).` };
+  } catch (error) {
+    logger.error('handleSendDm failed', error);
+    if (error.code === 50007) return { result: 'Cannot send DM — the user has DMs disabled or has blocked the bot.' };
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+async function handleSendServerMessage(userId, guildId, content, guildName, channelName) {
+  if (guildId) return { result: 'send_server_message is only for DM conversations. In a server, just respond normally.' };
+
+  try {
+    let targetGuild = null;
+
+    // Find by name if provided
+    if (guildName) {
+      targetGuild = client.guilds.cache.find(g =>
+        g.name.toLowerCase().includes(guildName.toLowerCase())
+      );
+    }
+
+    // Fallback: first guild where the user is a cached member
+    if (!targetGuild) {
+      for (const [, guild] of client.guilds.cache) {
+        if (guild.members.cache.has(userId)) { targetGuild = guild; break; }
+      }
+    }
+
+    // Last resort: first guild where the bot can fetch the user
+    if (!targetGuild) {
+      for (const [, guild] of client.guilds.cache) {
+        try {
+          await guild.members.fetch(userId);
+          targetGuild = guild;
+          break;
+        } catch { /* not in this guild */ }
+      }
+    }
+
+    if (!targetGuild) return { result: 'Could not find a mutual server to send the message to. Make sure you and the bot share a server.' };
+
+    // Find channel by name or use system/default channel
+    let targetChannel = null;
+    if (channelName) {
+      targetChannel = targetGuild.channels.cache.find(c =>
+        c.isTextBased() && c.viewable &&
+        c.name.toLowerCase().includes(channelName.toLowerCase())
+      );
+    }
+    if (!targetChannel) targetChannel = targetGuild.systemChannel;
+    if (!targetChannel) {
+      targetChannel = targetGuild.channels.cache.find(c => c.isTextBased() && c.viewable);
+    }
+
+    if (!targetChannel) return { result: 'Could not find a suitable text channel to send the message to.' };
+
+    await targetChannel.send(content);
+    return { result: `Message sent to #${targetChannel.name} in ${targetGuild.name}.` };
+  } catch (error) {
+    logger.error('handleSendServerMessage failed', error);
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+// ── Edit / delete ─────────────────────────────────────────────────────────────
+
+async function handleEditMessage(historyId, channelId, newContent, messageId) {
+  try {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) return { result: 'Could not access the channel.' };
+
+    let targetMessageId = messageId;
+
+    // If no explicit ID given, use the tracked last bot message
+    if (!targetMessageId) {
+      const lastBot = getLastBotMessage(historyId);
+      targetMessageId = lastBot?.messageId;
+    }
+
+    if (!targetMessageId) return { result: 'No recent bot message found to edit. Provide a message_id.' };
+
+    const msg = await channel.messages.fetch(targetMessageId).catch(() => null);
+    if (!msg) return { result: 'Message not found.' };
+    if (msg.author.id !== client.user.id) return { result: 'Can only edit my own messages.' };
+
+    // Edit preserving embeds if the message has them
+    if (msg.embeds.length > 0) {
+      const { EmbedBuilder } = await import('discord.js');
+      const oldEmbed  = msg.embeds[0];
+      const newEmbed  = EmbedBuilder.from(oldEmbed).setDescription(newContent);
+      await msg.edit({ content: ' ', embeds: [newEmbed] });
+    } else {
+      await msg.edit({ content: newContent, embeds: [] });
+    }
+
+    return { result: 'Message edited successfully.' };
+  } catch (error) {
+    logger.error('handleEditMessage failed', error);
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+async function handleDeleteMessage(historyId, channelId, messageId) {
+  try {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) return { result: 'Could not access the channel.' };
+
+    let targetMessageId = messageId;
+
+    if (!targetMessageId) {
+      const lastBot = getLastBotMessage(historyId);
+      targetMessageId = lastBot?.messageId;
+    }
+
+    if (!targetMessageId) return { result: 'No recent bot message found to delete. Provide a message_id.' };
+
+    const msg = await channel.messages.fetch(targetMessageId).catch(() => null);
+    if (!msg) return { result: 'Message not found.' };
+    if (msg.author.id !== client.user.id) return { result: 'Can only delete my own messages.' };
+
+    await msg.delete();
+    return { result: 'Message deleted.' };
+  } catch (error) {
+    logger.error('handleDeleteMessage failed', error);
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+// ── Pin / thread / reaction ───────────────────────────────────────────────────
+
+async function handlePinMessage(guildId, channelId, originalMessageId, targetMessageId) {
+  if (!guildId) return { result: MSG.NO_GUILD };
+
+  try {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) return { result: 'Could not access the channel.' };
+
+    const msgId = targetMessageId || originalMessageId;
+    if (!msgId) return { result: 'No message ID provided to pin.' };
+
+    const msg = await channel.messages.fetch(msgId).catch(() => null);
+    if (!msg) return { result: 'Message not found.' };
+
+    await msg.pin();
+    return { result: `Message pinned in #${channel.name}.` };
+  } catch (error) {
+    logger.error('handlePinMessage failed', error);
+    if (error.code === 50013) return { result: MSG.NO_PERMISSION + ' Need Manage Messages permission.' };
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+async function handleCreateThread(guildId, channelId, originalMessageId, threadName, startMessageId, autoArchive = 1440) {
+  if (!guildId) return { result: MSG.NO_GUILD };
+
+  const VALID_ARCHIVE = [60, 1440, 4320, 10080];
+  const archiveDuration = VALID_ARCHIVE.includes(autoArchive) ? autoArchive : 1440;
+
+  try {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) return { result: 'Could not access the channel.' };
+
+    const name = (threadName || 'New Thread').slice(0, 100);
+
+    if (startMessageId) {
+      // Thread from a specific message
+      const msg = await channel.messages.fetch(startMessageId).catch(() => null);
+      if (!msg) return { result: 'Message not found to start thread from.' };
+      const thread = await msg.startThread({ name, autoArchiveDuration: archiveDuration });
+      return { result: `Thread "${thread.name}" created from message in #${channel.name}.` };
+    }
+
+    // Standalone thread (from the original message or channel)
+    if (originalMessageId) {
+      const msg = await channel.messages.fetch(originalMessageId).catch(() => null);
+      if (msg) {
+        const thread = await msg.startThread({ name, autoArchiveDuration: archiveDuration });
+        return { result: `Thread "${thread.name}" created.` };
+      }
+    }
+
+    // Fallback: create private/public thread directly
+    const thread = await channel.threads.create({ name, autoArchiveDuration: archiveDuration });
+    return { result: `Thread "${thread.name}" created in #${channel.name}.` };
+  } catch (error) {
+    logger.error('handleCreateThread failed', error);
+    if (error.code === 50013) return { result: MSG.NO_PERMISSION + ' Need Manage Threads permission.' };
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+async function handleAddReaction(channelId, originalMessageId, emoji, targetMessageId) {
+  try {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) return { result: 'Could not access the channel.' };
+
+    const msgId = targetMessageId || originalMessageId;
+    if (!msgId) return { result: 'No message ID to react to.' };
+
+    const msg = await channel.messages.fetch(msgId).catch(() => null);
+    if (!msg) return { result: 'Message not found.' };
+
+    await msg.react(emoji);
+    return { result: `Reacted with ${emoji}.` };
+  } catch (error) {
+    logger.error('handleAddReaction failed', error);
+    if (error.code === 10014) return { result: 'Unknown emoji — make sure the emoji format is correct.' };
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+// ── Server / channel info ─────────────────────────────────────────────────────
+
+async function handleGetServerInfo(guildId) {
+  if (!guildId) return { result: MSG.NO_GUILD };
+
+  try {
+    const guild = await client.guilds.fetch({ guild: guildId, withCounts: true }).catch(() => client.guilds.cache.get(guildId));
+    if (!guild) return { result: 'Could not access server information.' };
+
+    const channelCounts = { text: 0, voice: 0, category: 0, stage: 0, forum: 0, announcement: 0 };
+    for (const [, ch] of guild.channels.cache) {
+      if (ch.type === 0)  channelCounts.text++;
+      else if (ch.type === 2) channelCounts.voice++;
+      else if (ch.type === 4) channelCounts.category++;
+      else if (ch.type === 5) channelCounts.announcement++;
+      else if (ch.type === 13) channelCounts.stage++;
+      else if (ch.type === 15) channelCounts.forum++;
+    }
+
+    const boostTier = ['None', 'Level 1', 'Level 2', 'Level 3'][guild.premiumTier] || 'Unknown';
+
+    const lines = [
+      `**${guild.name}**`,
+      `🆔 ID: ${guild.id}`,
+      `📅 Created: ${fmtDate(guild.createdAt)}`,
+      `👑 Owner ID: ${guild.ownerId}`,
+      ``,
+      `👥 Members: ${guild.memberCount ?? guild.members.cache.size}`,
+      `📢 Channels: ${channelCounts.text} text, ${channelCounts.voice} voice, ${channelCounts.stage} stage, ${channelCounts.forum} forum, ${channelCounts.announcement} announcements`,
+      `🏷️ Roles: ${guild.roles.cache.size}`,
+      `😀 Emojis: ${guild.emojis.cache.size}`,
+      `🎭 Stickers: ${guild.stickers.cache.size}`,
+      ``,
+      `🚀 Boost tier: ${boostTier} (${guild.premiumSubscriptionCount ?? 0} boosts)`,
+      `🔒 Verification: ${['None', 'Low', 'Medium', 'High', 'Very High'][guild.verificationLevel] ?? 'Unknown'}`,
+      `📍 Region: ${guild.preferredLocale}`,
+    ];
+
+    if (guild.description) lines.push(`📝 Description: ${guild.description}`);
+    if (guild.iconURL()) lines.push(`🖼️ Icon: ${guild.iconURL({ size: 256 })}`);
+
+    // Top roles
+    const topRoles = guild.roles.cache
+      .filter(r => r.id !== guild.id && !r.managed)
+      .sort((a, b) => b.position - a.position)
+      .first(8);
+    if (topRoles?.size) {
+      lines.push(``, `🏅 Top roles: ${[...topRoles.values()].map(r => r.name).join(', ')}`);
+    }
+
+    return { result: lines.join('\n') };
+  } catch (error) {
+    logger.error('handleGetServerInfo failed', error);
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+async function handleGetChannelInfo(currentChannelId, targetChannelId) {
+  const VOICE_MEMBER_LIMIT = 500;
+  const channelId = targetChannelId || currentChannelId;
+  if (!channelId) return { result: 'No channel ID available.' };
+
+  try {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) return { result: 'Channel not found.' };
+
+    const TYPE_NAMES = {
+      0: 'Text', 2: 'Voice', 4: 'Category', 5: 'Announcement',
+      10: 'Announcement Thread', 11: 'Public Thread', 12: 'Private Thread',
+      13: 'Stage', 14: 'Directory', 15: 'Forum', 16: 'Media'
+    };
+
+    const lines = [
+      `**#${channel.name}**`,
+      `🆔 ID: ${channel.id}`,
+      `📌 Type: ${TYPE_NAMES[channel.type] ?? channel.type}`,
+    ];
+
+    if (channel.parent) lines.push(`📁 Category: ${channel.parent.name}`);
+    if (channel.topic)  lines.push(`📝 Topic: ${channel.topic}`);
+
+    // Text-specific
+    if (channel.nsfw !== undefined) lines.push(`🔞 NSFW: ${channel.nsfw ? 'Yes' : 'No'}`);
+    if (channel.rateLimitPerUser)   lines.push(`🐢 Slowmode: ${channel.rateLimitPerUser}s`);
+
+    // Voice / stage specific
+    if (channel.bitrate)     lines.push(`🎙️ Bitrate: ${Math.round(channel.bitrate / 1000)}kbps`);
+    if (channel.userLimit != null) lines.push(`👥 User limit: ${channel.userLimit || 'Unlimited'}`);
+
+    // Voice members
+    if (channel.members) {
+      const memberCount = channel.members.size;
+      if (memberCount > 0) {
+        lines.push(``);
+        if (memberCount > VOICE_MEMBER_LIMIT) {
+          lines.push(`🔊 Connected: ${VOICE_MEMBER_LIMIT}+ users`);
+        } else {
+          const memberList = [...channel.members.values()]
+            .map(m => `${m.displayName}${m.voice?.selfMute ? ' 🔕' : ''}${m.voice?.selfDeaf ? ' 🔇' : ''}${m.voice?.streaming ? ' 📡' : ''}`)
+            .join(', ');
+          lines.push(`🔊 Connected (${memberCount}): ${memberList}`);
+        }
+      } else {
+        lines.push(`🔊 Connected: empty`);
+      }
+    }
+
+    // Stage-specific
+    if (channel.type === 13 && channel.stageInstance) {
+      const si = channel.stageInstance;
+      lines.push(`🎤 Stage topic: ${si.topic ?? 'None'}`);
+    }
+
+    if (channel.createdAt) lines.push(`📅 Created: ${fmtDate(channel.createdAt)}`);
+
+    return { result: lines.join('\n') };
+  } catch (error) {
+    logger.error('handleGetChannelInfo failed', error);
+    return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
+  }
+}
+
+// ── Meme (Reddit) ────────────────────────────────────────────────────────────
+
+const MEME_SUBREDDITS = ['memes', 'dankmemes', 'me_irl', 'wholesomememes', 'AdviceAnimals', 'ProgrammerHumor'];
+
+async function handleFetchMeme(historyId, subreddit) {
+  try {
+    const sub = subreddit?.trim() || MEME_SUBREDDITS[Math.floor(Math.random() * MEME_SUBREDDITS.length)];
+    const { data } = await axios.get(
+      `https://www.reddit.com/r/${encodeURIComponent(sub)}/random.json?limit=1`,
+      {
+        headers: { 'User-Agent': 'LuminBot/1.0' },
+        timeout: 6000
+      }
+    );
+
+    const posts = data?.[0]?.data?.children;
+    if (!posts?.length) return { result: 'No meme found — Reddit may be rate-limiting. Try again in a moment.' };
+
+    const post = posts[0]?.data;
+    if (!post) return { result: 'Could not parse meme data.' };
+
+    // Skip non-image / NSFW / stickied posts
+    if (post.over_18) return { result: 'The fetched meme was NSFW — skipped. Try again or specify a different subreddit.' };
+    if (post.stickied) return { result: 'Fetched a pinned post, not a meme. Try again.' };
+
+    const imageUrl =
+      post.url_overridden_by_dest ||
+      post.url;
+
+    const isImage = /\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(imageUrl);
+    if (!isImage) return { result: 'Fetched post has no direct image. Try again.' };
+
+    // Store for ResponseHandler to send as embed
+    if (historyId) setPendingGif(historyId, imageUrl);
+
+    const title   = post.title?.slice(0, 200) || 'Meme';
+    const upvotes = post.score ?? 0;
+    return {
+      result: [
+        `Meme fetched from r/${sub}: "${title}" (${upvotes.toLocaleString()} upvotes)`,
+        `It will be sent as an image automatically after your reply.`,
+        `Do NOT include any URL or link in your text response.`
+      ].join('\n')
+    };
+  } catch (error) {
+    logger.error('handleFetchMeme failed', error);
+    return { result: `Meme fetch failed: ${error.message}` };
+  }
+}
+
+// ── GIPHY sticker ─────────────────────────────────────────────────────────────
+
+async function handleSearchGiphySticker(query, historyId) {
+  const apiKey = process.env.GIPHY_API_KEY;
+  if (!apiKey) return { result: 'GIPHY sticker search unavailable: GIPHY_API_KEY is not configured.' };
+
+  try {
+    const { data } = await axios.get('https://api.giphy.com/v1/stickers/search', {
+      params: { q: query, api_key: apiKey, limit: 5, rating: 'pg', lang: 'en' },
+      timeout: 5000
+    });
+
+    const results = data?.data;
+    if (!results?.length) return { result: 'No sticker found for that search.' };
+
+    for (const item of results) {
+      const title = item.title || '';
+      const tags  = item.tags  || [];
+      if (isGifBlocked(title, tags)) { logger.debug(`Sticker blocked: "${title}"`); continue; }
+
+      // Prefer fixed-height MP4 for Discord, fallback to original GIF URL
+      const stickerUrl =
+        item.images?.fixed_height?.mp4 ||
+        item.images?.fixed_height?.url ||
+        item.images?.original?.url;
+      if (!stickerUrl) continue;
+
+      if (historyId) setPendingGif(historyId, stickerUrl);
+
+      return {
+        result: [
+          `Sticker found: "${title}"`,
+          `It will be sent as an image automatically after your reply.`,
+          `Do NOT include any URL or link in your text response.`
+        ].join('\n')
+      };
+    }
+
+    return { result: 'No suitable sticker found for that search.' };
+  } catch (error) {
+    logger.error('handleSearchGiphySticker failed', error);
+    return { result: `Sticker search failed: ${error.message}` };
+  }
+}
+
+// ── Google search (Gemma-only fallback) ──────────────────────────────────────
+
+async function handleGoogleSearch(query) {
+  try {
+    const { MODELS, GEMMA_DEFAULT_MODEL, getGenerationConfig, safetySettings } = await import('../config.js');
+
+    const searchFallbackChain = [
+      MODELS['gemini-3.1-flash-lite'] ?? 'gemini-3.1-flash-lite',
+      MODELS[GEMMA_DEFAULT_MODEL]     ?? 'gemma-4-26b-a4b-it'
+    ];
+
+    const systemInstruction = [
+      'You are a search assistant. Perform a web search and provide accurate, current results.',
+      'Structure your answer as: a brief summary, key findings, and source URLs.',
+      'Be concise and factual. Current date: ' + new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+    ].join(' ');
+
+    let lastError;
+    for (const searchModel of searchFallbackChain) {
+      try {
+        const request = {
+          model:    searchModel,
+          contents: [{ role: 'user', parts: [{ text: `Search the web for: ${query}` }] }],
+          config: {
+            ...getGenerationConfig(searchModel),
+            safetySettings,
+            tools: [{ googleSearch: {} }],
+            systemInstruction
+          }
+        };
+
+        const result = await genAI.models.generateContent(request);
+        const text   = result.candidates?.[0]?.content?.parts
+          ?.filter(p => p.text)
+          ?.map(p => p.text)
+          ?.join('') || 'No results found.';
+
+        return { result: text };
+      } catch (err) {
+        logger.warn(`handleGoogleSearch: model ${searchModel} failed — ${err.message}`);
+        lastError = err;
+      }
+    }
+
+    return { result: `Search failed: ${lastError?.message ?? 'unknown error'}` };
+  } catch (error) {
+    logger.error('handleGoogleSearch failed', error);
+    return { result: `Search failed: ${error.message}` };
+  }
+}
+
+// ============================================================================
+// FAN-OUT EXECUTOR
+// ============================================================================
 
 /**
- * Execute all function calls produced by the model in a single turn.
- * Calls are processed in parallel; each call is individually try-caught so
- * one failure does not abort the others.
- *
- * Returns an array of `{ functionResponse: { name, response } }` objects
- * ready to be included in the next Gemini `contents` turn.
+ * Execute all function calls produced by the model in a single turn, in parallel.
  *
  * @param {object[]}    calls      - array of { name, args } OR { functionCall: { name, args } }
  * @param {string}      userId
  * @param {string|null} guildId
  * @param {string|null} historyId
+ * @param {string|null} channelId
+ * @param {string|null} originalMessageId  - ID of the triggering user message
+ * @param {string}      [modelName]        - Active model name (used to guard Gemma-only tools)
  * @returns {Promise<object[]>}
  */
-export async function executeFunctionCalls(calls, userId, guildId, historyId) {
+export async function executeFunctionCalls(calls, userId, guildId, historyId, channelId = null, originalMessageId = null, modelName = '') {
   return Promise.all(
     calls.map(async (raw) => {
-      // Normalise: handle both flat {name,args} and wrapped {functionCall:{name,args}}
       const call = raw?.functionCall ?? raw;
       const args = call.args || {};
       let response = {};
 
       try {
         switch (call.name) {
+          // ── Memory ────────────────────────────────────────────────────────
           case FUNCTION_NAMES.MANAGE_MEMORY:
             response = await handleManageMemory(userId, args.action, args.info);
             break;
-
           case FUNCTION_NAMES.MANAGE_SERVER_FACT:
             response = await handleManageServerFact(guildId, args.action, args.info, args.category);
             break;
-
           case FUNCTION_NAMES.SEARCH_MEMORY:
             response = await handleSearchMemory(userId, guildId, historyId, args.query);
             break;
 
+          // ── Scheduling ────────────────────────────────────────────────────
           case FUNCTION_NAMES.SET_REMINDER:
             response = await handleSetReminder(userId, args.message, args.time_relative);
             break;
-
           case FUNCTION_NAMES.SET_BIRTHDAY:
             response = await handleSetBirthday(userId, args.month, args.day, guildId);
             break;
-
           case FUNCTION_NAMES.SET_TIMEZONE:
             response = await handleSetTimezone(userId, args.timezone);
             break;
-
           case FUNCTION_NAMES.CHECK_TIME:
             response = await handleCheckTimeElapsed(historyId, userId, guildId);
             break;
-
           case FUNCTION_NAMES.GET_TIMESTAMP:
             response = await handleGetMessageTimestamp(userId, guildId, historyId, args.query);
             break;
-
           case FUNCTION_NAMES.GET_CURRENT_DATETIME:
             response = handleGetCurrentDatetime(userId);
             break;
 
+          // ── Media ─────────────────────────────────────────────────────────
           case FUNCTION_NAMES.SEARCH_GIF:
-            response = await handleSearchGif(args.query);
+            response = await handleSearchGif(args.query, historyId);
             break;
-
           case FUNCTION_NAMES.GET_SERVER_EMOJIS:
             response = handleGetServerEmojis(guildId);
             break;
-
           case FUNCTION_NAMES.GET_SERVER_STICKERS:
             response = await handleGetServerStickers(guildId, historyId, args.sticker_id ?? null);
+            break;
+
+          // ── Meme / GIPHY sticker ────────────────────────────────────────────
+          case FUNCTION_NAMES.FETCH_MEME:
+            response = await handleFetchMeme(historyId, args.subreddit ?? null);
+            break;
+          case FUNCTION_NAMES.SEARCH_GIPHY_STICKER:
+            response = await handleSearchGiphySticker(args.query, historyId);
+            break;
+
+          // ── Discord actions ────────────────────────────────────────────────
+          case FUNCTION_NAMES.CHECK_PROFILE:
+            response = await handleCheckProfile(args.user_id, guildId);
+            break;
+          case FUNCTION_NAMES.CREATE_POLL:
+            response = await handleCreatePoll(guildId, channelId, args.question, args.answers, args.duration_hours, args.allow_multiselect);
+            break;
+          case FUNCTION_NAMES.SEND_DM:
+            response = await handleSendDm(guildId, args.user_id, args.content);
+            break;
+          case FUNCTION_NAMES.SEND_SERVER_MSG:
+            response = await handleSendServerMessage(userId, guildId, args.content, args.guild_name, args.channel_name);
+            break;
+          case FUNCTION_NAMES.EDIT_MESSAGE:
+            response = await handleEditMessage(historyId, channelId, args.new_content, args.message_id ?? null);
+            break;
+          case FUNCTION_NAMES.DELETE_MESSAGE:
+            response = await handleDeleteMessage(historyId, channelId, args.message_id ?? null);
+            break;
+          case FUNCTION_NAMES.PIN_MESSAGE:
+            response = await handlePinMessage(guildId, channelId, originalMessageId, args.message_id ?? null);
+            break;
+          case FUNCTION_NAMES.CREATE_THREAD:
+            response = await handleCreateThread(guildId, channelId, originalMessageId, args.name, args.message_id ?? null, args.auto_archive ?? 1440);
+            break;
+          case FUNCTION_NAMES.ADD_REACTION:
+            response = await handleAddReaction(channelId, originalMessageId, args.emoji, args.message_id ?? null);
+            break;
+
+          // ── Info ──────────────────────────────────────────────────────────
+          case FUNCTION_NAMES.GET_SERVER_INFO:
+            response = await handleGetServerInfo(guildId);
+            break;
+          case FUNCTION_NAMES.GET_CHANNEL_INFO:
+            response = await handleGetChannelInfo(channelId, args.channel_id ?? null);
+            break;
+
+          // ── Gemma search ──────────────────────────────────────────────────
+          case FUNCTION_NAMES.GOOGLE_SEARCH:
+            if (!isGemmaModel(modelName)) {
+              response = { result: 'google_search is only available when using a Gemma model. Gemini models use native web search instead.' };
+            } else {
+              response = await handleGoogleSearch(args.query);
+            }
             break;
 
           default:
@@ -649,12 +1086,7 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId) {
         response = { error: `${MSG.OPERATION_FAILED}: ${error.message}` };
       }
 
-      return {
-        functionResponse: {
-          name:     call.name,
-          response: response
-        }
-      };
+      return { functionResponse: { name: call.name, response } };
     })
   );
 }

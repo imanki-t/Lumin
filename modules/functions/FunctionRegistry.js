@@ -11,18 +11,39 @@
 // ============================================================================
 
 export const FUNCTION_NAMES = Object.freeze({
+  // ── Memory ─────────────────────────────────────────────────────────────────
   MANAGE_MEMORY:        'manage_personal_memory',
   MANAGE_SERVER_FACT:   'manage_server_fact',
   SEARCH_MEMORY:        'search_memory',
+  // ── Scheduling ─────────────────────────────────────────────────────────────
   SET_REMINDER:         'set_reminder',
   SET_BIRTHDAY:         'set_birthday',
   SET_TIMEZONE:         'set_timezone',
   CHECK_TIME:           'check_time_elapsed',
   GET_TIMESTAMP:        'get_message_timestamp',
   GET_CURRENT_DATETIME: 'get_current_datetime',
+  // ── Media / expression ─────────────────────────────────────────────────────
   SEARCH_GIF:           'search_gif',
   GET_SERVER_EMOJIS:    'get_server_emojis',
-  GET_SERVER_STICKERS:  'get_server_stickers'
+  GET_SERVER_STICKERS:  'get_server_stickers',
+  // ── Discord actions ────────────────────────────────────────────────────────
+  CHECK_PROFILE:        'check_user_profile',
+  CREATE_POLL:          'create_poll',
+  SEND_DM:              'send_dm',
+  SEND_SERVER_MSG:      'send_server_message',
+  EDIT_MESSAGE:         'edit_bot_message',
+  DELETE_MESSAGE:       'delete_bot_message',
+  PIN_MESSAGE:          'pin_message',
+  CREATE_THREAD:        'create_thread',
+  ADD_REACTION:         'add_reaction',
+  // ── Information ────────────────────────────────────────────────────────────
+  GET_SERVER_INFO:      'get_server_info',
+  GET_CHANNEL_INFO:     'get_channel_info',
+  // ── Meme / GIPHY sticker ───────────────────────────────────────────────────
+  FETCH_MEME:           'fetch_meme',
+  SEARCH_GIPHY_STICKER: 'search_giphy_sticker',
+  // ── Gemma-only search ──────────────────────────────────────────────────────
+  GOOGLE_SEARCH:        'google_search',
 });
 
 export const MEMORY_ACTIONS = Object.freeze({
@@ -30,285 +51,424 @@ export const MEMORY_ACTIONS = Object.freeze({
   REMOVE: 'remove'
 });
 
-const PARAMETER_TYPES = Object.freeze({
-  STRING: 'STRING',
-  NUMBER: 'NUMBER',
-  OBJECT: 'OBJECT'
-});
+const S = 'STRING';
+const N = 'NUMBER';
+const O = 'OBJECT';
+const B = 'BOOLEAN';
 
 // ============================================================================
 // TOOL DECLARATIONS
 // ============================================================================
 
-/**
- * Gemini function-calling tool declarations.
- * Pass this array directly as the `tools` field in API requests.
- *
- * @type {object[]}
- */
 export const functionTools = [
   {
     functionDeclarations: [
+
+      // ── Memory tools ────────────────────────────────────────────────────────
+
       {
-        name:        FUNCTION_NAMES.MANAGE_MEMORY,
+        name: FUNCTION_NAMES.MANAGE_MEMORY,
         description: 'Add or remove permanent facts/memories about the CURRENT USER ONLY (their personal likes, dislikes, pets, preferences). Do NOT use this for facts involving other server members or group relationships — use manage_server_fact for those instead.',
         parameters: {
-          type: PARAMETER_TYPES.OBJECT,
+          type: O,
           properties: {
-            action: {
-              type:        PARAMETER_TYPES.STRING,
-              enum:        [MEMORY_ACTIONS.ADD, MEMORY_ACTIONS.REMOVE],
-              description: 'Action to perform'
-            },
-            info: {
-              type:        PARAMETER_TYPES.STRING,
-              description: 'The fact or information to store/delete'
-            }
+            action: { type: S, enum: ['add', 'remove'], description: 'Action to perform' },
+            info:   { type: S, description: 'The fact or information to store/delete' }
           },
           required: ['action', 'info']
         }
       },
+
       {
-        name:        FUNCTION_NAMES.MANAGE_SERVER_FACT,
+        name: FUNCTION_NAMES.MANAGE_SERVER_FACT,
         description: [
           'Add or remove a SHARED fact for this entire Discord server — visible to ALL members.',
-          'Call this AUTOMATICALLY whenever you learn something involving multiple people or the server community.',
-          'ALWAYS provide a category for new facts so they can be grouped and retrieved correctly.',
-          '',
-          'Categories:',
-          '  relationship — bonds between members (romantic, friendship, rivalry, family)',
-          '  nickname     — server nicknames / aliases members go by',
-          '  role         — who owns, admins, or runs things in the server',
-          '  activity     — shared games, hobbies, recurring hangouts',
-          '  event        — things that happened in/to the server community',
-          '  personal     — facts about one member that the whole server should know',
-          '',
-          'Include Discord user IDs in parentheses where known so facts survive username changes.',
-          'Keep using manage_personal_memory for facts about ONE user only.',
-          'ONLY callable when the conversation is in a guild channel (not DMs).',
-        ].join('\n'),
+          'ALWAYS provide a category for new facts.',
+          'Categories: relationship, nickname, role, activity, event, personal.',
+          'Include Discord user IDs in parentheses where known.',
+          'ONLY callable in guild channels, not DMs.',
+        ].join(' '),
         parameters: {
-          type: PARAMETER_TYPES.OBJECT,
+          type: O,
           properties: {
-            action: {
-              type:        PARAMETER_TYPES.STRING,
-              enum:        [MEMORY_ACTIONS.ADD, MEMORY_ACTIONS.REMOVE],
-              description: 'add — store a new server fact; remove — delete facts matching the keyword'
-            },
-            info: {
-              type:        PARAMETER_TYPES.STRING,
-              description: 'The fact to store (include Discord user IDs where known) or keyword to delete'
-            },
-            category: {
-              type:        PARAMETER_TYPES.STRING,
-              enum:        ['relationship', 'nickname', 'role', 'activity', 'event', 'personal'],
-              description: 'Category classifying this fact. Required for add; ignored for remove.'
-            }
+            action:   { type: S, enum: ['add', 'remove'], description: 'add or remove' },
+            info:     { type: S, description: 'The fact or keyword to delete' },
+            category: { type: S, enum: ['relationship', 'nickname', 'role', 'activity', 'event', 'personal'], description: 'Category (required for add)' }
           },
           required: ['action', 'info']
         }
       },
+
       {
-        name:        FUNCTION_NAMES.SEARCH_MEMORY,
+        name: FUNCTION_NAMES.SEARCH_MEMORY,
         description: [
-          'Search all memory stores for relevant past information.',
-          '',
-          'STANDARD SEARCH (always runs):',
-          '  • Conversation memories  — vector RAG from current context',
-          '  • Personal facts         — stored facts about the user',
-          '  • Personal data          — timezone, birthday, reminders, preferences',
-          '  • Server facts           — shared facts for this guild (when in a server)',
-          '',
-          'CROSS-CONTEXT SEARCH (when user has cross-context enabled):',
-          '  • Cross-server memories  — RAG from other servers this user is in',
-          '  • DM memories            — past DM conversation memories',
-          '  • Other-server facts     — facts from other guilds this user is in',
-          '',
-          'Call this when:',
-          '  (1) You genuinely lack the knowledge to answer (e.g. "who is X\'s boyfriend?", "what happened with Y?")',
-          '  (2) User asks explicitly about a past conversation ("do you remember...", "what did I say about...")',
-          '  (3) User asks direct personal questions about themselves or about you',
-          '  (4) You are in a DM and the user asks about relationships, nicknames, or server events',
-          'Do NOT call for general chat or questions you can already answer from current context.',
-        ].join('\n'),
+          'Search all memory stores (conversation memories, personal facts, server facts, cross-context).',
+          'Call when you lack knowledge to answer or the user asks about past conversations.',
+          'Do NOT call for general chat you can already answer from current context.',
+        ].join(' '),
         parameters: {
-          type: PARAMETER_TYPES.OBJECT,
+          type: O,
           properties: {
-            query: {
-              type:        PARAMETER_TYPES.STRING,
-              description: 'The search query to find relevant memories'
-            }
+            query: { type: S, description: 'The search query to find relevant memories' }
           },
           required: ['query']
         }
       },
+
+      // ── Scheduling tools ────────────────────────────────────────────────────
+
       {
-        name:        FUNCTION_NAMES.SET_REMINDER,
-        description: "Set a reminder for the user at a specific time (e.g., 'remind me to buy milk in 2 hours').",
+        name: FUNCTION_NAMES.SET_REMINDER,
+        description: "Set a reminder for the user at a specific time (e.g. 'remind me to buy milk in 2 hours').",
         parameters: {
-          type: PARAMETER_TYPES.OBJECT,
+          type: O,
           properties: {
-            message: {
-              type:        PARAMETER_TYPES.STRING,
-              description: 'What to remind the user about'
-            },
-            time_relative: {
-              type:        PARAMETER_TYPES.STRING,
-              description: "Relative time (e.g., '5 minutes', '2 hours', 'tomorrow at 10am')"
-            }
+            message:       { type: S, description: 'What to remind the user about' },
+            time_relative: { type: S, description: "Relative time (e.g. '5 minutes', '2 hours', 'tomorrow at 10am')" }
           },
           required: ['message', 'time_relative']
         }
       },
+
       {
-        name:        FUNCTION_NAMES.SET_BIRTHDAY,
+        name: FUNCTION_NAMES.SET_BIRTHDAY,
         description: "Store the user's birthday.",
         parameters: {
-          type: PARAMETER_TYPES.OBJECT,
+          type: O,
           properties: {
-            day: {
-              type:        PARAMETER_TYPES.NUMBER,
-              description: 'Day of birth'
-            },
-            month: {
-              type:        PARAMETER_TYPES.NUMBER,
-              description: 'Month of birth'
-            }
+            day:   { type: N, description: 'Day of birth' },
+            month: { type: N, description: 'Month of birth' }
           },
           required: ['day', 'month']
         }
       },
+
       {
-        name:        FUNCTION_NAMES.SET_TIMEZONE,
+        name: FUNCTION_NAMES.SET_TIMEZONE,
         description: "Set the user's timezone for reminders and time-sensitive tasks.",
         parameters: {
-          type: PARAMETER_TYPES.OBJECT,
+          type: O,
           properties: {
-            timezone: {
-              type:        PARAMETER_TYPES.STRING,
-              description: "IANA timezone string (e.g., 'America/New_York', 'Asia/Kolkata')"
-            }
+            timezone: { type: S, description: "IANA timezone string (e.g. 'America/New_York', 'Asia/Kolkata')" }
           },
           required: ['timezone']
         }
       },
+
       {
-        name:        FUNCTION_NAMES.CHECK_TIME,
-        description: 'Check the exact time elapsed since the last message in this conversation. Use this if the user asks "how long has it been" or if you need to know the passage of time for context.',
+        name: FUNCTION_NAMES.CHECK_TIME,
+        description: 'Check the exact time elapsed since the last message in this conversation.',
         parameters: {
-          type: PARAMETER_TYPES.OBJECT,
+          type: O,
           properties: {
-            reason: {
-              type:        PARAMETER_TYPES.STRING,
-              description: 'Optional reason for checking the time passage.'
-            }
+            reason: { type: S, description: 'Optional reason for checking' }
           }
         }
       },
+
       {
-        name:        FUNCTION_NAMES.GET_TIMESTAMP,
-        description: 'Fetch the exact timestamp (date and time) of a specific message from long-term memory. Use when the user asks when something was said or when a specific event/conversation occurred (e.g. "when did I tell you about X?", "what date did I mention Y?").',
+        name: FUNCTION_NAMES.GET_TIMESTAMP,
+        description: "Fetch the exact timestamp of a specific message from long-term memory. Use when the user asks when something was said (e.g. 'when did I tell you about X?').",
         parameters: {
-          type: PARAMETER_TYPES.OBJECT,
+          type: O,
           properties: {
-            query: {
-              type:        PARAMETER_TYPES.STRING,
-              description: 'Description of the message or topic to find the timestamp for'
-            }
+            query: { type: S, description: 'Description of the message or topic to find the timestamp for' }
           },
           required: ['query']
         }
       },
+
       {
         name: FUNCTION_NAMES.GET_CURRENT_DATETIME,
-        description: [
-          'Get the current LIVE date and time, adjusted for the user\'s saved timezone.',
-          'ALWAYS call this tool when the user asks anything about the current time or date',
-          '(e.g. "what time is it?", "what\'s today\'s date?", "what day is it?",',
-          '"is it morning/night?", "what\'s the time in my timezone?").',
-          'Do NOT guess or rely on your own training data — call this every single time',
-          'so the answer is always fresh and accurate.',
-        ].join(' '),
-        parameters: {
-          type:       PARAMETER_TYPES.OBJECT,
-          properties: {}
-          // No parameters needed — timezone is resolved server-side from the user's stored setting
-        }
+        description: 'Get the current LIVE date and time adjusted for the user\'s timezone. ALWAYS call this when asked about the current time or date — never guess.',
+        parameters: { type: O, properties: {} }
       },
-      // ── Media / expression tools ──────────────────────────────────────────
+
+      // ── Media / expression tools ─────────────────────────────────────────────
+
       {
         name: FUNCTION_NAMES.SEARCH_GIF,
         description: [
-          'Search Tenor for a GIF to send alongside your message.',
-          '',
-          'IMPORTANT — use this RARELY and only when a GIF would genuinely elevate the moment:',
-          '  • Someone shares exciting news you\'re actually hyped about',
-          '  • A conversation reaches a peak funny moment that earns a reaction',
-          '  • A rare celebratory or comforting beat where a GIF fits naturally',
-          '',
-          'DO NOT call this for:',
-          '  • Every message or even most messages — silence is fine',
-          '  • Generic greetings, hellos, or casual chat',
-          '  • Anything where a GIF would feel forced or performative',
-          '',
-          'After finding the GIF, you will receive its title and tags.',
-          'If the result seems off or irrelevant, DO NOT include the URL in your message.',
-          'If it fits, append the Tenor URL on its own line at the very END of your reply — Discord will auto-embed it.',
-          'Never mention the URL as text or describe it — just place it on its own line.',
-        ].join('\n'),
+          'Search for a GIF to express a reaction. Use RARELY — only for genuinely exciting news,',
+          'peak funny moments, or celebratory beats. NOT for every message or generic greetings.',
+          'The GIF will be sent automatically as an image — do NOT include any URL in your text response.',
+          'If the result seems off, just respond without mentioning the GIF.',
+        ].join(' '),
         parameters: {
-          type: PARAMETER_TYPES.OBJECT,
+          type: O,
           properties: {
-            query: {
-              type:        PARAMETER_TYPES.STRING,
-              description: 'Short Tenor search term (2–4 descriptive words, e.g. "excited jumping", "shocked face", "disappointed sigh")'
-            }
+            query: { type: S, description: 'Short Tenor search term (2–4 descriptive words)' }
           },
           required: ['query']
         }
       },
+
       {
         name: FUNCTION_NAMES.GET_SERVER_EMOJIS,
-        description: [
-          'Get the list of custom emojis available in this Discord server.',
-          'Returns each emoji\'s name and its ready-to-use Discord format (<:name:id> or <a:name:id> for animated).',
-          'Call this when you want to react with a server-specific emoji that fits the moment.',
-          'Use these naturally in your message text exactly as returned — Discord will render them.',
-          'Only call once per conversation turn; cache the list mentally for the rest of the chat.',
-          'Do NOT call this in DMs — server emojis are only available in guild channels.',
-        ].join('\n'),
-        parameters: {
-          type:       PARAMETER_TYPES.OBJECT,
-          properties: {}
-        }
+        description: 'Get all custom emojis in this server. Returns ready-to-use <:name:id> format. Only in guild channels, not DMs. Call once per turn.',
+        parameters: { type: O, properties: {} }
       },
+
       {
         name: FUNCTION_NAMES.GET_SERVER_STICKERS,
         description: [
-          'Get the list of stickers available in this Discord server, and optionally queue one to send.',
-          '',
-          'TWO MODES:',
-          '  1. BROWSE (no sticker_id): Returns all sticker names and IDs so you can pick one.',
-          '  2. SEND   (sticker_id set): Queues that sticker to be delivered after your text reply.',
-          '',
-          'Workflow:',
-          '  Step 1 — Call with no sticker_id to see the list.',
-          '  Step 2 — If a sticker fits the moment, call again with the chosen sticker_id.',
-          '',
-          'Use stickers only when they genuinely match the mood — not for every message.',
-          'The sticker arrives as a follow-up to your text, so keep the text self-contained.',
-          'Only call this in guild channels, not DMs.',
-        ].join('\n'),
+          'List or send a server sticker. BROWSE (no sticker_id): returns all stickers.',
+          'SEND (with sticker_id): queues it to be sent after your text reply.',
+          'Only in guild channels.',
+        ].join(' '),
         parameters: {
-          type: PARAMETER_TYPES.OBJECT,
+          type: O,
           properties: {
-            sticker_id: {
-              type:        PARAMETER_TYPES.STRING,
-              description: 'Optional. ID of the sticker to send after your reply. Omit to just browse the list.'
-            }
+            sticker_id: { type: S, description: 'Optional sticker ID to send. Omit to browse.' }
           }
         }
+      },
+
+      // ── Profile / member info ────────────────────────────────────────────────
+
+      {
+        name: FUNCTION_NAMES.CHECK_PROFILE,
+        description: [
+          'Check a Discord user\'s profile. Works for any user including the bot itself.',
+          'Returns: display name, username, avatar URL, account creation date,',
+          'server-specific info (nickname, roles, join date), current online status,',
+          'current activity (game / stream / custom status), and voice channel if they\'re in one.',
+          'Use when someone asks "what is X doing?", "is Y online?", "check my profile", etc.',
+          'Pass the bot\'s own user ID to check the bot\'s profile.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            user_id: { type: S, description: 'Discord user ID to look up. Use the bot\'s own ID to check itself.' }
+          },
+          required: ['user_id']
+        }
+      },
+
+      // ── Poll ─────────────────────────────────────────────────────────────────
+
+      {
+        name: FUNCTION_NAMES.CREATE_POLL,
+        description: [
+          'Create a Discord native poll in the current channel.',
+          'Polls support 2–10 answer options. Duration is in hours (1–168, default 24).',
+          'Only usable in guild channels (not DMs).',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            question:        { type: S, description: 'The poll question (max 300 chars)' },
+            answers:         { type: S, description: 'Comma-separated list of answer options (2–10 options)' },
+            duration_hours:  { type: N, description: 'How long the poll runs in hours (1–168, default 24)' },
+            allow_multiselect: { type: B, description: 'Whether users can pick multiple answers (default false)' }
+          },
+          required: ['question', 'answers']
+        }
+      },
+
+      // ── DM / cross-context messaging ─────────────────────────────────────────
+
+      {
+        name: FUNCTION_NAMES.SEND_DM,
+        description: [
+          'Send a DM to a user — only callable from a server channel (not from DMs).',
+          'The target user must be a member of the current server.',
+          'Use for private messages like "DM them the details" or "send her a message privately".',
+          'Always tell the user you\'re about to DM someone before doing so.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            user_id: { type: S, description: 'Discord user ID of the person to DM' },
+            content: { type: S, description: 'The message to send (plain text)' }
+          },
+          required: ['user_id', 'content']
+        }
+      },
+
+      {
+        name: FUNCTION_NAMES.SEND_SERVER_MSG,
+        description: [
+          'Send a message to a server channel — only callable from a DM conversation.',
+          'The bot must be in that server. Use when a DM user asks to relay a message to a server.',
+          'Specify the server and channel by name. If ambiguous, ask the user to clarify.',
+          'Can only send to servers where the bot is active.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            guild_name:   { type: S, description: 'Name (or partial name) of the target server' },
+            channel_name: { type: S, description: 'Name (or partial name) of the target channel (e.g. "general")' },
+            content:      { type: S, description: 'The message content to send' }
+          },
+          required: ['content']
+        }
+      },
+
+      // ── Edit / delete bot messages ────────────────────────────────────────────
+
+      {
+        name: FUNCTION_NAMES.EDIT_MESSAGE,
+        description: [
+          'Edit the bot\'s own most recent message in this conversation.',
+          'Use when asked to correct, update, or change something just said.',
+          'The edited message replaces the previous content entirely.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            new_content: { type: S, description: 'The new content to replace the previous message with' },
+            message_id:  { type: S, description: 'Optional specific message ID to edit. Omit to edit the most recent bot message.' }
+          },
+          required: ['new_content']
+        }
+      },
+
+      {
+        name: FUNCTION_NAMES.DELETE_MESSAGE,
+        description: [
+          'Delete the bot\'s own most recent message in this conversation.',
+          'Use when asked to remove or unsend something just said.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            message_id: { type: S, description: 'Optional specific message ID to delete. Omit to delete the most recent bot message.' }
+          }
+        }
+      },
+
+      // ── Moderation helpers ────────────────────────────────────────────────────
+
+      {
+        name: FUNCTION_NAMES.PIN_MESSAGE,
+        description: [
+          'Pin a message in the current channel. By default pins the triggering user\'s message.',
+          'Requires Manage Messages permission. Only works in guild channels.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            message_id: { type: S, description: 'Optional message ID to pin. Omit to pin the user\'s current message.' }
+          }
+        }
+      },
+
+      {
+        name: FUNCTION_NAMES.CREATE_THREAD,
+        description: [
+          'Create a thread from the current message or a specific message in the channel.',
+          'Works in text channels and forum channels. Only in guild channels.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            name:           { type: S, description: 'Thread name (2–100 characters)' },
+            message_id:     { type: S, description: 'Optional message ID to start the thread from. Omit to create a standalone thread.' },
+            auto_archive:   { type: N, description: 'Auto-archive duration in minutes: 60, 1440 (1 day), 4320 (3 days), 10080 (1 week). Default 1440.' }
+          },
+          required: ['name']
+        }
+      },
+
+      {
+        name: FUNCTION_NAMES.ADD_REACTION,
+        description: [
+          'Add an emoji reaction to a message. Use standard Unicode emojis or server custom emojis.',
+          'For custom emojis use the format returned by get_server_emojis.',
+          'Reacts to the user\'s current message by default.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            emoji:      { type: S, description: 'The emoji to react with. Unicode: "👍" or custom: "<:name:id>"' },
+            message_id: { type: S, description: 'Optional message ID to react to. Omit to react to the user\'s current message.' }
+          },
+          required: ['emoji']
+        }
+      },
+
+      // ── Server / channel info ─────────────────────────────────────────────────
+
+      {
+        name: FUNCTION_NAMES.GET_SERVER_INFO,
+        description: [
+          'Get detailed information about the current Discord server.',
+          'Returns: name, member count, channel counts, role count, boost level,',
+          'server creation date, owner, verification level, and top roles.',
+          'Only available in guild channels.',
+        ].join(' '),
+        parameters: { type: O, properties: {} }
+      },
+
+      {
+        name: FUNCTION_NAMES.GET_CHANNEL_INFO,
+        description: [
+          'Get information about a channel. Defaults to the current channel.',
+          'For text channels: name, topic, slowmode, NSFW flag, category.',
+          'For voice/stage channels: name, bitrate, user limit, list of connected members',
+          '(capped at 500 — shows "500+" if more).',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            channel_id: { type: S, description: 'Optional channel ID. Omit to use the current channel.' }
+          }
+        }
+      },
+
+      // ── Meme / GIPHY sticker ─────────────────────────────────────────────────
+
+      {
+        name: FUNCTION_NAMES.FETCH_MEME,
+        description: [
+          'Fetch a random meme from Reddit. Use when the user asks for a meme or the vibe genuinely calls for it.',
+          'Optionally specify a subreddit (e.g. "memes", "dankmemes", "me_irl"). Defaults to a random popular meme sub.',
+          'The meme image and title are sent as an embed automatically — do NOT include any URL in your text response.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            subreddit: { type: S, description: 'Optional subreddit to fetch from (e.g. "memes", "dankmemes"). Omit for a random pick.' }
+          }
+        }
+      },
+
+      {
+        name: FUNCTION_NAMES.SEARCH_GIPHY_STICKER,
+        description: [
+          'Search GIPHY for an animated sticker (transparent GIF). Use SPARINGLY — only when a sticker would genuinely',
+          'add flair to the moment. The sticker is sent automatically as an image after your reply.',
+          'Do NOT include any URL or link in your text response.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            query: { type: S, description: 'Short search term (2–4 words) describing the sticker vibe (e.g. "excited celebration", "thumbs up")' }
+          },
+          required: ['query']
+        }
+      },
+
+      // ── Gemma-only web search ─────────────────────────────────────────────────
+
+      {
+        name: FUNCTION_NAMES.GOOGLE_SEARCH,
+        description: [
+          'Perform a real-time Google web search. Use this to answer questions about',
+          'current events, recent news, live data, or anything that requires up-to-date information.',
+          'Returns a summary of search results with sources.',
+          'Call this any time you need information you don\'t already have.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            query: { type: S, description: 'The search query (be specific for better results)' }
+          },
+          required: ['query']
+        }
       }
+
     ]
   }
 ];
