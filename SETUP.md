@@ -274,6 +274,7 @@ REDIS_URL=
 LOG_FILE=
 PORT=3000
 NODE_ENV=production
+TENOR_API_KEY=   # GIF search — get a free key at https://developers.google.com/tenor/guides/quickstart
 ```
 
 ---
