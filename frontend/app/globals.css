@@ -1,0 +1,293 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@100;200;300;400;500;600;700;800;900&family=Geist+Mono:wght@100;200;300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Geist Design Tokens ─────────────────────────────────────────────────── */
+:root {
+  /* Light mode — Vercel white */
+  --bg-1: #ffffff;
+  --bg-2: #fafafa;
+
+  --gray-1: #f4f4f5;
+  --gray-2: #e4e4e7;
+  --gray-3: #d4d4d8;
+  --gray-4: #a1a1aa;
+  --gray-5: #71717a;
+  --gray-6: #52525b;
+  --gray-7: #3f3f46;
+  --gray-8: #27272a;
+  --gray-9: #18181b;
+  --gray-10: #09090b;
+
+  --border: rgba(0, 0, 0, 0.08);
+  --border-2: rgba(0, 0, 0, 0.15);
+
+  --fg: #000000;
+  --fg-2: #666666;
+  --fg-3: #999999;
+
+  --accent: #6d5ae6;
+  --accent-2: #8b77ff;
+  --accent-bg: rgba(109, 90, 230, 0.08);
+  --accent-border: rgba(109, 90, 230, 0.3);
+
+  --success: #16a34a;
+  --success-bg: rgba(22, 163, 74, 0.08);
+  --warning: #d97706;
+  --warning-bg: rgba(217, 119, 6, 0.08);
+  --error: #dc2626;
+  --error-bg: rgba(220, 38, 38, 0.08);
+  --info: #0284c7;
+  --info-bg: rgba(2, 132, 199, 0.08);
+
+  --radius: 6px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --sidebar-width: 240px;
+  --topbar-height: 52px;
+
+  --font-sans: 'Geist', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', 'Menlo', 'Monaco', monospace;
+}
+
+.dark {
+  /* Dark mode — Vercel black */
+  --bg-1: #000000;
+  --bg-2: #0a0a0a;
+
+  --gray-1: #111111;
+  --gray-2: #1a1a1a;
+  --gray-3: #222222;
+  --gray-4: #2a2a2a;
+  --gray-5: #333333;
+  --gray-6: #444444;
+  --gray-7: #888888;
+  --gray-8: #aaaaaa;
+  --gray-9: #cccccc;
+  --gray-10: #ededed;
+
+  --border: rgba(255, 255, 255, 0.08);
+  --border-2: rgba(255, 255, 255, 0.15);
+
+  --fg: #ededed;
+  --fg-2: #888888;
+  --fg-3: #555555;
+
+  --accent: #8b77ff;
+  --accent-2: #a89dff;
+  --accent-bg: rgba(139, 119, 255, 0.1);
+  --accent-border: rgba(139, 119, 255, 0.35);
+
+  --success: #22c55e;
+  --success-bg: rgba(34, 197, 94, 0.1);
+  --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.1);
+  --error: #ef4444;
+  --error-bg: rgba(239, 68, 68, 0.1);
+  --info: #38bdf8;
+  --info-bg: rgba(56, 189, 248, 0.1);
+}
+
+/* ─── Base Reset ──────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--bg-1);
+  color: var(--fg);
+  overflow: hidden;
+  height: 100dvh;
+}
+
+/* ─── Custom Scrollbar ────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--gray-4); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--gray-5); }
+
+/* ─── Focus Ring ──────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ─── Typography Classes ──────────────────────────────────────────────────── */
+.text-heading-32 { font-size: 32px; line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
+.text-heading-24 { font-size: 24px; line-height: 1.25; font-weight: 700; letter-spacing: -0.02em; }
+.text-heading-20 { font-size: 20px; line-height: 1.3; font-weight: 600; letter-spacing: -0.01em; }
+.text-heading-16 { font-size: 16px; line-height: 1.4; font-weight: 600; letter-spacing: -0.01em; }
+.text-heading-14 { font-size: 14px; line-height: 1.4; font-weight: 600; }
+.text-label-14   { font-size: 14px; line-height: 20px; font-weight: 500; }
+.text-label-13   { font-size: 13px; line-height: 20px; font-weight: 500; }
+.text-label-12   { font-size: 12px; line-height: 16px; font-weight: 500; }
+.text-copy-14    { font-size: 14px; line-height: 24px; font-weight: 400; }
+.text-copy-13    { font-size: 13px; line-height: 20px; font-weight: 400; }
+.text-button-14  { font-size: 14px; line-height: 1; font-weight: 500; letter-spacing: -0.01em; }
+.text-copy-13-mono { font-family: var(--font-mono); font-size: 13px; line-height: 20px; }
+
+/* ─── App Layout ──────────────────────────────────────────────────────────── */
+.app-shell {
+  display: flex;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg-1);
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+  border-right: 1px solid var(--border);
+  flex-shrink: 0;
+  z-index: 200;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.topbar {
+  height: var(--topbar-height);
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  flex-shrink: 0;
+  padding: 0 20px;
+  gap: 12px;
+}
+
+.page-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  overscroll-behavior: contain;
+}
+
+/* ─── Page transitions ────────────────────────────────────────────────────── */
+.page-enter { animation: pageEnter 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes pageEnter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ─── Panel / Card ────────────────────────────────────────────────────────── */
+.panel {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+}
+
+.dark .panel {
+  background: var(--gray-1);
+}
+
+/* ─── Status Dots ─────────────────────────────────────────────────────────── */
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.online { background: var(--success); animation: pulseDot 2.5s infinite; }
+.status-dot.offline { background: var(--error); }
+.status-dot.warning { background: var(--warning); }
+
+@keyframes pulseDot {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5); }
+  50% { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
+}
+
+/* ─── Sidebar overlay (mobile) ────────────────────────────────────────────── */
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 190;
+  display: none;
+}
+
+/* ─── Code / Inline code ──────────────────────────────────────────────────── */
+.inline-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--gray-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  color: var(--fg);
+}
+
+/* ─── Xterm terminal ──────────────────────────────────────────────────────── */
+.terminal-wrap {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+/* ─── Config editor textarea ──────────────────────────────────────────────── */
+.code-editor {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  color: var(--fg);
+  width: 100%;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.code-editor:focus { border-color: var(--accent); }
+
+/* ─── Media query: mobile sidebar ────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    transform: translateX(-100%);
+  }
+  .sidebar.open {
+    transform: translateX(0);
+    box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.5);
+  }
+  .sidebar-overlay { display: block; }
+  .page-content { padding: 16px; }
+  .topbar { padding: 0 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
