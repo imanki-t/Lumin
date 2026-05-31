@@ -225,7 +225,7 @@ const CHAR_THRESHOLD     = 150;          // chars before initial message is sent
 const UPDATE_DEBOUNCE_MS = 350;          // min ms between stream edits
 
 const MAX_RETRY_ATTEMPTS      = 3;
-const MAX_FUNCTION_CALL_TURNS = 3;
+const MAX_FUNCTION_CALL_TURNS = 5;
 
 const CHARACTER_LIMITS = Object.freeze({
   EMBEDDED:    3900,
@@ -657,7 +657,7 @@ export async function handleModelResponse(
 
           if (functionTurnCount >= MAX_FUNCTION_CALL_TURNS && functionCallParts.length > 0) {
             logger.warn(`Function calling limit reached (${MAX_FUNCTION_CALL_TURNS} turns), stopping`);
-            finalResponse += '\n\n[Function calling limit reached]';
+            // Do NOT append anything to finalResponse — just continue with whatever text the model produced
           }
         }
 
