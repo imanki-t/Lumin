@@ -78,7 +78,7 @@ const FEATURE_LABELS = Object.freeze({
 /** Discord absolute + relative timestamp string. */
 function ts(date) {
   const unix = Math.floor(date.getTime() / 1000);
-  return `<t:${unix}:D> (<t:${unix}:R>)`;
+  return `<t:${unix}:D>`;
 }
 
 /** Add a separator + text section to a container. */
