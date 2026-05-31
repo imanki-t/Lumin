@@ -55,7 +55,7 @@ export default function ConfigPage() {
       const r: any = await api.setRuntimeConfig(parsed);
       if (r?.success) toast.success('Raw config saved');
       else toast.error('Failed', r?.error);
-    } catch { toast.error('Invalid JSON'); }
+    } catch (_e) { toast.error('Invalid JSON'); }
     setRtLoading(false);
   };
 
