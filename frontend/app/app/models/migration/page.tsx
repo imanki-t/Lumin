@@ -51,7 +51,7 @@ export default function MigrationPage() {
       toast.info('Migration started', `Running for: ${target}`);
       // In real impl: api.migrateSettings(target, [...selectedServer], [...selectedUser], force)
       setTimeout(() => { toast.success('Migration complete'); setRunning(false); }, 1500);
-    } catch { toast.error('Migration failed'); setRunning(false); }
+    } catch (_e) { toast.error('Migration failed'); setRunning(false); }
   };
 
   const FieldList = ({ fields, selected, setSelected }: any) => (
