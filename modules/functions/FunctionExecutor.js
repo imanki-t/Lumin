@@ -271,14 +271,7 @@ async function handleSearchGif(query, historyId) {
       // Store for ResponseHandler to send as clean embed image
       if (historyId) setPendingGif(historyId, gifUrl);
 
-      const tagList = tags.slice(0, 5).join(', ') || 'none';
-      return {
-        result: [
-          `GIF found: "${title}" [${tagList}]`,
-          `It will be sent as an image automatically after your reply.`,
-          `Do NOT include any URL or link in your text response.`
-        ].join('\n')
-      };
+      return { result: `GIF found: "${title}"` };
     }
 
     return { result: MSG.GIF_NO_RESULTS };
@@ -321,7 +314,7 @@ async function handleGetServerStickers(guildId, historyId, stickerId) {
     const sticker = stickers.get(stickerId);
     if (!sticker) return { result: MSG.STICKER_NOT_FOUND };
     setPendingSticker(historyId, stickerId);
-    return { result: `${MSG.STICKER_QUEUED} Will send sticker "${sticker.name}" after your reply.` };
+    return { result: `${MSG.STICKER_QUEUED}` };
   }
   const lines = stickers.map(s =>
     `"${s.name}" — ID: ${s.id}${s.description ? ` (${s.description})` : ''}`
@@ -821,50 +814,34 @@ async function handleGetChannelInfo(currentChannelId, targetChannelId) {
   }
 }
 
-// ── Meme (Reddit) ────────────────────────────────────────────────────────────
+// ── Meme (meme-api.com) ───────────────────────────────────────────────────────
 
 const MEME_SUBREDDITS = ['memes', 'dankmemes', 'me_irl', 'wholesomememes', 'AdviceAnimals', 'ProgrammerHumor'];
 
 async function handleFetchMeme(historyId, subreddit) {
   try {
     const sub = subreddit?.trim() || MEME_SUBREDDITS[Math.floor(Math.random() * MEME_SUBREDDITS.length)];
-    const { data } = await axios.get(
-      `https://www.reddit.com/r/${encodeURIComponent(sub)}/random.json?limit=1`,
-      {
-        headers: { 'User-Agent': 'LuminBot/1.0' },
-        timeout: 6000
-      }
-    );
 
-    const posts = data?.[0]?.data?.children;
-    if (!posts?.length) return { result: 'No meme found — Reddit may be rate-limiting. Try again in a moment.' };
+    // meme-api.com proxies Reddit without auth requirements or server-side 403s
+    const url = `https://meme-api.com/gimme/${encodeURIComponent(sub)}`;
+    const { data } = await axios.get(url, {
+      headers: { 'User-Agent': 'LuminBot/1.0' },
+      timeout: 6000
+    });
 
-    const post = posts[0]?.data;
-    if (!post) return { result: 'Could not parse meme data.' };
+    if (!data?.url) return { result: 'No meme found — try again in a moment.' };
+    if (data.nsfw)  return { result: 'The fetched meme was NSFW — skipped. Try again or specify a different subreddit.' };
+    if (data.spoiler) return { result: 'Fetched post is marked as a spoiler — skipped. Try again.' };
 
-    // Skip non-image / NSFW / stickied posts
-    if (post.over_18) return { result: 'The fetched meme was NSFW — skipped. Try again or specify a different subreddit.' };
-    if (post.stickied) return { result: 'Fetched a pinned post, not a meme. Try again.' };
-
-    const imageUrl =
-      post.url_overridden_by_dest ||
-      post.url;
-
-    const isImage = /\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(imageUrl);
+    const isImage = /\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(data.url);
     if (!isImage) return { result: 'Fetched post has no direct image. Try again.' };
 
-    // Store for ResponseHandler to send as embed
-    if (historyId) setPendingGif(historyId, imageUrl);
+    // Queue for ResponseHandler to send as a clean image embed
+    if (historyId) setPendingGif(historyId, data.url);
 
-    const title   = post.title?.slice(0, 200) || 'Meme';
-    const upvotes = post.score ?? 0;
-    return {
-      result: [
-        `Meme fetched from r/${sub}: "${title}" (${upvotes.toLocaleString()} upvotes)`,
-        `It will be sent as an image automatically after your reply.`,
-        `Do NOT include any URL or link in your text response.`
-      ].join('\n')
-    };
+    const title   = (data.title || 'Meme').slice(0, 200);
+    const upvotes = data.ups ?? 0;
+    return { result: `Meme from r/${data.subreddit || sub}: "${title}" (${upvotes.toLocaleString()} upvotes)` };
   } catch (error) {
     logger.error('handleFetchMeme failed', error);
     return { result: `Meme fetch failed: ${error.message}` };
@@ -900,13 +877,7 @@ async function handleSearchGiphySticker(query, historyId) {
 
       if (historyId) setPendingGif(historyId, stickerUrl);
 
-      return {
-        result: [
-          `Sticker found: "${title}"`,
-          `It will be sent as an image automatically after your reply.`,
-          `Do NOT include any URL or link in your text response.`
-        ].join('\n')
-      };
+      return { result: `Sticker found: "${title}"` };
     }
 
     return { result: 'No suitable sticker found for that search.' };
