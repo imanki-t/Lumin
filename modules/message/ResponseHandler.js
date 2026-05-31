@@ -616,6 +616,21 @@ export async function handleModelResponse(
               modelName
             );
 
+            // If every function result is marked silent (edit, delete, etc.)
+            // skip the follow-up generation so the bot sends no confirmation reply.
+            const allSilent = functionResponses.every(
+              r => r?.functionResponse?.response?._silent === true
+            );
+            if (allSilent) {
+              logger.debug('Silent function turn — skipping follow-up response');
+              if (botMessage) {
+                await botMessage.delete().catch(() => {});
+                botMessage = null;
+              }
+              functionCallParts = [];
+              break;
+            }
+
             // Gemini 3: pass thought_signature + id back exactly as received (required).
             // Gemma: no thought_signature ever — pass parts as-is.
             // Other Gemini (e.g. 3.5-flash): strip BOTH thought_signature AND id —
