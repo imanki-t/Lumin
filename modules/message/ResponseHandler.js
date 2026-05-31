@@ -730,13 +730,15 @@ export async function handleModelResponse(
           }
         }
 
-        // ── Deliver pending GIF/meme as plain URL — Discord renders it natively ──
+        // ── Deliver pending GIF/meme as a file attachment ────────────────
+        // Passing a remote URL to `files` lets Discord.js download and post
+        // it as an inline attachment — no URL text visible, GIFs still animate.
         const pendingGifUrl = consumePendingGif(historyId);
         if (pendingGifUrl) {
           try {
-            await originalMessage.channel.send(pendingGifUrl);
+            await originalMessage.channel.send({ files: [pendingGifUrl] });
           } catch (gifErr) {
-            logger.warn(`Failed to send GIF: ${gifErr.message}`);
+            logger.warn(`Failed to send GIF attachment: ${gifErr.message}`);
           }
         }
 
