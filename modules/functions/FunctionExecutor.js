@@ -389,7 +389,7 @@ async function handleSearchGif(query, historyId) {
         result: [
           `GIF found: "${title}".`,
           imageBase64
-            ? `The GIF is embedded below — look at it carefully, then send it with a reaction that fits the vibe.`
+            ? `The GIF is embedded below. React to it naturally in character — do NOT describe or narrate what you see.`
             : `GIF could not be pre-loaded for preview; it will still be sent to the channel.`
         ].join(' ')
       };
@@ -1224,7 +1224,7 @@ async function handleFetchMeme(historyId, subreddit, topic) {
         result: [
           `Meme fetched from r/${bestPost.subreddit || sub}: "${title}" (${upvotes.toLocaleString()} upvotes).`,
           imageBase64
-            ? `The meme image is embedded below — look at it carefully, describe what you see, relate it to what the user asked for, and then send it.`
+            ? `The meme image is embedded below. React to it naturally and casually in character — do NOT describe or narrate what you see, just respond the way you normally would.`
             : `Image could not be pre-loaded for preview; it will still be sent to the channel.`,
         ].join(' ')
       };
