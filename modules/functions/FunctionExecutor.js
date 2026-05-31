@@ -261,9 +261,10 @@ async function handleSearchGif(query, historyId) {
       const tags  = item.tags  || [];
       if (isGifBlocked(title, tags)) { logger.debug(`GIF blocked: "${title}"`); continue; }
 
-      // Prefer the MP4 URL for Discord (better quality), fallback to GIF
-      const gifUrl = item.images?.fixed_height?.mp4
+      // Prefer GIF URL for Discord embed compatibility, fallback to MP4
+      const gifUrl = item.images?.fixed_height?.url
         || item.images?.original?.url
+        || item.images?.fixed_height?.mp4
         || item.url;
       if (!gifUrl) continue;
 
@@ -658,7 +659,17 @@ async function handleCreateThread(guildId, channelId, originalMessageId, threadN
       }
     }
 
-    // Fallback: create private/public thread directly
+    // Fallback: create thread directly on channel
+    // Forum channels (type 15) require a starter message — handle separately
+    if (channel.type === 15) {
+      const thread = await channel.threads.create({
+        name,
+        autoArchiveDuration: archiveDuration,
+        message: { content: name }  // forum channels require a starter message
+      });
+      return { result: `Thread "${thread.name}" created in forum channel #${channel.name}.` };
+    }
+
     const thread = await channel.threads.create({ name, autoArchiveDuration: archiveDuration });
     return { result: `Thread "${thread.name}" created in #${channel.name}.` };
   } catch (error) {
@@ -880,11 +891,11 @@ async function handleSearchGiphySticker(query, historyId) {
       const tags  = item.tags  || [];
       if (isGifBlocked(title, tags)) { logger.debug(`Sticker blocked: "${title}"`); continue; }
 
-      // Prefer fixed-height MP4 for Discord, fallback to original GIF URL
+      // Prefer GIF URL for Discord embed compatibility, fallback to MP4
       const stickerUrl =
-        item.images?.fixed_height?.mp4 ||
         item.images?.fixed_height?.url ||
-        item.images?.original?.url;
+        item.images?.original?.url     ||
+        item.images?.fixed_height?.mp4;
       if (!stickerUrl) continue;
 
       if (historyId) setPendingGif(historyId, stickerUrl);
