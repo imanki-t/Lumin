@@ -442,16 +442,19 @@ export const functionTools = [
       {
         name: FUNCTION_NAMES.FETCH_MEME,
         description: [
-          'Fetch a meme. Supports topic-based search — specify a topic like "gojo", "programming",',
-          '"dark humor", "cats", "anime", "minecraft" to get a thematically relevant meme.',
-          'The bot will receive the actual image and describe/react to it before sending.',
-          'Optionally specify a subreddit directly (overrides topic). Defaults to a popular meme sub.',
+          'Fetch a fresh meme directly from Reddit\'s live API.',
+          'Supports any topic — the bot dynamically discovers relevant subreddits and searches all of Reddit,',
+          'so it works for anything: "gojo", "breaking bad", "dark humor", "programming", "cats", "minecraft",',
+          '"valorant", "among us", "wholesome", "school", or any custom subject.',
+          'Results are deduplicated per conversation so the same meme is never sent twice.',
+          'Optionally specify an exact subreddit (overrides topic discovery).',
         ].join(' '),
         parameters: {
           type: O,
           properties: {
-            topic:     { type: S, description: 'Free-text topic for the meme (e.g. "gojo", "dark humor", "programming", "cat"). Used to find relevant subreddits and filter posts by title.' },
-            subreddit: { type: S, description: 'Optional specific subreddit to fetch from (e.g. "memes", "JuJutsuKaisen"). Takes precedence over topic when provided.' }
+            topic:     { type: S, description: 'Free-text topic for the meme (e.g. "gojo", "dark humor", "programming", "breaking bad", "cats"). Drives a live Reddit search and dynamic subreddit discovery.' },
+            subreddit: { type: S, description: 'Optional specific subreddit to fetch from (e.g. "memes", "JuJutsuKaisen", "ProgrammerHumor"). Takes precedence over topic when provided.' },
+            sort:      { type: S, description: 'Reddit sort order to use: "hot" (default), "top", "new", or "rising". Use "top" for all-time classics, "new" for ultra-fresh posts.' },
           }
         }
       },
