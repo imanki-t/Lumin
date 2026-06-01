@@ -15,6 +15,7 @@ export const FUNCTION_NAMES = Object.freeze({
   MANAGE_MEMORY:        'manage_personal_memory',
   MANAGE_SERVER_FACT:   'manage_server_fact',
   SEARCH_MEMORY:        'search_memory',
+  CHECK_SESSIONS:       'check_sessions',
   // ── Scheduling ─────────────────────────────────────────────────────────────
   SET_REMINDER:         'set_reminder',
   SET_BIRTHDAY:         'set_birthday',
@@ -103,6 +104,7 @@ export const functionTools = [
         name: FUNCTION_NAMES.SEARCH_MEMORY,
         description: [
           'Search all memory stores (conversation memories, personal facts, server facts, cross-context).',
+          'Also automatically searches session summaries from the last 24 hours.',
           'Call when you lack knowledge to answer or the user asks about past conversations.',
           'Do NOT call for general chat you can already answer from current context.',
         ].join(' '),
@@ -110,6 +112,23 @@ export const functionTools = [
           type: O,
           properties: {
             query: { type: S, description: 'The search query to find relevant memories' }
+          },
+          required: ['query']
+        }
+      },
+
+      {
+        name: FUNCTION_NAMES.CHECK_SESSIONS,
+        description: [
+          'Search session summaries from conversations OLDER than 24 hours using vector similarity.',
+          'Use when the user asks about something that happened in a past session (days/weeks ago),',
+          'or when search_memory did not find a match and the answer may be in an older session.',
+          'This tool runs in parallel with search_memory automatically when called.',
+        ].join(' '),
+        parameters: {
+          type: O,
+          properties: {
+            query: { type: S, description: 'What to search for in older session summaries' }
           },
           required: ['query']
         }

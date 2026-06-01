@@ -13,6 +13,7 @@ import { parseRelativeTime }         from '../../utils.js';
 import { formatDuration }            from '../shared/messageFormatter.js';
 import { Logger }                    from '../../core/Logger.js';
 import { FUNCTION_NAMES, MEMORY_ACTIONS } from './FunctionRegistry.js';
+import { vectorSearchOldSessions, getRecentSessionContext } from '../../commands/summary/SessionSummaryJob.js';
 import { setPendingSticker, setPendingGif, getLastBotMessage } from './pendingMedia.js';
 import { isGemmaModel }                  from '../config.js';
 import axios                             from 'axios';
@@ -215,8 +216,50 @@ async function handleSearchMemory(userId, guildId, historyId, query) {
         .map(g => g.id);
     } catch { /* non-fatal */ }
   }
-  const results = await memorySystem.searchMemory(userId, guildId, historyId, query, { crossContextEnabled, otherGuildIds });
-  return { result: results.length > 0 ? results.join('\n') : MSG.NO_MEMORIES_FOUND };
+
+  // Generate ONE embedding — shared by RAG search + recent session ranking
+  const { embeddingService } = await import('../../memory/EmbeddingService.js');
+  const queryEmbedding = await embeddingService
+    .generateEmbedding(query, 'RETRIEVAL_QUERY')
+    .catch(() => null);
+
+  // Run memory search AND recent session context (last 24 h) in parallel
+  const [results, sessionLines] = await Promise.all([
+    memorySystem.searchMemory(userId, guildId, historyId, query, { crossContextEnabled, otherGuildIds }),
+    getRecentSessionContext(userId, queryEmbedding, 3)
+  ]);
+
+  const all = [...sessionLines, ...results];
+  return { result: all.length > 0 ? all.join('\n') : MSG.NO_MEMORIES_FOUND };
+}
+
+async function handleCheckSessions(userId, guildId, historyId, query) {
+  // Generate embedding — same reuse pattern; no second embed if called after search_memory
+  const { embeddingService } = await import('../../memory/EmbeddingService.js');
+  const queryEmbedding = await embeddingService
+    .generateEmbedding(query, 'RETRIEVAL_QUERY')
+    .catch(() => null);
+
+  if (!queryEmbedding) {
+    return { result: 'Unable to search sessions: embedding unavailable.' };
+  }
+
+  // Run check_sessions (old) + search_memory (recent) in true parallel
+  const [oldSessions, recentLines] = await Promise.all([
+    vectorSearchOldSessions(userId, queryEmbedding, 5),
+    getRecentSessionContext(userId, queryEmbedding, 3)
+  ]);
+
+  const lines = [];
+
+  for (const s of recentLines) lines.push(s);
+
+  for (const s of oldSessions) {
+    const age = Math.floor((Date.now() - s.timestamp) / 86_400_000);
+    lines.push(`[Session — ${age}d ago] ${s.text}`);
+  }
+
+  return { result: lines.length > 0 ? lines.join('\n\n') : 'No matching sessions found.' };
 }
 
 // ── Scheduling ────────────────────────────────────────────────────────────────
@@ -1315,6 +1358,9 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId, ch
             break;
           case FUNCTION_NAMES.SEARCH_MEMORY:
             response = await handleSearchMemory(userId, guildId, historyId, args.query);
+            break;
+          case FUNCTION_NAMES.CHECK_SESSIONS:
+            response = await handleCheckSessions(userId, guildId, historyId, args.query);
             break;
 
           // ── Scheduling ────────────────────────────────────────────────────
