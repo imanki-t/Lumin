@@ -31,12 +31,14 @@ const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID     || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 const RECAPTCHA_SECRET     = process.env.RECAPTCHA_SECRET_KEY  || '';
 const RECAPTCHA_SITE_KEY   = process.env.RECAPTCHA_SITE_KEY    || '';
-const ALLOWED_EMAIL        = 'imitsankit@gmail.com';
+const ALLOWED_EMAIL        = process.env.DASHBOARD_ALLOWED_EMAIL || '';
 const SESSION_TTL          = 24 * 60 * 60 * 1000;
 
 const RUNTIME_CONFIG_PATH  = path.join(__dirname, 'runtime-config.json');
 const MODULES_CONFIG_PATH  = path.join(ROOT_DIR, 'modules', 'config.js');
 const BASE_CONFIG_PATH     = path.join(ROOT_DIR, 'config.js');
+
+if (!ALLOWED_EMAIL) logger.warn('DASHBOARD_ALLOWED_EMAIL is not set — all OAuth logins will be denied. Add it to your .env file.');
 
 if (state.globalLockdown === undefined) state.globalLockdown = false;
 if (state.debugMode      === undefined) state.debugMode      = false;
@@ -75,7 +77,8 @@ function parseCookies(h) {
   return Object.fromEntries(h.split(';').map(c => { const [k,...v]=c.trim().split('='); return [k.trim(),decodeURIComponent(v.join('=').trim())]; }));
 }
 function getSessionToken(req) {
-  return req.headers['x-token'] || req.query.token || parseCookies(req.headers.cookie).lumin_session || null;
+  // Fix #1/#3: Cookie-only auth — no x-token header or URL query param fallback
+  return parseCookies(req.headers.cookie).lumin_session || null;
 }
 function lookupSession(tok) {
   if (!tok) return null;
@@ -109,14 +112,52 @@ function authenticate(req, res, next) {
 }
 
 const router = express.Router();
+
+// Fix #4: Security headers middleware
+router.use((_req, res, next) => {
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; " +
+    "script-src 'self' 'unsafe-inline' https://www.google.com https://www.gstatic.com; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src 'self' https://fonts.gstatic.com; " +
+    "img-src 'self' data: https:; " +
+    "connect-src 'self' wss: ws:; " +
+    "frame-src https://www.google.com;"
+  );
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
 router.use(express.static(path.join(__dirname, 'public')));
 router.use(express.json({ limit: '10mb' }));
+
+// Fix #6: Per-IP rate limiter for auth endpoints (10 req/min, 5-min auto-cleanup)
+const authRateLimiter = (() => {
+  const hits = new Map(); // ip -> { count, resetAt }
+  const WINDOW_MS = 60_000;   // 1 minute window
+  const MAX_HITS  = 10;
+  const CLEANUP_MS = 300_000; // clean stale entries every 5 min
+  setInterval(() => { const now = Date.now(); for (const [ip, v] of hits) if (now > v.resetAt) hits.delete(ip); }, CLEANUP_MS).unref();
+  return (req, res, next) => {
+    const ip  = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    let entry = hits.get(ip);
+    if (!entry || now > entry.resetAt) { entry = { count: 0, resetAt: now + WINDOW_MS }; hits.set(ip, entry); }
+    entry.count++;
+    if (entry.count > MAX_HITS) return res.status(429).json({ error: 'Too many requests. Please wait a minute.' });
+    next();
+  };
+})();
 
 router.get('/auth/config', (_req, res) => {
   res.json({ recaptchaSiteKey: RECAPTCHA_SITE_KEY, hasGoogleOAuth: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) });
 });
 
-router.post('/auth/verify-recaptcha', async (req, res) => {
+router.post('/auth/verify-recaptcha', authRateLimiter, async (req, res) => {
   const { token } = req.body;
   if (!token || !RECAPTCHA_SECRET) return res.json({ success: true, score: 1 });
   try {
@@ -129,7 +170,7 @@ router.post('/auth/verify-recaptcha', async (req, res) => {
   } catch { res.json({ success: true, score: 0.5 }); }
 });
 
-router.get('/auth/google', (req, res) => {
+router.get('/auth/google', authRateLimiter, (req, res) => {
   if (!GOOGLE_CLIENT_ID) return res.status(500).send('GOOGLE_CLIENT_ID not configured.');
   const stateKey    = makeToken();
   const callbackUrl = getCallbackUrl(req);
@@ -166,13 +207,15 @@ router.get('/auth/google/callback', async (req, res) => {
     const secure    = req.headers['x-forwarded-proto'] === 'https';
     const cookieVal = `lumin_session=${sessionToken}; Path=/dashboard; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL/1000}${secure?'; Secure':''}`;
     res.setHeader('Set-Cookie', cookieVal);
-    const dest = `/dashboard/?token=${encodeURIComponent(sessionToken)}`;
-    res.send(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,viewport-fit=cover"><script>location.replace(${JSON.stringify(dest)})</script></head></html>`);
+    // Fix #1: Redirect cleanly — no token in URL (cookie-only auth)
+    res.redirect('/dashboard/');
   } catch (err) { logger.error('OAuth callback error', err); res.redirect('/dashboard/?auth=error'); }
 });
 
 router.get('/auth/me', authenticate, (req, res) => {
-  res.json({ success: true, user: req.sessionUser, token: req.sessionToken });
+  // Fix #2: Never echo the session token back — return only safe user fields
+  const { email, name, picture } = req.sessionUser;
+  res.json({ success: true, user: { email, name, picture } });
 });
 
 router.post('/auth/logout', (req, res) => {
@@ -207,12 +250,12 @@ router.get('/api/stats', authenticate, async (req, res) => {
       globalLockdown: state.globalLockdown || false, debugMode: state.debugMode || false,
       runtimeConfig,
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/save-state', authenticate, async (req, res) => {
   try { await saveStateToFile(); res.json({ success: true, message: 'State saved.' }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/reload-state', authenticate, async (_req, res) => {
@@ -232,7 +275,7 @@ router.post('/api/cmd/clear-history', authenticate, async (req, res) => {
       await saveStateToFile();
       res.json({ success: true, message: `Cleared ${count} chat histories.` });
     }
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/chat-history/:id', authenticate, (req, res) => {
@@ -246,7 +289,7 @@ router.get('/api/cmd/chat-history/:id', authenticate, (req, res) => {
     const flat = Object.values(historyObj).flat().filter(Boolean);
     flat.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
     res.json({ success: true, data: flat, channels: Object.keys(historyObj).length });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/all-histories', authenticate, (req, res) => {
@@ -257,7 +300,7 @@ router.get('/api/cmd/all-histories', authenticate, (req, res) => {
       messageCount: Array.isArray(state.chatHistories[id]) ? state.chatHistories[id].length : 0,
     }));
     res.json({ success: true, data: summaries, total: ids.length });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/blacklist', authenticate, async (req, res) => {
@@ -270,7 +313,7 @@ router.post('/api/cmd/blacklist', authenticate, async (req, res) => {
       if (db.saveBlacklistedUsers) await db.saveBlacklistedUsers(guildId, state.blacklistedUsers[guildId]);
     }
     res.json({ success: true, message: `User ${userId} blacklisted in ${guildId}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/unblacklist', authenticate, async (req, res) => {
@@ -281,14 +324,14 @@ router.post('/api/cmd/unblacklist', authenticate, async (req, res) => {
     state.blacklistedUsers[guildId] = list.filter(u => u !== userId);
     if (db.saveBlacklistedUsers) await db.saveBlacklistedUsers(guildId, state.blacklistedUsers[guildId]);
     res.json({ success: true, message: `User ${userId} unblacklisted.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/blacklisted-users', authenticate, (req, res) => {
   try {
     const data = state.blacklistedUsers || {};
     res.json({ success: true, data, total: Object.values(data).flat().length });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/switch-api-key', authenticate, (req, res) => {
@@ -296,7 +339,7 @@ router.post('/api/cmd/switch-api-key', authenticate, (req, res) => {
     rotateToNextKey();
     const stats = getApiKeyStats();
     res.json({ success: true, message: `Switched to Key ${stats.currentKey}.`, stats });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/switch-to-key/:index', authenticate, (req, res) => {
@@ -311,12 +354,12 @@ router.post('/api/cmd/switch-to-key/:index', authenticate, (req, res) => {
       for (let i = 0; i < times; i++) rotateToNextKey();
     }
     res.json({ success: true, message: `Switched to Key ${idx}.`, stats: getApiKeyStats() });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/api-key-stats', authenticate, (req, res) => {
   try { res.json({ success: true, data: getApiKeyStats() }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/lockdown', authenticate, (req, res) => {
@@ -324,7 +367,7 @@ router.post('/api/cmd/lockdown', authenticate, (req, res) => {
     const { enabled } = req.body;
     state.globalLockdown = Boolean(enabled);
     res.json({ success: true, message: `Global lockdown ${enabled ? 'ENABLED' : 'DISABLED'}.`, enabled: state.globalLockdown });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/announce', authenticate, async (req, res) => {
@@ -348,7 +391,7 @@ router.post('/api/cmd/announce', authenticate, async (req, res) => {
       } catch { failCount++; }
     }
     res.json({ success: true, message: `Sent to ${sentCount} servers. Failed: ${failCount}. Skipped: ${skipCount}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/leave-server', authenticate, async (req, res) => {
@@ -359,7 +402,7 @@ router.post('/api/cmd/leave-server', authenticate, async (req, res) => {
     if (!guild) return res.status(404).json({ error: 'Guild not found.' });
     await guild.leave();
     res.json({ success: true, message: `Left server: ${guild.name}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/servers', authenticate, (req, res) => {
@@ -374,7 +417,7 @@ router.get('/api/cmd/servers', authenticate, (req, res) => {
     }
     servers.sort((a,b) => b.memberCount - a.memberCount);
     res.json({ success: true, data: servers, count: servers.length });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/reset-server', authenticate, async (req, res) => {
@@ -384,14 +427,14 @@ router.post('/api/cmd/reset-server', authenticate, async (req, res) => {
     delete state.serverSettings[guildId];
     if (db.saveServerSettings) await db.saveServerSettings(guildId, {});
     res.json({ success: true, message: `Server settings reset for ${guildId}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/server-settings/:guildId', authenticate, (req, res) => {
   try {
     const settings = state.serverSettings[req.params.guildId] || {};
     res.json({ success: true, data: { ...DEFAULT_SERVER_SETTINGS, ...settings } });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.put('/api/cmd/server-settings/:guildId', authenticate, async (req, res) => {
@@ -401,14 +444,14 @@ router.put('/api/cmd/server-settings/:guildId', authenticate, async (req, res) =
     Object.assign(state.serverSettings[guildId], req.body);
     if (db.saveServerSettings) await db.saveServerSettings(guildId, state.serverSettings[guildId]);
     res.json({ success: true, data: state.serverSettings[guildId] });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/user-settings/:userId', authenticate, (req, res) => {
   try {
     const settings = state.userSettings[req.params.userId] || {};
     res.json({ success: true, data: { ...DEFAULT_USER_SETTINGS, ...settings }, found: Object.keys(settings).length > 0 });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.put('/api/cmd/user-settings/:userId', authenticate, async (req, res) => {
@@ -418,7 +461,7 @@ router.put('/api/cmd/user-settings/:userId', authenticate, async (req, res) => {
     Object.assign(state.userSettings[userId], req.body);
     if (db.saveUserSettings) await db.saveUserSettings(userId, state.userSettings[userId]);
     res.json({ success: true, data: state.userSettings[userId] });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/reset-user-settings', authenticate, async (req, res) => {
@@ -428,22 +471,22 @@ router.post('/api/cmd/reset-user-settings', authenticate, async (req, res) => {
     delete state.userSettings[userId];
     if (db.saveUserSettings) await db.saveUserSettings(userId, {});
     res.json({ success: true, message: `User settings reset for ${userId}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/clear-image-usage', authenticate, async (req, res) => {
   try { const c = safeCount(state.imageUsage); state.imageUsage = {}; await saveStateToFile(); res.json({ success: true, message: `Cleared image usage for ${c} users.` }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/clear-summary-usage', authenticate, async (req, res) => {
   try { const c = safeCount(state.summaryUsage); state.summaryUsage = {}; await saveStateToFile(); res.json({ success: true, message: `Cleared summary usage for ${c} users.` }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/toggle-debug', authenticate, (req, res) => {
   try { state.debugMode = !state.debugMode; res.json({ success: true, message: `Debug mode ${state.debugMode ? 'ON' : 'OFF'}.`, enabled: state.debugMode }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/set-presence', authenticate, async (req, res) => {
@@ -454,7 +497,7 @@ router.post('/api/cmd/set-presence', authenticate, async (req, res) => {
     runtimeConfig.presence = { status, activity, activityType };
     saveRuntimeConfig();
     res.json({ success: true, message: 'Presence set.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/get-presence', authenticate, (req, res) => {
@@ -462,7 +505,7 @@ router.get('/api/cmd/get-presence', authenticate, (req, res) => {
     const presence = client?.user?.presence;
     if (!presence) return res.json({ success: true, presence: null });
     res.json({ success: true, presence: { status: presence.status, activities: presence.activities?.map(a => ({ name: a.name, type: a.type })) || [] } });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/send-dm', authenticate, async (req, res) => {
@@ -473,17 +516,17 @@ router.post('/api/cmd/send-dm', authenticate, async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found.' });
     await user.send(message);
     res.json({ success: true, message: `DM sent to ${user.tag}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/clear-quote-usage', authenticate, async (req, res) => {
   try { const c = safeCount(state.quoteUsage); state.quoteUsage = {}; await saveStateToFile(); res.json({ success: true, message: `Cleared quote usage for ${c} users.` }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/restart', authenticate, async (req, res) => {
   try { await saveStateToFile(); res.json({ success: true, message: 'Restarting...' }); setTimeout(() => process.exit(0), 1500); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/resolve-username', authenticate, async (req, res) => {
@@ -513,7 +556,7 @@ router.post('/api/cmd/resolve-username', authenticate, async (req, res) => {
     }
 
     res.status(404).json({ success: false, error: 'User not found in any guild.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/user-profile/:userId', authenticate, async (req, res) => {
@@ -534,7 +577,7 @@ router.get('/api/cmd/user-profile/:userId', authenticate, async (req, res) => {
         blacklistedGuilds: Object.entries(state.blacklistedUsers || {}).filter(([,v]) => v.includes(userId)).map(([k]) => k),
       }
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/config/activities', authenticate, (req, res) => {
@@ -547,7 +590,7 @@ router.get('/api/config/activities', authenticate, (req, res) => {
       for (const e of entries) activities.push({ name: e[1], type: e[2] });
     }
     res.json({ success: true, data: activities });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/guild-info/:guildId', authenticate, async (req, res) => {
@@ -562,37 +605,37 @@ router.get('/api/cmd/guild-info/:guildId', authenticate, async (req, res) => {
         premiumSubscriptionCount: guild.premiumSubscriptionCount || 0, description: guild.description || null,
       }
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/clear-reminders', authenticate, async (req, res) => {
   try { const count = safeCount(state.reminders); state.reminders = {}; await saveStateToFile(); res.json({ success: true, message: `Cleared ${count} reminder(s).` }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/reminders', authenticate, (req, res) => {
   try { res.json({ success: true, data: state.reminders || {}, total: safeCount(state.reminders) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/clear-birthdays', authenticate, async (req, res) => {
   try { const count = safeCount(state.birthdays); state.birthdays = {}; await saveStateToFile(); res.json({ success: true, message: `Cleared ${count} birthday(s).` }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/birthdays', authenticate, (req, res) => {
   try { res.json({ success: true, data: state.birthdays || {}, total: safeCount(state.birthdays) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/clear-starter-usage', authenticate, async (req, res) => {
   try { const count = safeCount(state.starterUsage); state.starterUsage = {}; await saveStateToFile(); res.json({ success: true, message: `Cleared starter usage for ${count} users.` }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/clear-compliment-usage', authenticate, async (req, res) => {
   try { const count = safeCount(state.complimentUsage); state.complimentUsage = {}; await saveStateToFile(); res.json({ success: true, message: `Cleared compliment usage for ${count} users.` }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/dm-all-owners', authenticate, async (req, res) => {
@@ -607,7 +650,7 @@ router.post('/api/cmd/dm-all-owners', authenticate, async (req, res) => {
       try { const owner = await client.users.fetch(guild.ownerId); await owner.send(message); sent++; } catch { failed++; }
     }
     res.json({ success: true, message: `DM sent to ${sent} owners. Failed: ${failed}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/reload-commands', authenticate, async (req, res) => {
@@ -619,7 +662,7 @@ router.post('/api/cmd/reload-commands', authenticate, async (req, res) => {
     const cmds    = cmdModule.commands || cmdModule.default || [];
     await rest.put(Routes.applicationCommands(client.user.id), { body: cmds });
     res.json({ success: true, message: 'Slash commands reloaded.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/purge-blacklist', authenticate, async (req, res) => {
@@ -627,7 +670,7 @@ router.post('/api/cmd/purge-blacklist', authenticate, async (req, res) => {
     const total = Object.values(state.blacklistedUsers || {}).flat().length;
     state.blacklistedUsers = {}; await saveStateToFile();
     res.json({ success: true, message: `Purged ${total} blacklist entries.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/announce-users', authenticate, async (req, res) => {
@@ -650,7 +693,7 @@ router.post('/api/cmd/announce-users', authenticate, async (req, res) => {
       }
     }
     res.json({ success: true, message: `DM sent to ${sent} users. Failed: ${failed}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/channels/:guildId', authenticate, async (req, res) => {
@@ -663,7 +706,7 @@ router.get('/api/cmd/channels/:guildId', authenticate, async (req, res) => {
       .map(c => ({ id: c.id, name: c.name, type: c.type, position: c.position, parentId: c.parentId }))
       .sort((a,b) => a.position - b.position);
     res.json({ success: true, data: channels, count: channels.length });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/members/:guildId', authenticate, async (req, res) => {
@@ -676,7 +719,7 @@ router.get('/api/cmd/members/:guildId', authenticate, async (req, res) => {
       roles: m.roles.cache.map(r => r.name).filter(n => n !== '@everyone'),
     }));
     res.json({ success: true, data: members, count: members.length });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/send-channel', authenticate, async (req, res) => {
@@ -693,7 +736,7 @@ router.post('/api/cmd/send-channel', authenticate, async (req, res) => {
       await channel.send({ embeds: [e] });
     } else { await channel.send(message); }
     res.json({ success: true, message: `Message sent to #${channel.name}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/kick-member', authenticate, async (req, res) => {
@@ -706,7 +749,7 @@ router.post('/api/cmd/kick-member', authenticate, async (req, res) => {
     if (!member) return res.status(404).json({ error: 'Member not found.' });
     await member.kick(reason);
     res.json({ success: true, message: `Kicked ${member.user.tag} from ${guild.name}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/ban-member', authenticate, async (req, res) => {
@@ -717,7 +760,7 @@ router.post('/api/cmd/ban-member', authenticate, async (req, res) => {
     if (!guild) return res.status(404).json({ error: 'Guild not found.' });
     await guild.bans.create(userId, { reason, deleteMessageSeconds: deleteMessageDays * 86400 });
     res.json({ success: true, message: `Banned user ${userId} from ${guild.name}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/set-nickname', authenticate, async (req, res) => {
@@ -728,7 +771,7 @@ router.post('/api/cmd/set-nickname', authenticate, async (req, res) => {
     if (!guild) return res.status(404).json({ error: 'Guild not found.' });
     await guild.members.me.setNickname(nickname || null);
     res.json({ success: true, message: `Nickname set in ${guild.name}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/invite-link', authenticate, (req, res) => {
@@ -737,7 +780,7 @@ router.get('/api/cmd/invite-link', authenticate, (req, res) => {
     if (!id) return res.status(500).json({ error: 'Bot not ready.' });
     const link = `https://discord.com/api/oauth2/authorize?client_id=${id}&permissions=8&scope=bot%20applications.commands`;
     res.json({ success: true, link });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/state-snapshot', authenticate, (req, res) => {
@@ -752,7 +795,7 @@ router.get('/api/cmd/state-snapshot', authenticate, (req, res) => {
         globalLockdown: state.globalLockdown, debugMode: state.debugMode,
       }
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/clear-all-usage', authenticate, async (req, res) => {
@@ -761,7 +804,7 @@ router.post('/api/cmd/clear-all-usage', authenticate, async (req, res) => {
     state.starterUsage = {}; state.complimentUsage = {};
     await saveStateToFile();
     res.json({ success: true, message: 'All usage counters cleared.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/models', authenticate, async (req, res) => {
@@ -776,7 +819,7 @@ router.get('/api/cmd/models', authenticate, async (req, res) => {
       fallbackChain: cfg.MODEL_FALLBACK_CHAIN, enableGemma: cfg.ENABLE_GEMMA,
       gemmaDefault: cfg.GEMMA_DEFAULT_MODEL, runtimeOverride: runtimeConfig.activeModel || null,
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/set-model', authenticate, async (req, res) => {
@@ -788,7 +831,7 @@ router.post('/api/cmd/set-model', authenticate, async (req, res) => {
     runtimeConfig.activeModel = resolvedModel;
     saveRuntimeConfig();
     res.json({ success: true, message: `Runtime model set to ${resolvedModel}. Takes effect on next request.`, model: resolvedModel });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/config/runtime', authenticate, (req, res) => {
@@ -800,19 +843,19 @@ router.put('/api/config/runtime', authenticate, (req, res) => {
     Object.assign(runtimeConfig, req.body);
     saveRuntimeConfig();
     res.json({ success: true, data: runtimeConfig });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.delete('/api/config/runtime', authenticate, (req, res) => {
   try { runtimeConfig = {}; saveRuntimeConfig(); res.json({ success: true, message: 'Runtime config cleared.' }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/config/modules', authenticate, (req, res) => {
   try {
     const content = fs.readFileSync(MODULES_CONFIG_PATH, 'utf8');
     res.json({ success: true, content, path: MODULES_CONFIG_PATH });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.put('/api/config/modules', authenticate, (req, res) => {
@@ -822,7 +865,7 @@ router.put('/api/config/modules', authenticate, (req, res) => {
     fs.copyFileSync(MODULES_CONFIG_PATH, MODULES_CONFIG_PATH + '.bak');
     fs.writeFileSync(MODULES_CONFIG_PATH, content, 'utf8');
     res.json({ success: true, message: 'modules/config.js updated. Restart to apply.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/config/modules/reset', authenticate, (req, res) => {
@@ -831,14 +874,14 @@ router.post('/api/config/modules/reset', authenticate, (req, res) => {
     if (!fs.existsSync(bak)) return res.status(404).json({ error: 'No backup found.' });
     fs.writeFileSync(MODULES_CONFIG_PATH, fs.readFileSync(bak, 'utf8'), 'utf8');
     res.json({ success: true, message: 'modules/config.js restored from backup.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/config/base', authenticate, (req, res) => {
   try {
     const content = fs.readFileSync(BASE_CONFIG_PATH, 'utf8');
     res.json({ success: true, content, path: BASE_CONFIG_PATH });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.put('/api/config/base', authenticate, (req, res) => {
@@ -848,7 +891,7 @@ router.put('/api/config/base', authenticate, (req, res) => {
     fs.copyFileSync(BASE_CONFIG_PATH, BASE_CONFIG_PATH + '.bak');
     fs.writeFileSync(BASE_CONFIG_PATH, content, 'utf8');
     res.json({ success: true, message: 'config.js updated. Restart to apply.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/config/base/reset', authenticate, (req, res) => {
@@ -857,7 +900,7 @@ router.post('/api/config/base/reset', authenticate, (req, res) => {
     if (!fs.existsSync(bak)) return res.status(404).json({ error: 'No backup found.' });
     fs.writeFileSync(BASE_CONFIG_PATH, fs.readFileSync(bak, 'utf8'), 'utf8');
     res.json({ success: true, message: 'config.js restored from backup.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/db/collections', authenticate, async (req, res) => {
@@ -871,7 +914,7 @@ router.get('/api/db/collections', authenticate, async (req, res) => {
       return { name: c.name, count };
     }));
     res.json({ success: true, data: result });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/db/collection/:name', authenticate, async (req, res) => {
@@ -880,11 +923,13 @@ router.get('/api/db/collection/:name', authenticate, async (req, res) => {
     let conn; try { conn = db.getDB ? db.getDB() : null; } catch { conn = null; }
     if (!conn) return res.status(503).json({ error: 'DB not available.' });
     const { page = 1, limit = 50 } = req.query;
-    const skip  = (parseInt(page) - 1) * parseInt(limit);
+    // Fix #7: Cap limit at 200 to prevent unbounded collection dumps
+    const safeLimit = Math.min(Math.max(1, parseInt(limit) || 50), 200);
+    const skip  = (parseInt(page) - 1) * safeLimit;
     const total = await conn.collection(req.params.name).countDocuments();
-    const docs  = await conn.collection(req.params.name).find({}).skip(skip).limit(parseInt(limit)).toArray();
-    res.json({ success: true, data: docs, total, page: parseInt(page), limit: parseInt(limit) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const docs  = await conn.collection(req.params.name).find({}).skip(skip).limit(safeLimit).toArray();
+    res.json({ success: true, data: docs, total, page: parseInt(page), limit: safeLimit });
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.put('/api/db/collection/:name/:id', authenticate, async (req, res) => {
@@ -896,7 +941,7 @@ router.put('/api/db/collection/:name/:id', authenticate, async (req, res) => {
     const filter = ObjectId.isValid(req.params.id) ? { _id: new ObjectId(req.params.id) } : { _id: req.params.id };
     const result = await conn.collection(req.params.name).replaceOne(filter, req.body, { upsert: false });
     res.json({ success: true, modified: result.modifiedCount });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.delete('/api/db/collection/:name/:id', authenticate, async (req, res) => {
@@ -908,7 +953,7 @@ router.delete('/api/db/collection/:name/:id', authenticate, async (req, res) => 
     const filter = ObjectId.isValid(req.params.id) ? { _id: new ObjectId(req.params.id) } : { _id: req.params.id };
     const result = await conn.collection(req.params.name).deleteOne(filter);
     res.json({ success: true, deleted: result.deletedCount });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/files', authenticate, (req, res) => {
@@ -929,7 +974,7 @@ router.get('/api/files', authenticate, (req, res) => {
       const content = fs.readFileSync(safePath, 'utf8');
       res.json({ success: true, type: 'file', content, path: path.relative(ROOT_DIR, safePath), size: stat.size, mtime: stat.mtime });
     }
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.put('/api/files', authenticate, (req, res) => {
@@ -942,7 +987,7 @@ router.put('/api/files', authenticate, (req, res) => {
     fs.mkdirSync(path.dirname(safePath), { recursive: true });
     fs.writeFileSync(safePath, content, 'utf8');
     res.json({ success: true, message: `Saved: ${filePath}` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.delete('/api/files', authenticate, (req, res) => {
@@ -954,7 +999,7 @@ router.delete('/api/files', authenticate, (req, res) => {
     if (!fs.existsSync(safePath)) return res.status(404).json({ error: 'File not found.' });
     fs.unlinkSync(safePath);
     res.json({ success: true, message: `Deleted: ${filePath}` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/memory/:userId', authenticate, async (req, res) => {
@@ -970,7 +1015,7 @@ router.get('/api/cmd/memory/:userId', authenticate, async (req, res) => {
     const skip  = (parseInt(page) - 1) * parseInt(limit);
     const paged = data.slice(skip, skip + parseInt(limit));
     res.json({ success: true, data: paged, total, userId });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.delete('/api/cmd/memory/:userId', authenticate, async (req, res) => {
@@ -982,7 +1027,7 @@ router.delete('/api/cmd/memory/:userId', authenticate, async (req, res) => {
       await conn.collection('memoryEntries').deleteMany({ historyId: uid });
     }
     res.json({ success: true, message: `Memories cleared for ${uid}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/usage-stats', authenticate, (req, res) => {
@@ -995,7 +1040,7 @@ router.get('/api/cmd/usage-stats', authenticate, (req, res) => {
         compliment: state.complimentUsage || {},
       }
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/toggle-feature', authenticate, async (req, res) => {
@@ -1014,7 +1059,7 @@ router.post('/api/cmd/toggle-feature', authenticate, async (req, res) => {
     runtimeConfig.featureFlags[feature] = Boolean(enabled);
     saveRuntimeConfig();
     res.json({ success: true, message: `${feature} set to ${enabled}.`, flags: runtimeConfig.featureFlags });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/feature-flags', authenticate, async (req, res) => {
@@ -1037,7 +1082,7 @@ router.get('/api/cmd/feature-flags', authenticate, async (req, res) => {
     };
     const flags = { ...configDefaults, ...(runtimeConfig.featureFlags || {}) };
     res.json({ success: true, data: flags });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 // ── Migration config ────────────────────────────────────────────────────────
@@ -1051,7 +1096,7 @@ router.get('/api/cmd/migration-config', authenticate, async (req, res) => {
     };
     const overrides = runtimeConfig.migrationConfig || {};
     res.json({ success: true, data: { ...defaults, ...overrides } });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.put('/api/cmd/migration-config', authenticate, (req, res) => {
@@ -1063,7 +1108,7 @@ router.put('/api/cmd/migration-config', authenticate, (req, res) => {
     if (BATCH_DELAY_MS   !== undefined) runtimeConfig.migrationConfig.BATCH_DELAY_MS   = Number(BATCH_DELAY_MS);
     saveRuntimeConfig();
     res.json({ success: true, data: runtimeConfig.migrationConfig, message: 'Migration config saved. Restart to apply.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 // ── Bot / State / Queue config ───────────────────────────────────────────────
@@ -1085,7 +1130,7 @@ router.get('/api/cmd/bot-config', authenticate, async (req, res) => {
     };
     const overrides = runtimeConfig.botConfig || {};
     res.json({ success: true, data: { ...defaults, ...overrides } });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.put('/api/cmd/bot-config', authenticate, (req, res) => {
@@ -1102,13 +1147,15 @@ router.put('/api/cmd/bot-config', authenticate, (req, res) => {
     }
     saveRuntimeConfig();
     res.json({ success: true, data: runtimeConfig.botConfig, message: 'Bot config saved. Restart to apply.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/set-embed-color', authenticate, async (req, res) => {
   try {
     const { color, guildId } = req.body;
     if (!color) return res.status(400).json({ error: 'color required.' });
+    // Fix #8: Strict #RRGGBB hex validation
+    if (!/^#[0-9A-Fa-f]{6}$/.test(color)) return res.status(400).json({ error: 'color must be a valid #RRGGBB hex value.' });
     if (guildId) {
       if (!state.serverSettings[guildId]) state.serverSettings[guildId] = { ...DEFAULT_SERVER_SETTINGS };
       state.serverSettings[guildId].embedColor = color;
@@ -1118,7 +1165,7 @@ router.post('/api/cmd/set-embed-color', authenticate, async (req, res) => {
       saveRuntimeConfig();
     }
     res.json({ success: true, message: `Embed color set to ${color}.` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.get('/api/cmd/bot-info', authenticate, (req, res) => {
@@ -1135,7 +1182,7 @@ router.get('/api/cmd/bot-info', authenticate, (req, res) => {
         ping: client?.ws?.ping, uptime: process.uptime(), nodeVersion: process.version,
       }
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 const wss         = new WebSocketServer({ noServer: true });
@@ -1264,7 +1311,7 @@ router.get('/api/config/rate-limits', authenticate, (req, res) => {
     };
     const overrides = runtimeConfig.rateLimits || {};
     res.json({ success: true, data: { ...defaults, ...overrides } });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.put('/api/config/rate-limits', authenticate, (req, res) => {
@@ -1279,7 +1326,7 @@ router.put('/api/config/rate-limits', authenticate, (req, res) => {
     }
     saveRuntimeConfig();
     res.json({ success: true, data: runtimeConfig.rateLimits, message: 'Rate-limit config saved. Restart to apply.' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 // ── Full bot config (all tuneable knobs from modules/config.js) ──────────────
@@ -1341,7 +1388,7 @@ router.get('/api/config/all', authenticate, async (req, res) => {
         _runtimeOverrides: runtimeConfig,
       }
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 // ── Migration run endpoints ──────────────────────────────────────────────────
@@ -1356,7 +1403,7 @@ router.post('/api/cmd/migrate', authenticate, async (req, res) => {
     const { scope = 'both', fields = [], force = false } = req.body;
     const result = await runMigration({ scope, fields: fields.length ? fields : null, force });
     res.json({ success: true, ...result });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 // Convenience shorthands
@@ -1366,7 +1413,7 @@ router.post('/api/cmd/migrate/servers', authenticate, async (req, res) => {
     const { fields = [], force = false } = req.body;
     const result = await runMigration({ scope: 'servers', fields: fields.length ? fields : null, force });
     res.json({ success: true, ...result });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 router.post('/api/cmd/migrate/users', authenticate, async (req, res) => {
@@ -1375,7 +1422,7 @@ router.post('/api/cmd/migrate/users', authenticate, async (req, res) => {
     const { fields = [], force = false } = req.body;
     const result = await runMigration({ scope: 'users', fields: fields.length ? fields : null, force });
     res.json({ success: true, ...result });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { logger.error('Request error', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
 // Returns the full list of migratable fields so the UI can render checkboxes
@@ -1411,7 +1458,8 @@ export function mountDashboard(app, httpServer) {
   httpServer.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost');
     if (!url.pathname.startsWith('/dashboard/ws/')) return;
-    const tok     = url.searchParams.get('token');
+    // Fix #3: Read auth token from HttpOnly cookie only — never from URL query param
+    const tok     = parseCookies(req.headers.cookie).lumin_session || null;
     const session = lookupSession(tok);
     if (!session) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
