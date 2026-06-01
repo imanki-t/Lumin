@@ -24,7 +24,8 @@ let statsWs=null;
 function startStatsStream() {
   if (statsWs && statsWs.readyState < 2) return;
   const proto=location.protocol==='https:'?'wss':'ws';
-  statsWs=new WebSocket(`${proto}://${location.host}/dashboard/ws/stats?token=${encodeURIComponent(getToken())}`);
+  // Fix #3: No token in WS URL — cookie is sent automatically on the upgrade request
+  statsWs=new WebSocket(`${proto}://${location.host}/dashboard/ws/stats`);
   statsWs.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.type==='stats')updateStats(d.data);}catch{}};
   statsWs.onclose=()=>setTimeout(startStatsStream,3000);
   statsWs.onerror=()=>statsWs?.close();
@@ -107,10 +108,8 @@ async function initAuth() {
   if(authErr==='error'){showLogin('Authentication error. Please try again.');return;}
   if(authErr==='invalid_state'){showLogin('Session expired during login. Please try again.');return;}
 
-  const urlToken=params.get('token');
-  if(urlToken){ setToken(urlToken); history.replaceState({},document.title,location.pathname); }
-
-  if(!hasToken()){el('login-page')?.classList.remove('hidden');el('app')?.classList.add('hidden');return;}
+  // Fix #1/#10: No token in URL and no sessionStorage — auth is cookie-only.
+  // Fix #1/#10: Cookie-only auth — skip the local token gate and always verify via /auth/me.
 
   const me=await api.authMe().catch(()=>null);
   if(!me?.success){

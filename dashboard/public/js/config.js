@@ -1,10 +1,12 @@
-export const SESSION_KEY = 'lumin_dash_token';
-export const BASE_URL    = window.location.origin + '/dashboard';
+// Fix #10: sessionStorage token storage removed — auth is now cookie-only.
+// Token is carried via HttpOnly lumin_session cookie; /auth/me verifies the session.
+export const BASE_URL = window.location.origin + '/dashboard';
 
-export const getToken   = () => sessionStorage.getItem(SESSION_KEY) || '';
-export const setToken   = t  => sessionStorage.setItem(SESSION_KEY, t);
-export const clearToken = () => sessionStorage.removeItem(SESSION_KEY);
-export const hasToken   = () => !!getToken();
+// Kept for any legacy callers during transition — return empty string; server uses cookie.
+export const getToken   = () => '';
+export const setToken   = _t => {};
+export const clearToken = () => {};
+export const hasToken   = () => false;
 
 const I = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">${d}</svg>`;
 

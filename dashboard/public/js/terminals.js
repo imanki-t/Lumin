@@ -23,7 +23,8 @@ const T = {
   shell: {term:null,ws:null,addon:null,ready:false,dispose:null},
 };
 
-const wsUrl = path => `${location.protocol==='https:'?'wss':'ws'}://${location.host}/dashboard${path}?token=${encodeURIComponent(getToken())}`;
+// Fix #3: No token in WS URL — auth is via HttpOnly cookie on the upgrade request
+const wsUrl = path => `${location.protocol==='https:'?'wss':'ws'}://${location.host}/dashboard${path}`;
 
 function setConn(key, state) {
   const badge = document.getElementById(`${key}-badge`);

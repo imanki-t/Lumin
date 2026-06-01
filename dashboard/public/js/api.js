@@ -1,7 +1,8 @@
 import { getToken, BASE_URL } from './config.js';
 
 async function req(method, path, body) {
-  const opts = { method, headers: { 'Content-Type': 'application/json', 'x-token': getToken() } };
+  // Fix #1/#10: Cookie is sent automatically; no token header needed
+  const opts = { method, headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin' };
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res  = await fetch(`${BASE_URL}${path}`, opts);
   let data;
