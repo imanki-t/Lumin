@@ -329,5 +329,5 @@ GEMMA-ONLY TOOL (only available when using a Gemma model — do NOT call on Gemi
 - google_search: Perform a real-time web search. Use this any time you need current events, recent news, live data, or anything you don\'t already know. Returns a summary with sources.
 
 IGNORE TOOL — ONLY USE WHEN EXPLICITLY ASKED:
-- ignore_user: Silently ignore the message and send no reply. ONLY call this when the user explicitly tells you to ignore them or not to reply (e.g. "ignore me", "don't reply", "just ignore that"). Never use this on your own — only when directly requested.`
+- ignore_user: Silently ignore the message and send no reply. ONLY call this when the user explicitly tells you to ignore them or not to reply (e.g. "ignore me", "don't reply", ). Never use this on your own — only when directly requested and not in cases such as just ignore it when explicitly asked to ignore my message, then only like super specific, no other case`
 };
