@@ -380,7 +380,7 @@ export async function showServerSettingsPage5(interaction, isUpdate = false) {
       {
         text: `**Server Settings** — Page 5 of ${TOTAL_SERVER_PAGES}\n\n` +
               '**Clear Server Memory**\n' +
-              'Permanently erase all stored conversation logs for this server.',
+              '⚠️ Permanently erases all conversation history and server facts for this server.',
         row: new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId('clear_server_memory')
@@ -587,11 +587,12 @@ export async function clearServerMemory(interaction) {
   const guildId = interaction.guild.id;
   state.chatHistories[guildId] = {};
   await persistChatHistory(guildId);
+  await db.deleteAllServerFacts(guildId);
   await interaction.reply({
     embeds: [new EmbedBuilder()
       .setColor(EMBED_COLOR)
       .setTitle('Memory Cleared')
-      .setDescription('All server-wide conversation history has been erased.')
+      .setDescription('All server-wide conversation history and server facts have been permanently erased.')
     ],
     flags: MessageFlags.Ephemeral
   });

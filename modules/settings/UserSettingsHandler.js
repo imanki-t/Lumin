@@ -344,7 +344,8 @@ export async function showUserSettingsPage3(interaction, isUpdate = false) {
       },
       {
         text: '**Data Management**\n' +
-              'Clear your stored conversation memory or export your chat history as a file.',
+              'Clear your stored memory or export your chat history as a file.\n' +
+              '⚠️ **Clear Memory** permanently removes your conversation history, personal facts, and session summaries.',
         row: new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId('clear_user_memory')
@@ -381,11 +382,15 @@ export async function clearUserMemory(interaction) {
   const userId = interaction.user.id;
   state.chatHistories[userId] = {};
   await persistChatHistory(userId);
+  await Promise.all([
+    db.deleteAllUserFacts(userId),
+    db.deleteUserSessionSummaries(userId)
+  ]);
   await interaction.reply({
     embeds: [new EmbedBuilder()
       .setColor(EMBED_COLOR)
       .setTitle('Memory Cleared')
-      .setDescription('Your personal conversation history has been erased.')
+      .setDescription('Your conversation history, personal facts, and session summaries have all been permanently erased.')
     ],
     flags: MessageFlags.Ephemeral
   });
