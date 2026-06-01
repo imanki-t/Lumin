@@ -330,6 +330,51 @@ export async function saveIndexedCount(historyId, count) {
 }
 
 /**
+ * Delete ALL facts for a user (used when clearing memory).
+ * @param {string} userId
+ * @returns {Promise<number>} Count of deleted documents
+ */
+export async function deleteAllUserFacts(userId) {
+  try {
+    const result = await getCollection(COLLECTIONS.USER_FACTS).deleteMany({ userId });
+    return result.deletedCount;
+  } catch (error) {
+    logger.error('Error deleting all user facts', error);
+    return 0;
+  }
+}
+
+/**
+ * Delete ALL facts for a guild (used when clearing server memory).
+ * @param {string} guildId
+ * @returns {Promise<number>} Count of deleted documents
+ */
+export async function deleteAllServerFacts(guildId) {
+  try {
+    const result = await getCollection(COLLECTIONS.SERVER_FACTS).deleteMany({ guildId });
+    return result.deletedCount;
+  } catch (error) {
+    logger.error('Error deleting all server facts', error);
+    return 0;
+  }
+}
+
+/**
+ * Delete ALL session summaries for a user (used when clearing memory).
+ * @param {string} userId
+ * @returns {Promise<number>} Count of deleted documents
+ */
+export async function deleteUserSessionSummaries(userId) {
+  try {
+    const result = await getCollection(COLLECTIONS.SESSION_SUMMARIES).deleteMany({ userId });
+    return result.deletedCount;
+  } catch (error) {
+    logger.error('Error deleting user session summaries', error);
+    return 0;
+  }
+}
+
+/**
  * Load all persisted indexing states so MemoryStore can restore its
  * `lastIndexedCount` map on startup.
  * @returns {Promise<{ historyId: string, count: number }[]>}
