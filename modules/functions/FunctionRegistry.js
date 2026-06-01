@@ -442,19 +442,19 @@ export const functionTools = [
       {
         name: FUNCTION_NAMES.FETCH_MEME,
         description: [
-          'Fetch a fresh meme directly from Reddit\'s live API.',
-          'Supports any topic — the bot dynamically discovers relevant subreddits and searches all of Reddit,',
-          'so it works for anything: "gojo", "breaking bad", "dark humor", "programming", "cats", "minecraft",',
+          'Fetch a fresh meme from multiple live sources (meme-api.com → Reddit → Tenor → GIPHY).',
+          'Uses a multi-source fallback chain — if one source is unavailable or rate-limited, the next is tried automatically.',
+          'Works for any topic: "gojo", "breaking bad", "dark humor", "programming", "cats", "minecraft",',
           '"valorant", "among us", "wholesome", "school", or any custom subject.',
           'Results are deduplicated per conversation so the same meme is never sent twice.',
-          'Optionally specify an exact subreddit (overrides topic discovery).',
+          'Optionally specify an exact subreddit (used by Reddit/meme-api sources).',
         ].join(' '),
         parameters: {
           type: O,
           properties: {
-            topic:     { type: S, description: 'Free-text topic for the meme (e.g. "gojo", "dark humor", "programming", "breaking bad", "cats"). Drives a live Reddit search and dynamic subreddit discovery.' },
-            subreddit: { type: S, description: 'Optional specific subreddit to fetch from (e.g. "memes", "JuJutsuKaisen", "ProgrammerHumor"). Takes precedence over topic when provided.' },
-            sort:      { type: S, description: 'Reddit sort order to use: "hot" (default), "top", "new", or "rising". Use "top" for all-time classics, "new" for ultra-fresh posts.' },
+            topic:     { type: S, description: 'Free-text topic for the meme (e.g. "gojo", "dark humor", "programming", "breaking bad", "cats"). Used across all sources — Reddit search, Tenor, and GIPHY.' },
+            subreddit: { type: S, description: 'Optional specific subreddit to fetch from (e.g. "memes", "JuJutsuKaisen", "ProgrammerHumor"). Used by Reddit/meme-api sources; ignored by Tenor/GIPHY fallbacks.' },
+            sort:      { type: S, description: 'Reddit sort order: "hot" (default), "top", "new", or "rising". Use "top" for all-time classics, "new" for ultra-fresh posts.' },
           }
         }
       },

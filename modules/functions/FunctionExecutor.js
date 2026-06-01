@@ -1079,27 +1079,405 @@ async function handleGetChannelInfo(currentChannelId, targetChannelId) {
   }
 }
 
-// ── Meme (Reddit JSON API) ───────────────────────────────────────────────────
+// ── Meme (Multi-source: meme-api.com → Reddit JSON → GIPHY) ─────────────────
+//
+// SOURCE FALLBACK ORDER (all within a single function-call turn):
+//   SOURCE 1: meme-api.com     — free third-party wrapper; different IP path than
+//                                 direct Reddit, so survives Reddit IP bans
+//   SOURCE 2: Reddit JSON API  — direct reddit.com fetch (5 internal strategies)
+//   SOURCE 3: GIPHY GIF API    — meme GIFs; requires GIPHY_API_KEY env var
+//
+// Each source is tried independently. The first one that returns a usable image
+// wins. This means a Reddit IP ban no longer burns all function-call turns —
+// meme-api.com picks up the slack, and GIPHY ensures something always sends.
 
 /**
  * Rolling seen-URL deduplication cache.
  * Prevents the bot from sending the same meme twice in the same conversation.
- * Key: historyId (conversation key). Value: Set<string> of already-sent URLs.
+ * Key: historyId (conversation key). Value: string[] of already-sent URLs (newest last).
  */
-const RECENT_MEMES  = new Map(); // historyId → string[] (newest last)
-const RECENT_WINDOW = 15;        // only block repeats within last 15 memes
+const RECENT_MEMES  = new Map();
+const RECENT_WINDOW = 15; // block repeats within last 15 memes
 
 function markMemeSeen(key, url) {
   if (!key) return;
   if (!RECENT_MEMES.has(key)) RECENT_MEMES.set(key, []);
   const list = RECENT_MEMES.get(key);
   list.push(url);
-  if (list.length > RECENT_WINDOW) list.shift(); // evict oldest
+  if (list.length > RECENT_WINDOW) list.shift();
 }
 
 function isMemeSeen(key, url) {
   return RECENT_MEMES.get(key)?.includes(url) ?? false;
 }
+
+/**
+ * Deliver a meme — queue the URL for Discord attachment and return the result string.
+ *
+ * @param {{ url: string, title: string, source: string }} meme
+ * @param {string|null} historyId
+ * @param {string}      seenKey
+ * @returns {{ result: string }}
+ */
+function deliverMeme(meme, historyId, seenKey) {
+  markMemeSeen(seenKey, meme.url);
+  if (historyId) setPendingGif(historyId, meme.url);
+  const title = (meme.title || 'Meme').slice(0, 200);
+  return { result: `Meme sent from ${meme.source}: "${title}". React casually in 1-2 words max — no description, no narration.` };
+}
+
+// ── SOURCE 1: meme-api.com ────────────────────────────────────────────────────
+//
+// Free public API, no auth required. Backed by Reddit but proxied through a
+// separate service — survives Reddit IP bans because the request originates from
+// meme-api.com's servers, not ours.
+// Docs: https://github.com/D3vd/Meme_Api
+//
+// Endpoints used:
+//   GET https://meme-api.com/gimme/{subreddit}/{count} → up to 50 posts from a sub
+//   GET https://meme-api.com/gimme/{count}             → random posts from popular subs
+//
+// HOW DYNAMIC TOPIC SUPPORT WORKS:
+//   meme-api.com has no search endpoint — it only fetches by subreddit name.
+//   To support any free-text topic ("gojo", "breaking bad", "dark humor", etc.),
+//   buildSubredditCandidates() generates multiple subreddit name guesses from the
+//   topic string, then fetchFromMemeApi() fires them all in parallel and returns
+//   the first batch that has valid images. This gives broad coverage without
+//   needing a search API.
+//
+//   Candidate generation strategy (in priority order):
+//     1. Explicit subreddit override (passed directly)
+//     2. Known-good mappings from TOPIC_TO_SUBS (curated list, multiple per topic)
+//     3. Topic string itself as a subreddit name (e.g. "gojo" → r/gojo)
+//     4. Topic words joined without spaces in TitleCase (e.g. "dark humor" → r/DarkHumor)
+//     5. Topic + "Memes" suffix (e.g. "minecraft" → r/MinecraftMemes)
+//     6. Topic + "Humor" suffix (e.g. "programming" → r/ProgrammingHumor)
+//     7. Each individual word in a multi-word topic (e.g. "breaking bad" → r/breakingbad)
+
+const MEME_API_TIMEOUT = 8000;
+const MEME_API_BATCH   = 15; // posts per subreddit fetch
+
+/**
+ * Topic → known meme subreddits mapping.
+ * Multiple subs per topic — all are tried in parallel so the best available wins.
+ * Keys are lowercase; matching is substring-based so "jujutsu" hits "jujutsu kaisen".
+ */
+const TOPIC_TO_SUBS = {
+  // ── Anime / Manga ────────────────────────────────────────────────────────
+  anime:          ['Animemes', 'anime_irl', 'AnimeMeme'],
+  manga:          ['Animemes', 'manga'],
+  gojo:           ['JujutsuKaisen', 'Animemes'],
+  jujutsu:        ['JujutsuKaisen', 'Animemes'],
+  naruto:         ['Naruto', 'dankruto', 'Animemes'],
+  onepiece:       ['OnePieceMemes', 'OnePiece', 'Animemes'],
+  'one piece':    ['OnePieceMemes', 'OnePiece', 'Animemes'],
+  dragonball:     ['Dragonballsuper', 'dbz', 'Animemes'],
+  'dragon ball':  ['Dragonballsuper', 'dbz', 'Animemes'],
+  demonslayer:    ['KimetsuNoYaiba', 'Animemes'],
+  'demon slayer': ['KimetsuNoYaiba', 'Animemes'],
+  aot:            ['ShingekiNoKyojin', 'ANRime', 'Animemes'],
+  'attack on titan': ['ShingekiNoKyojin', 'ANRime', 'Animemes'],
+  mha:            ['BokuNoHeroAcademia', 'Animemes'],
+  'my hero':      ['BokuNoHeroAcademia', 'Animemes'],
+  haikyuu:        ['haikyuu', 'Animemes'],
+  bleach:         ['bleach', 'Animemes'],
+  hunter:         ['HunterXHunter', 'Animemes'],
+  'death note':   ['deathnote', 'Animemes'],
+  re:zero:        ['Re_Zero', 'Animemes'],
+  isekai:         ['Animemes', 'IsekaiMemes'],
+  waifu:          ['Animemes', 'waifuparent'],
+
+  // ── Gaming ────────────────────────────────────────────────────────────────
+  gaming:         ['gaming', 'pcmasterrace', 'gamingmemes'],
+  minecraft:      ['MinecraftMemes', 'Minecraft'],
+  fortnite:       ['FortNiteBR', 'fortnitebr'],
+  valorant:       ['VALORANT', 'ValorantMemes'],
+  league:         ['leagueoflegends', 'GrandmaFoundTheLeague'],
+  'league of legends': ['leagueoflegends', 'GrandmaFoundTheLeague'],
+  genshin:        ['Genshin_Impact', 'GenshinImpactMemes'],
+  overwatch:      ['Overwatch', 'OWConsole'],
+  csgo:           ['GlobalOffensive', 'csgomemes'],
+  cs2:            ['GlobalOffensive', 'csgomemes'],
+  roblox:         ['roblox', 'ROBLOXMemes'],
+  pokemon:        ['pokemon', 'pokemonmemes'],
+  zelda:          ['zelda', 'truezelda'],
+  'mario':        ['Mario', 'mariokart'],
+  'among us':     ['AmongUs', 'AmongUsMemes'],
+  elden:          ['Eldenring'],
+  'dark souls':   ['darksouls', 'darksouls3'],
+  skyrim:         ['skyrim', 'ElderScrolls'],
+  apex:           ['apexlegends', 'ApexOutlands'],
+  pubg:           ['PUBATTLEGROUNDS'],
+  'call of duty': ['CODMobile', 'modernwarfare'],
+  cod:            ['CODMobile', 'modernwarfare'],
+  rpg:            ['gaming', 'rpg'],
+  fps:            ['gaming', 'FPS'],
+  steam:          ['steam', 'pcmasterrace'],
+  pcmr:           ['pcmasterrace'],
+
+  // ── TV Shows / Movies ────────────────────────────────────────────────────
+  'breaking bad': ['breakingbad', 'okbuddychicanery'],
+  'walter white': ['breakingbad', 'okbuddychicanery'],
+  heisenberg:     ['breakingbad', 'okbuddychicanery'],
+  'better call saul': ['betterCallSaul'],
+  'the office':   ['DunderMifflin', 'theoffice'],
+  'parks and rec': ['PandR', 'parksandrecreation'],
+  'arrested development': ['arresteddevelopment'],
+  'it crowd':     ['TheITCrowd'],
+  'spongebob':    ['SquaredCircle', 'BikiniBottomTwitter'],
+  sponge:         ['BikiniBottomTwitter'],
+  'family guy':   ['familyguy', 'FamilyGuyMemes'],
+  'south park':   ['southpark'],
+  simpsons:       ['TheSimpsons', 'simpsonsshitposting'],
+  'futurama':     ['futurama'],
+  rickandmorty:   ['rickandmorty'],
+  'rick and morty': ['rickandmorty'],
+  witcher:        ['witcher', 'wiedzmin'],
+  'game of thrones': ['gameofthrones', 'freefolk'],
+  got:            ['freefolk', 'gameofthrones'],
+  'house of dragon': ['HouseOfTheDragon'],
+  'stranger things': ['StrangerThings'],
+  marvel:         ['marvelstudios', 'Marvel'],
+  avengers:       ['marvelstudios', 'Marvel'],
+  'star wars':    ['StarWars', 'PrequelMemes'],
+  'prequel':      ['PrequelMemes'],
+  'lord of the rings': ['lotrmemes', 'lotr'],
+  lotr:           ['lotrmemes', 'lotr'],
+  batman:         ['batman', 'DC_Cinematic'],
+  superman:       ['superman', 'DC_Cinematic'],
+  'iron man':     ['marvelstudios', 'Marvel'],
+  joker:          ['Joker', 'batman'],
+  'harry potter': ['harrypotter', 'HarryPotterMemes'],
+
+  // ── Programming / Tech ────────────────────────────────────────────────────
+  programming:    ['ProgrammerHumor', 'programmingmemes'],
+  coding:         ['ProgrammerHumor', 'programmingmemes'],
+  developer:      ['ProgrammerHumor', 'webdev'],
+  javascript:     ['ProgrammerHumor', 'javascript'],
+  python:         ['ProgrammerHumor', 'Python'],
+  java:           ['ProgrammerHumor', 'java'],
+  css:            ['ProgrammerHumor', 'webdev'],
+  html:           ['ProgrammerHumor', 'webdev'],
+  linux:          ['linuxmasterrace', 'linux'],
+  windows:        ['ProgrammerHumor', 'windows'],
+  ai:             ['ProgrammerHumor', 'artificial'],
+  chatgpt:        ['ProgrammerHumor', 'ChatGPT'],
+  tech:           ['ProgrammerHumor', 'technology'],
+  hacker:         ['ProgrammerHumor', 'hacking'],
+  git:            ['ProgrammerHumor'],
+  stackoverflow:  ['ProgrammerHumor'],
+  bug:            ['ProgrammerHumor'],
+
+  // ── Animals ────────────────────────────────────────────────────────────────
+  cat:            ['catmemes', 'cats', 'CatsAreAssholes'],
+  cats:           ['catmemes', 'cats', 'CatsAreAssholes'],
+  dog:            ['dogmemes', 'dogpictures', 'rarepuppers'],
+  dogs:           ['dogmemes', 'dogpictures', 'rarepuppers'],
+  doge:           ['dogecoin', 'doge'],
+  shiba:          ['shiba', 'doge'],
+  bird:           ['birdsarentreal', 'whatsthisbird'],
+  duck:           ['quityourbullshit'],
+  animal:         ['AnimalsBeingDerps', 'AnimalsBeingBros'],
+
+  // ── Moods / Vibes ─────────────────────────────────────────────────────────
+  dark:           ['darkhumor', 'edgymemes'],
+  'dark humor':   ['darkhumor', 'edgymemes'],
+  wholesome:      ['wholesomememes', 'MadeMeSmile'],
+  relatable:      ['me_irl', 'AdviceAnimals'],
+  depression:     ['me_irl', 'doomer', '2meirl4meirl'],
+  sad:            ['me_irl', '2meirl4meirl'],
+  anxiety:        ['me_irl', 'AnxietyMemes'],
+  monday:         ['Mondaymemes', 'me_irl'],
+  work:           ['WorkMemes', 'antiwork'],
+  school:         ['school', 'teenagers'],
+  college:        ['college', 'premed'],
+  exam:           ['school', 'college'],
+  study:          ['school', 'college'],
+
+  // ── Misc / Culture ────────────────────────────────────────────────────────
+  'gen z':        ['GenZ', 'teenagers'],
+  boomer:         ['BoomersBeingFools', 'OkBoomer'],
+  millennial:     ['me_irl', 'AdviceAnimals'],
+  karen:          ['IDontWorkHereLady', 'EntitledPeople'],
+  npc:            ['NPCMemes', 'youngpeopleyoutube'],
+  sigma:          ['SigmaGrindset', 'Bropranos'],
+  ohio:           ['MemeVideos', 'OhioMemes'],
+  rizz:           ['teenagers', 'GenZ'],
+  skill issue:    ['gaming', 'SkillshotMemes'],
+  touch grass:    ['me_irl', 'teenagers'],
+  gigachad:       ['GigaChadMemes', 'memes'],
+  mewing:         ['teenagers', 'GenZ'],
+  brainrot:       ['teenagers', 'GenZ'],
+  music:          ['AdviceAnimals', 'music'],
+  math:           ['mathmemes', 'learnmath'],
+  physics:        ['physicsmemes'],
+  history:        ['HistoryMemes', 'historymemes'],
+  philosophy:     ['PhilosophyMemes'],
+  food:           ['food_irl', 'me_irl'],
+  pizza:          ['pizza', 'food_irl'],
+  coffee:         ['me_irl', 'coffee'],
+  gym:            ['gymmemes', 'fitness'],
+  fitness:        ['gymrats', 'gymmemes'],
+  sleep:          ['me_irl', '2meirl4meirl'],
+  money:          ['wallstreetbets', 'personalfinance'],
+  crypto:         ['CryptoCurrency', 'Bitcoin'],
+  bitcoin:        ['Bitcoin', 'CryptoCurrency'],
+  stocks:         ['wallstreetbets'],
+  wsb:            ['wallstreetbets'],
+};
+
+/**
+ * Convert a TitleCase or space-separated string into PascalCase.
+ * e.g. "dark humor" → "DarkHumor", "breaking bad" → "BreakingBad"
+ */
+function toPascalCase(str) {
+  return str.split(/[\s_-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
+}
+
+/**
+ * Build an ordered list of subreddit name candidates for a given topic.
+ * Each candidate is tried via meme-api.com/gimme/{sub}/15 in parallel.
+ * Deduplication is applied so the same sub isn't tried twice.
+ *
+ * @param {string|null} topic
+ * @param {string|null} explicitSub
+ * @returns {string[]} ordered candidate subreddit names (no duplicates)
+ */
+function buildSubredditCandidates(topic, explicitSub) {
+  const candidates = [];
+  const seen       = new Set();
+
+  function add(sub) {
+    if (!sub || seen.has(sub.toLowerCase())) return;
+    seen.add(sub.toLowerCase());
+    candidates.push(sub);
+  }
+
+  // 1. Explicit override always goes first
+  if (explicitSub?.trim()) add(explicitSub.trim());
+
+  if (topic?.trim()) {
+    const t = topic.trim();
+    const tLower = t.toLowerCase();
+
+    // 2. Curated known-good mappings (all matching entries)
+    for (const [key, subs] of Object.entries(TOPIC_TO_SUBS)) {
+      if (tLower.includes(key)) subs.forEach(add);
+    }
+
+    // 3. Topic itself as-is (handles things like "ProgrammerHumor" or "gojo")
+    add(t.replace(/\s+/g, ''));
+
+    // 4. PascalCase (e.g. "dark humor" → "DarkHumor")
+    add(toPascalCase(t));
+
+    // 5. Topic + "Memes" (e.g. "minecraft" → "MinecraftMemes")
+    add(toPascalCase(t) + 'Memes');
+
+    // 6. Topic + "Humor" (e.g. "programming" → "ProgrammingHumor")
+    add(toPascalCase(t) + 'Humor');
+
+    // 7. Each individual word for multi-word topics
+    const words = tLower.split(/\s+/).filter(w => w.length > 2);
+    words.forEach(w => add(w));
+    words.forEach(w => add(w + 'memes'));
+  }
+
+  return candidates;
+}
+
+/**
+ * Normalise a meme-api.com item into the standard internal meme shape.
+ * @param {object} item
+ * @returns {{ url: string, title: string, source: string, over_18: boolean, spoiler: boolean }}
+ */
+function normaliseMemeApiItem(item) {
+  return {
+    url:     item.url     ?? '',
+    title:   item.title   ?? 'Meme',
+    source:  `r/${item.subreddit ?? 'meme-api'}`,
+    over_18: item.nsfw    ?? false,
+    spoiler: item.spoiler ?? false,
+  };
+}
+
+/**
+ * Fetch one batch of posts from a single subreddit via meme-api.com.
+ * Returns an empty array on any error so callers can safely filter.
+ *
+ * @param {string} sub
+ * @returns {Promise<object[]>}
+ */
+async function fetchMemeApiSubreddit(sub) {
+  try {
+    const url = `https://meme-api.com/gimme/${encodeURIComponent(sub)}/${MEME_API_BATCH}`;
+    const { data } = await axios.get(url, { timeout: MEME_API_TIMEOUT });
+    return (data?.memes ?? (data?.url ? [data] : [])).map(normaliseMemeApiItem);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Check whether a normalised meme-api item is a safe, displayable image.
+ * @param {object} item
+ * @param {string} seenKey
+ */
+function isValidMemeApiItem(item, seenKey) {
+  return (
+    item.url &&
+    !item.over_18 &&
+    !item.spoiler &&
+    !isMemeSeen(seenKey, item.url) &&
+    /\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(item.url)
+  );
+}
+
+/**
+ * Fetch a meme from meme-api.com for any free-text topic.
+ *
+ * Flow:
+ *   1. Build subreddit candidates from the topic (curated map + generated variants)
+ *   2. Fire all candidates in parallel via meme-api.com/gimme/{sub}/15
+ *   3. Return the first valid, unseen image found across all results
+ *   4. If no candidates matched, fall back to a generic random batch
+ *
+ * @param {string|null} topic
+ * @param {string|null} subreddit
+ * @param {string}      seenKey
+ * @returns {Promise<{ url: string, title: string, source: string }|null>}
+ */
+async function fetchFromMemeApi(topic, subreddit, seenKey) {
+  try {
+    const candidates = buildSubredditCandidates(topic, subreddit);
+
+    if (candidates.length > 0) {
+      // Fire all candidates in parallel; cap at 8 to avoid hammering the API
+      const batches = await Promise.allSettled(
+        candidates.slice(0, 8).map(sub => fetchMemeApiSubreddit(sub))
+      );
+
+      // Flatten all results and pick the first valid unseen one
+      for (const batch of batches) {
+        if (batch.status !== 'fulfilled') continue;
+        const valid = batch.value.filter(item => isValidMemeApiItem(item, seenKey));
+        if (valid.length) return valid[0];
+      }
+    }
+
+    // Generic fallback — random batch from meme-api's default popular subs
+    const { data } = await axios.get(`https://meme-api.com/gimme/20`, { timeout: MEME_API_TIMEOUT });
+    const items = (data?.memes ?? []).map(normaliseMemeApiItem);
+    const valid  = items.filter(item => isValidMemeApiItem(item, seenKey));
+    return valid[0] ?? null;
+
+  } catch (err) {
+    logger.warn('meme-api.com fetch failed', err.message);
+    return null;
+  }
+}
+
+// ── SOURCE 2: Reddit JSON API ─────────────────────────────────────────────────
 
 const REDDIT_HEADERS = {
   'User-Agent': 'LuminBot/2.0 (Discord Bot; open-source)',
@@ -1107,14 +1485,6 @@ const REDDIT_HEADERS = {
 };
 const REDDIT_TIMEOUT = 9000;
 
-/**
- * Discover relevant subreddits for a topic via Reddit's subreddit search.
- * Filters to SFW communities with at least 1 000 subscribers.
- *
- * @param {string} topic
- * @param {number} limit - max subreddits to return
- * @returns {Promise<string[]>} subreddit display_names, sorted by subscriber count
- */
 async function discoverSubreddits(topic, limit = 8) {
   try {
     const url = `https://www.reddit.com/subreddits/search.json`
@@ -1130,13 +1500,6 @@ async function discoverSubreddits(topic, limit = 8) {
   }
 }
 
-/**
- * Sitewide Reddit post search.
- *
- * @param {string} query
- * @param {{ sort?: string, time?: string, limit?: number }} opts
- * @returns {Promise<object[]>} raw Reddit post data objects
- */
 async function searchRedditPosts(query, { sort = 'relevance', time = 'month', limit = 50 } = {}) {
   const url = `https://www.reddit.com/search.json`
     + `?q=${encodeURIComponent(query)}&type=link&sort=${sort}&t=${time}&limit=${limit}&raw_json=1`;
@@ -1144,14 +1507,6 @@ async function searchRedditPosts(query, { sort = 'relevance', time = 'month', li
   return (data?.data?.children ?? []).map(c => c.data);
 }
 
-/**
- * Fetch posts from a single subreddit.
- * Optionally performs a within-subreddit keyword search.
- *
- * @param {string} sub
- * @param {{ sort?: string, time?: string, limit?: number, query?: string|null }} opts
- * @returns {Promise<object[]>}
- */
 async function fetchSubredditPosts(sub, { sort = 'hot', time = 'week', limit = 50, query = null } = {}) {
   let url;
   if (query) {
@@ -1166,175 +1521,208 @@ async function fetchSubredditPosts(sub, { sort = 'hot', time = 'week', limit = 5
   return (data?.data?.children ?? []).map(c => c.data);
 }
 
-/**
- * Determine whether a Reddit post is a safe, displayable image.
- */
-function isValidMemePost(post) {
+function isValidRedditMemePost(post) {
   if (!post) return false;
   if (post.over_18 || post.spoiler || post.is_video) return false;
-  if (post.score < -10) return false; // skip heavily downvoted
-  // post_hint is the most reliable signal
+  if (post.score < -10) return false;
   if (post.post_hint === 'image') return true;
-  // Direct image URL
   if (/\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(post.url ?? '')) return true;
-  // Reddit-hosted image CDN
   if (/^https?:\/\/i\.redd\.it\//i.test(post.url ?? '')) return true;
   return false;
 }
 
-/**
- * Compute a quality score for a Reddit post.
- * Favours high upvote ratio, high absolute score, and freshness.
- *
- * @param {object} post - raw Reddit post data
- * @returns {number}
- */
 function scoreRedditPost(post) {
   const ratio   = post.upvote_ratio ?? 0.5;
   const score   = Math.max(post.score ?? 0, 1);
   const ageSecs = Date.now() / 1000 - (post.created_utc ?? 0);
   const ageDays = ageSecs / 86400;
-
-  // Freshness multiplier: strongly prefer posts under a week old
   let freshness;
   if      (ageDays < 1)  freshness = 1.6;
   else if (ageDays < 3)  freshness = 1.3;
   else if (ageDays < 7)  freshness = 1.0;
   else if (ageDays < 30) freshness = 0.75;
   else                   freshness = 0.5;
-
   return ratio * Math.log10(score + 1) * freshness;
 }
 
-/**
- * From a raw post array, filter to valid image posts that haven't been seen,
- * then sort by quality score descending.
- *
- * @param {object[]} posts
- * @param {string}   seenKey - deduplication key
- * @returns {object[]}
- */
-function rankMemePosts(posts, seenKey) {
+function rankRedditPosts(posts, seenKey) {
   return posts
-    .filter(p => isValidMemePost(p) && !isMemeSeen(seenKey, p.url))
+    .filter(p => isValidRedditMemePost(p) && !isMemeSeen(seenKey, p.url))
     .sort((a, b) => scoreRedditPost(b) - scoreRedditPost(a));
 }
 
 /**
- * Build the success result string and queue the image for Discord delivery.
- *
- * @param {object}      post
- * @param {string|null} historyId
- * @param {string}      seenKey
- * @returns {{ result: string }}
+ * Normalise a Reddit post to the standard internal meme shape.
  */
-function deliverMeme(post, historyId, seenKey) {
-  markMemeSeen(seenKey, post.url);
-  if (historyId) setPendingGif(historyId, post.url);
-  const title = (post.title || 'Meme').slice(0, 200);
-  return { result: `Meme sent from r/${post.subreddit ?? '?'}: "${title}". React casually in 1-2 words max — no description, no narration.` };
+function normaliseRedditPost(post) {
+  return {
+    url:    post.url,
+    title:  post.title ?? 'Meme',
+    source: `r/${post.subreddit ?? '?'}`,
+  };
 }
 
 /**
- * Fetch a meme using the live Reddit JSON API.
+ * All 5 Reddit strategies wrapped as a single source.
+ * Returns null (instead of throwing) if Reddit is unreachable, rate-limited, or IP-banned —
+ * so the caller can fall through to GIPHY without burning extra function-call turns.
  *
- * Strategy chain (each step only runs if the previous produced no results):
- *
- *   0. Explicit subreddit  → direct fetch (+ optional topic filter inside sub)
- *   1. Sitewide search     → "{topic} meme" across all of Reddit, sorted by relevance
- *   2. Sub discovery       → find meme-relevant subs for the topic, pull hot posts
- *   3. Within-sub search   → same discovered subs, search by topic keyword
- *   4. Broader sitewide    → relax the query to just the raw topic, sort by top/week
- *   5. Final fallback      → r/memes + r/dankmemes hot posts (no topic filter)
- *
- * @param {string|null} historyId  - conversation dedup key
- * @param {string|null} subreddit  - explicit sub override
- * @param {string|null} topic      - free-text topic
- * @param {string}      sort       - "hot" | "top" | "new" | "rising"
+ * @param {string|null} topic
+ * @param {string|null} subreddit
+ * @param {string}      sort
+ * @param {string}      seenKey
+ * @returns {Promise<{ url: string, title: string, source: string }|null>}
  */
-async function handleFetchMeme(historyId, subreddit, topic, sort = 'hot') {
-  const seenKey     = historyId ?? 'global';
-  const searchTopic = topic?.trim() || null;
-
+async function fetchFromReddit(topic, subreddit, sort, seenKey) {
   try {
+    const searchTopic = topic?.trim() || null;
 
-    // ── STRATEGY 0: explicit subreddit ─────────────────────────────────────
+    // Strategy 0: explicit subreddit
     if (subreddit?.trim()) {
       const sub  = subreddit.trim();
-      const opts = searchTopic
-        ? { query: searchTopic, limit: 50 }          // topic search within sub
-        : { sort, limit: 75 };                        // plain listing
+      const opts = searchTopic ? { query: searchTopic, limit: 50 } : { sort, limit: 75 };
       const posts  = await fetchSubredditPosts(sub, opts).catch(() => []);
-      const ranked = rankMemePosts(posts, seenKey);
-      if (ranked.length) return deliverMeme(ranked[0], historyId, seenKey);
+      const ranked = rankRedditPosts(posts, seenKey);
+      if (ranked.length) return normaliseRedditPost(ranked[0]);
     }
 
-    // ── STRATEGY 1: sitewide search — "{topic} meme" ───────────────────────
+    // Strategy 1: sitewide "{topic} meme" search
     if (searchTopic) {
-      const posts = await searchRedditPosts(`${searchTopic} meme`, {
-        sort: 'relevance', time: 'month', limit: 75,
-      }).catch(() => []);
-      const ranked = rankMemePosts(posts, seenKey);
-      if (ranked.length) return deliverMeme(ranked[0], historyId, seenKey);
+      const posts  = await searchRedditPosts(`${searchTopic} meme`, { sort: 'relevance', time: 'month', limit: 75 }).catch(() => []);
+      const ranked = rankRedditPosts(posts, seenKey);
+      if (ranked.length) return normaliseRedditPost(ranked[0]);
     }
 
-    // ── STRATEGY 2: dynamic subreddit discovery → hot posts ────────────────
+    // Strategy 2: dynamic subreddit discovery → hot posts
     if (searchTopic) {
       const subs     = await discoverSubreddits(searchTopic, 8);
       const allPosts = [];
       await Promise.allSettled(
         subs.slice(0, 5).map(sub =>
-          fetchSubredditPosts(sub, { sort, limit: 50 })
-            .then(p => allPosts.push(...p))
-            .catch(() => {})
+          fetchSubredditPosts(sub, { sort, limit: 50 }).then(p => allPosts.push(...p)).catch(() => {})
         )
       );
-      const ranked = rankMemePosts(allPosts, seenKey);
-      if (ranked.length) return deliverMeme(ranked[0], historyId, seenKey);
+      const ranked = rankRedditPosts(allPosts, seenKey);
+      if (ranked.length) return normaliseRedditPost(ranked[0]);
     }
 
-    // ── STRATEGY 3: within discovered subs — topic keyword search ──────────
+    // Strategy 3: within discovered subs — topic keyword search
     if (searchTopic) {
       const subs     = await discoverSubreddits(searchTopic, 8);
       const allPosts = [];
       await Promise.allSettled(
         subs.slice(0, 5).map(sub =>
-          fetchSubredditPosts(sub, { query: searchTopic, limit: 50 })
-            .then(p => allPosts.push(...p))
-            .catch(() => {})
+          fetchSubredditPosts(sub, { query: searchTopic, limit: 50 }).then(p => allPosts.push(...p)).catch(() => {})
         )
       );
-      const ranked = rankMemePosts(allPosts, seenKey);
-      if (ranked.length) return deliverMeme(ranked[0], historyId, seenKey);
+      const ranked = rankRedditPosts(allPosts, seenKey);
+      if (ranked.length) return normaliseRedditPost(ranked[0]);
     }
 
-    // ── STRATEGY 4: broader sitewide — raw topic, sorted by top/week ───────
+    // Strategy 4: broader sitewide — raw topic, top/week
     if (searchTopic) {
-      const posts = await searchRedditPosts(searchTopic, {
-        sort: 'top', time: 'week', limit: 100,
-      }).catch(() => []);
-      const ranked = rankMemePosts(posts, seenKey);
-      if (ranked.length) return deliverMeme(ranked[0], historyId, seenKey);
+      const posts  = await searchRedditPosts(searchTopic, { sort: 'top', time: 'week', limit: 100 }).catch(() => []);
+      const ranked = rankRedditPosts(posts, seenKey);
+      if (ranked.length) return normaliseRedditPost(ranked[0]);
     }
 
-    // ── STRATEGY 5: fallback — r/memes + r/dankmemes hot ───────────────────
+    // Strategy 5: fallback — well-known meme subs
     const fallbackPosts = [];
     await Promise.allSettled(
       ['memes', 'dankmemes', 'me_irl', 'wholesomememes'].map(sub =>
-        fetchSubredditPosts(sub, { sort: 'hot', limit: 50 })
-          .then(p => fallbackPosts.push(...p))
-          .catch(() => {})
+        fetchSubredditPosts(sub, { sort: 'hot', limit: 50 }).then(p => fallbackPosts.push(...p)).catch(() => {})
       )
     );
-    const fallbackRanked = rankMemePosts(fallbackPosts, seenKey);
-    if (fallbackRanked.length) return deliverMeme(fallbackRanked[0], historyId, seenKey);
+    const fallbackRanked = rankRedditPosts(fallbackPosts, seenKey);
+    if (fallbackRanked.length) return normaliseRedditPost(fallbackRanked[0]);
 
-    return { result: 'No suitable meme found. Try a different topic or subreddit.' };
+    return null; // all Reddit strategies exhausted
 
-  } catch (error) {
-    logger.error('handleFetchMeme failed', error);
-    return { result: `Meme fetch failed: ${error.message}` };
+  } catch (err) {
+    logger.warn('Reddit meme fetch failed', err.message);
+    return null;
   }
+}
+
+
+// ── SOURCE 3: GIPHY GIF API ───────────────────────────────────────────────────
+//
+// Already used for stickers. Reused here for meme GIF fallback.
+// Requires GIPHY_API_KEY env var.
+
+/**
+ * @param {string|null} topic
+ * @param {string}      seenKey
+ * @returns {Promise<{ url: string, title: string, source: string }|null>}
+ */
+async function fetchFromGiphyMeme(topic, seenKey) {
+  const apiKey = process.env.GIPHY_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const query = topic ? `${topic} meme` : 'funny meme';
+    const { data } = await axios.get('https://api.giphy.com/v1/gifs/search', {
+      params: { q: query, api_key: apiKey, limit: 20, rating: 'pg-13', lang: 'en' },
+      timeout: 6000,
+    });
+
+    const results = data?.data ?? [];
+    for (const item of results) {
+      const title = item.title || query;
+      const tags  = item.tags || [];
+      if (isGifBlocked(title, tags)) continue;
+
+      const gifUrl =
+        item.images?.fixed_height?.url ||
+        item.images?.original?.url     ||
+        item.images?.downsized?.url;
+      if (!gifUrl || isMemeSeen(seenKey, gifUrl)) continue;
+      return { url: gifUrl, title, source: 'GIPHY' };
+    }
+    return null;
+
+  } catch (err) {
+    logger.warn('GIPHY meme fetch failed', err.message);
+    return null;
+  }
+}
+
+// ── MAIN HANDLER ─────────────────────────────────────────────────────────────
+
+/**
+ * Fetch a meme using a multi-source fallback chain.
+ *
+ * Source priority (first hit wins, all within a single function-call turn):
+ *   1. meme-api.com  — Reddit proxy; different IP path, survives Reddit bans
+ *   2. Reddit JSON   — direct fetch with 5 internal strategies
+ *   3. GIPHY API     — meme GIFs (set GIPHY_API_KEY to enable)
+ *
+ * Because every source catches its own errors and returns null on failure,
+ * a full Reddit IP ban no longer causes the AI to retry the tool call
+ * multiple times — meme-api.com or GIPHY pick up the slack immediately.
+ *
+ * @param {string|null} historyId  - conversation dedup key
+ * @param {string|null} subreddit  - explicit subreddit override (Reddit sources only)
+ * @param {string|null} topic      - free-text topic/search term
+ * @param {string}      sort       - "hot" | "top" | "new" | "rising" (Reddit sources)
+ */
+async function handleFetchMeme(historyId, subreddit, topic, sort = 'hot') {
+  const seenKey = historyId ?? 'global';
+
+  // ── Source 1: meme-api.com ────────────────────────────────────────────────
+  const memeApiResult = await fetchFromMemeApi(topic, subreddit, seenKey);
+  if (memeApiResult) return deliverMeme(memeApiResult, historyId, seenKey);
+
+  // ── Source 2: Reddit JSON API ─────────────────────────────────────────────
+  const redditResult = await fetchFromReddit(topic, subreddit, sort, seenKey);
+  if (redditResult) return deliverMeme(redditResult, historyId, seenKey);
+
+  // ── Source 3: GIPHY (if GIPHY_API_KEY is set) ─────────────────────────────
+  const giphyResult = await fetchFromGiphyMeme(topic, seenKey);
+  if (giphyResult) return deliverMeme(giphyResult, historyId, seenKey);
+
+  logger.warn('handleFetchMeme: all sources exhausted', { topic, subreddit });
+  return { result: 'No suitable meme found across all sources. Try a different topic or subreddit.' };
 }
 
 // ── GIPHY sticker ─────────────────────────────────────────────────────────────
