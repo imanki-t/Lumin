@@ -633,7 +633,37 @@ async function handleCheckProfile(targetUserId, guildId) {
       }
     }
 
-    return { result: lines.join('\n') };
+    // Split media URLs from context. Model gets a clean summary;
+    // avatar/banner only sent if user explicitly asked for pfp/banner.
+    const mediaLines = lines.filter(l =>
+      l.startsWith('\u{1F5BC}\uFE0F') || (l.startsWith('\u{1F3A8}') && !l.includes('colour'))
+    );
+    const contextLines = lines.filter(l => !mediaLines.includes(l));
+
+    const cleanContext = contextLines
+      .map(l => l.replace(/\s*\[ID:[^\]]+\]/g, ''))
+      .join('\n');
+
+    const avatarLine = mediaLines.find(l => l.includes('Global avatar') || l.startsWith('\u{1F5BC}\uFE0F'));
+    const avatarUrl  = avatarLine ? avatarLine.split(': ').slice(1).join(': ').trim() : null;
+    const bannerLine = mediaLines.find(l => l.includes('Banner') && !l.includes('colour'));
+    const bannerUrl  = bannerLine ? bannerLine.split(': ').slice(1).join(': ').trim() : null;
+
+    const resultObj = {
+      result: [
+        'Profile context below. Give a SHORT natural in-character reply (1-2 sentences max). Do NOT list or dump this data, do NOT paste URLs, do NOT mention role IDs or technical fields. Talk like a friend who casually knows this person.',
+        cleanContext,
+        avatarUrl ? '[avatar available — ONLY send the URL below if the user explicitly asked for pfp/avatar/picture]' : '',
+        bannerUrl ? '[banner available — ONLY send the URL below if the user explicitly asked for banner]' : '',
+        avatarUrl ? `_avatar_: ${avatarUrl}` : '',
+        bannerUrl ? `_banner_: ${bannerUrl}` : '',
+      ].filter(Boolean).join('\n')
+    };
+
+    if (avatarUrl) resultObj._profileAvatarUrl = avatarUrl;
+    if (bannerUrl) resultObj._profileBannerUrl = bannerUrl;
+
+    return resultObj;
   } catch (error) {
     logger.error('handleCheckProfile failed', error);
     return { result: `${MSG.OPERATION_FAILED}: ${error.message}` };
