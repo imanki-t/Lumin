@@ -106,11 +106,14 @@ export {
   saveUserFact,
   getUserFacts,
   deleteUserFact,
+  deleteAllUserFacts,
   saveServerFact,
   getServerFacts,
   getServerFactsCategorized,
   getServerFactsMultiGuild,
   deleteServerFact,
+  deleteAllServerFacts,
+  deleteUserSessionSummaries,
   saveIndexedCount,
   getIndexedCounts
 } from './collections/usageRepo.js';
