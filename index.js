@@ -52,7 +52,7 @@ import {
   processMessageRoulette
 } from './commands/index.js';
 import { MAX_QUEUE_DEPTH_PER_USER, RAM_MEDIA_SUSPEND_THRESHOLD_MB } from './modules/config.js';
-import { scheduleWeeklySummaryJob } from './commands/summary/WeeklySummaryJob.js';
+import { scheduleDailyDigestJob } from './commands/summary/SessionSummaryJob.js';
 import { WEEKLY_SUMMARY_ENABLED }    from './modules/config.js';
 
 const logger = Logger.get('Index');
@@ -197,10 +197,10 @@ client.once('clientReady', async () => {
 
   // Weekly user context summary job — fires every Sunday at 02:00 UTC
   try {
-    scheduleWeeklySummaryJob();
-    logger.info('Weekly summary job scheduled');
+    scheduleDailyDigestJob();
+    logger.info('Daily session digest job scheduled');
   } catch (error) {
-    logger.error('Failed to schedule weekly summary job', error);
+    logger.error('Failed to schedule daily digest job', error);
   }
 
   // ── Periodic GC nudge ─────────────────────────────────────────────────
