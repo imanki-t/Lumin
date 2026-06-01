@@ -1460,6 +1460,11 @@ export async function executeFunctionCalls(calls, userId, guildId, historyId, ch
             }
             break;
 
+          // ── Ignore ────────────────────────────────────────────────────────
+          case FUNCTION_NAMES.IGNORE_USER:
+            response = { _silent: true };
+            break;
+
           default:
             logger.warn(`Unknown function call received: ${call.name}`);
             response = { error: `Unknown function: ${call.name}` };

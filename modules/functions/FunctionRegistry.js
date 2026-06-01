@@ -45,6 +45,8 @@ export const FUNCTION_NAMES = Object.freeze({
   SEARCH_GIPHY_STICKER: 'search_giphy_sticker',
   // ── Gemma-only search ──────────────────────────────────────────────────────
   GOOGLE_SEARCH:        'google_search',
+  // ── Ignore ─────────────────────────────────────────────────────────────────
+  IGNORE_USER:          'ignore_user',
 });
 
 export const MEMORY_ACTIONS = Object.freeze({
@@ -486,6 +488,19 @@ export const functionTools = [
           },
           required: ['query']
         }
+      },
+
+      // ── Ignore ────────────────────────────────────────────────────────────────
+
+      {
+        name: FUNCTION_NAMES.IGNORE_USER,
+        description: [
+          'Silently ignore the user\'s message and send no reply.',
+          'ONLY call this when the user explicitly asks to be ignored or tells you not to reply',
+          '(e.g. "ignore me", "don\'t reply to this", "just ignore that").',
+          'Never call this on your own initiative — only when the user directly requests it.',
+        ].join(' '),
+        parameters: { type: O, properties: {} }
       }
 
     ]
