@@ -7,7 +7,7 @@
 
 import { Logger }                              from '../core/Logger.js';
 import { COLLECTIONS, getCollection,
-         indexesCreated, setIndexesCreated }   from './connection.js';
+         indexesCreated, setIndexesCreated, getDB }   from './connection.js';
 
 const logger = Logger.get('IndexManager');
 
@@ -55,6 +55,11 @@ export async function createIndexes() {
       { col: COLLECTIONS.WEEKLY_SUMMARIES,    idx: { userId: 1 },                      opts: { unique: true } },
       { col: COLLECTIONS.WEEKLY_SUMMARIES,    idx: { generatedAt: -1 }                },
 
+      // ── Session summaries ─────────────────────────────────────────────────
+      { col: COLLECTIONS.SESSION_SUMMARIES,   idx: { userId: 1, timestamp: -1 }       },
+      { col: COLLECTIONS.SESSION_SUMMARIES,   idx: { userId: 1, isDailyDigest: 1 }    },
+      { col: COLLECTIONS.SESSION_SUMMARIES,   idx: { historyId: 1, timestamp: -1 }    },
+
       // ── Daily message usage ───────────────────────────────────────────────
       { col: COLLECTIONS.DAILY_MSG_USAGE,     idx: { date: 1 },                        opts: { unique: true } },
 
@@ -78,7 +83,81 @@ export async function createIndexes() {
     setIndexesCreated(true);
     logger.info('Database indexes created successfully');
 
+    // ── Atlas Vector Search index for sessionSummaries ────────────────────
+    // This is a Search index (not a regular index) and must be created via
+    // the Atlas $createSearchIndexes command — cannot use createIndex().
+    // Safe to call repeatedly; Atlas ignores duplicates.
+    _ensureSessionVectorIndex().catch(err =>
+      logger.warn('sessionSummaries vector index creation skipped (will fall back to scan):', err.message)
+    );
+
   } catch (error) {
     logger.error('Critical error during index creation', error);
+  }
+}
+
+// ============================================================================
+// ATLAS VECTOR INDEX — sessionSummaries
+// ============================================================================
+
+/**
+ * Create (or confirm existence of) the Atlas Search vector index used by
+ * vectorSearchOldSessions() in SessionSummaryJob.
+ *
+ * Atlas $vectorSearch requires a Search index, not a regular B-tree index.
+ * The command is idempotent — Atlas returns an error if the name already
+ * exists, which we swallow silently.
+ *
+ * Dimensions must match your embedding model output (768 for text-embedding-004,
+ * 1536 for text-embedding-3-small, etc.).  The value here reads from the same
+ * VECTOR_SEARCH_CONFIG used by the existing memoryEntries index so you only
+ * need to change it in one place.
+ *
+ * @returns {Promise<void>}
+ */
+async function _ensureSessionVectorIndex() {
+  try {
+    const { EMBEDDING_DIM } = await import('../modules/config.js');
+    const db = getDB();
+    if (!db) return;
+
+    await db.command({
+      createSearchIndexes: COLLECTIONS.SESSION_SUMMARIES,
+      indexes: [
+        {
+          name:       'sessionSummaries_vector',
+          type:       'vectorSearch',
+          definition: {
+            fields: [
+              {
+                type:          'vector',
+                path:          'embedding',
+                numDimensions: EMBEDDING_DIM ?? 768,
+                similarity:    'cosine'
+              },
+              // Pre-filter fields — Atlas requires these listed so the
+              // $vectorSearch filter: { userId: ... } works efficiently.
+              {
+                type: 'filter',
+                path: 'userId'
+              },
+              {
+                type: 'filter',
+                path: 'timestamp'
+              }
+            ]
+          }
+        }
+      ]
+    });
+
+    logger.info('sessionSummaries vector index created (or already exists)');
+  } catch (err) {
+    // Code 68 = IndexAlreadyExists — perfectly fine, index is already there.
+    if (err.code === 68 || err.message?.includes('already exists')) {
+      logger.debug('sessionSummaries vector index already exists — skipping');
+      return;
+    }
+    throw err;  // re-throw anything unexpected so the outer .catch() logs it
   }
 }

@@ -77,6 +77,7 @@ export const COLLECTIONS = Object.freeze({
   USER_FACTS:           'userFacts',
   SERVER_FACTS:         'serverFacts',
   WEEKLY_SUMMARIES:     'weeklySummaries',
+  SESSION_SUMMARIES:    'sessionSummaries',
   DAILY_MSG_USAGE:      'dailyMsgUsage',
   INDEXED_COUNTS:       'indexedCounts'
 });
