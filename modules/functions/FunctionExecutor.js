@@ -217,17 +217,20 @@ async function handleSearchMemory(userId, guildId, historyId, query) {
     } catch { /* non-fatal */ }
   }
 
-  // Generate ONE embedding — shared by RAG search + recent session ranking
   const { embeddingService } = await import('../../memory/EmbeddingService.js');
-  const queryEmbedding = await embeddingService
-    .generateEmbedding(query, 'RETRIEVAL_QUERY')
-    .catch(() => null);
 
-  // Run memory search AND recent session context (last 24 h) in parallel
-  const [results, sessionLines] = await Promise.all([
+  // Start searchMemory immediately — Phase 1 (non-embedding DB queries) and
+  // Phase 2 (embedding generation) run concurrently inside it already.
+  // generateEmbedding here shares the same in-flight request via EmbeddingService
+  // dedup cache — zero extra API cost, both resolve together.
+  const [results, queryEmbedding] = await Promise.all([
     memorySystem.searchMemory(userId, guildId, historyId, query, { crossContextEnabled, otherGuildIds }),
-    getRecentSessionContext(userId, queryEmbedding, 3)
+    embeddingService.generateEmbedding(query, 'RETRIEVAL_QUERY').catch(() => null),
   ]);
+
+  // Session context — fast DB read (~20 ms). Embedding is fully resolved above
+  // so cosine ranking is applied; no sequential wait during the main search.
+  const sessionLines = await getRecentSessionContext(userId, queryEmbedding, 3);
 
   const all = [...sessionLines, ...results];
   return { result: all.length > 0 ? all.join('\n') : MSG.NO_MEMORIES_FOUND };
