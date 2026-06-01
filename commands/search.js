@@ -92,6 +92,7 @@ SEARCH INSTRUCTIONS:
 - You MUST use the googleSearch tool for EVERY query without exception
 - Always perform a Google search before answering — never answer from memory alone
 - Provide accurate, well-sourced information strictly from search results
+- Do not give very long search results, small concise, people prefer sources more over long summary, so short summary 
 - Current date: ${getCurrentDate()}
 
 RESPONSE FORMAT (follow this structure exactly, using these exact headings):
