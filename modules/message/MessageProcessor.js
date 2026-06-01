@@ -123,7 +123,24 @@ function resolveMessageContext(userId, guildId, channelId) {
 
   const isServerHistory  = guildId ? (serverSettings.serverChatHistory  ?? DEFAULT_SERVER_SETTINGS.serverChatHistory) : false;
   const isChannelHistory = guildId ? !!state.channelWideChatHistory[channelId] : false;
-  const historyId = isServerHistory ? guildId : (isChannelHistory ? channelId : userId);
+
+  // Session isolation:
+  //   crossContext OFF  → each guild gets its own per-user session key (`userId:guildId`);
+  //                        DMs stay as plain `userId` — never mixed with server sessions.
+  //   crossContext ON   → single `userId` session shared across all servers + DMs
+  //                        (legacy / intentional bleed-through behaviour).
+  //   serverChatHistory → whole server shares `guildId` (unchanged).
+  //   channelHistory    → channel-wide session `channelId` (unchanged).
+  let historyId;
+  if (isServerHistory) {
+    historyId = guildId;
+  } else if (isChannelHistory) {
+    historyId = channelId;
+  } else if (userCrossContext) {
+    historyId = userId;
+  } else {
+    historyId = guildId ? `${userId}:${guildId}` : userId;
+  }
 
   // ENABLE_GEMMA in config.js is a server-side master override.
   // When true, all chat conversations use GEMMA_DEFAULT_MODEL.
