@@ -330,9 +330,6 @@ function isGifBlocked(title, tags) {
  * Search for a GIF and store its URL in pendingGif (keyed by historyId).
  * The GIF is sent as a clean image embed by ResponseHandler — no URL in text.
  */
-// Maximum bytes to download for GIF vision preview (same cap as meme tool)
-const GIF_VISION_MAX_BYTES = 6 * 1024 * 1024; // 6 MB
-
 async function handleSearchGif(query, historyId) {
   const apiKey = process.env.GIPHY_API_KEY;
   if (!apiKey) return { result: MSG.GIF_NO_API_KEY };
@@ -358,49 +355,11 @@ async function handleSearchGif(query, historyId) {
         || item.url;
       if (!gifUrl) continue;
 
-      // ── Download GIF for bot vision (same pattern as fetch_meme) ──────────
-      // This lets Gemini actually see the GIF before writing its reply,
-      // so it can describe/react to the content rather than sending blindly.
-      let imageBase64   = null;
-      let imageMimeType = 'image/gif';
-      try {
-        const imgResp = await axios.get(gifUrl, {
-          responseType:     'arraybuffer',
-          timeout:          8000,
-          maxContentLength: GIF_VISION_MAX_BYTES,
-          headers:          { 'User-Agent': 'LuminBot/1.0' }
-        });
-        // Resolve MIME from URL extension or Content-Type header
-        const ext          = gifUrl.match(/\.(gif|webp|mp4)(\\?|$)/i)?.[1]?.toLowerCase();
-        const mimeFromExt  = { gif: 'image/gif', webp: 'image/webp', mp4: 'video/mp4' };
-        const mimeFromHdr  = imgResp.headers?.['content-type']?.split(';')[0]?.trim();
-        imageMimeType      = mimeFromExt[ext] || mimeFromHdr || 'image/gif';
-
-        imageBase64 = Buffer.from(imgResp.data).toString('base64');
-        logger.debug(`GIF image downloaded for vision: ${gifUrl} (${Math.round(imgResp.data.byteLength / 1024)} KB)`);
-      } catch (imgErr) {
-        logger.warn(`Could not download GIF for vision preview: ${imgErr.message}`);
-      }
-
-      // Store URL for ResponseHandler to send as clean embed image
+      // Store URL for ResponseHandler to send as clean embed image.
+      // Do NOT download for vision — giving the model the image triggers narration.
       if (historyId) setPendingGif(historyId, gifUrl);
 
-      const resultObj = {
-        result: [
-          `GIF found: "${title}".`,
-          imageBase64
-            ? `The GIF is embedded below. React to it naturally in character — do NOT describe or narrate what you see.`
-            : `GIF could not be pre-loaded for preview; it will still be sent to the channel.`
-        ].join(' ')
-      };
-
-      // Attach inline image data so Gemini can see the GIF before replying
-      if (imageBase64) {
-        resultObj._inlineImageData = imageBase64;
-        resultObj._inlineImageMime = imageMimeType;
-      }
-
-      return resultObj;
+      return { result: `GIF sent: "${title}". React casually in 1-2 words max — no description, no narration.` };
     }
 
     return { result: MSG.GIF_NO_RESULTS };
@@ -1130,9 +1089,6 @@ const TOPIC_SUBREDDIT_MAP = new Map([
   ['work',          ['ProgrammerHumor', 'facepalm', 'workmemes']],
 ]);
 
-/** Maximum size (bytes) for inline image we'll download for bot to see. */
-const MEME_VISION_MAX_BYTES = 6 * 1024 * 1024; // 6 MB
-
 /**
  * Find subreddits that best match a free-text topic string.
  * @param {string} topic - lowercase topic string
@@ -1221,51 +1177,11 @@ async function handleFetchMeme(historyId, subreddit, topic) {
       }
       if (!bestPost) bestPost = cleanPosts[0];
 
-      // ── Download image for bot to see (Gemini vision) ──────────────────────
-      let imageBase64  = null;
-      let imageMimeType = 'image/jpeg';
-      try {
-        const imgResp = await axios.get(bestPost.url, {
-          responseType:       'arraybuffer',
-          timeout:            10000,
-          maxContentLength:   MEME_VISION_MAX_BYTES,
-          headers:            { 'User-Agent': 'LuminBot/1.0' }
-        });
-
-        // Resolve MIME from URL extension or Content-Type header
-        const ext = bestPost.url.match(/\.(jpe?g|png|gif|webp)/i)?.[1]?.toLowerCase();
-        const mimeFromExt  = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
-        const mimeFromHdr  = imgResp.headers?.['content-type']?.split(';')[0]?.trim();
-        imageMimeType = mimeFromExt[ext] || mimeFromHdr || 'image/jpeg';
-
-        imageBase64 = Buffer.from(imgResp.data).toString('base64');
-        logger.debug(`Meme image downloaded for vision: ${bestPost.url} (${Math.round(imgResp.data.byteLength / 1024)} KB)`);
-      } catch (imgErr) {
-        logger.warn(`Could not download meme image for bot vision: ${imgErr.message}`);
-      }
-
-      // Queue image URL for final delivery to Discord channel
+      // Queue image URL for Discord delivery (no vision download — avoids narration)
       if (historyId) setPendingGif(historyId, bestPost.url);
 
       const title   = (bestPost.title || 'Meme').slice(0, 200);
-      const upvotes = bestPost.ups ?? 0;
-
-      const resultObj = {
-        result: [
-          `Meme fetched from r/${bestPost.subreddit || sub}: "${title}" (${upvotes.toLocaleString()} upvotes).`,
-          imageBase64
-            ? `The meme image is embedded below. React to it naturally and casually in character — do NOT describe or narrate what you see, just respond the way you normally would.`
-            : `Image could not be pre-loaded for preview; it will still be sent to the channel.`,
-        ].join(' ')
-      };
-
-      // Attach inline image data so Gemini can see the meme before replying
-      if (imageBase64) {
-        resultObj._inlineImageData  = imageBase64;
-        resultObj._inlineImageMime  = imageMimeType;
-      }
-
-      return resultObj;
+      return { result: `Meme sent from r/${bestPost.subreddit || sub}: "${title}". React casually in 1-2 words max — no description, no narration.` };
     }
 
     return { result: 'No suitable meme found. Try a different topic or subreddit.' };
