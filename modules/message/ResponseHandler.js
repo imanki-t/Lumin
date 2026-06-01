@@ -332,7 +332,13 @@ function isRateLimitError(error) {
  * @returns {string}
  */
 function extractChunkText(chunk, modelName = '') {
-  let text = chunk.text || '';
+  // Use raw parts to exclude thought parts (thought: true) which are internal
+  // reasoning that must NOT be sent to Discord. chunk.text is a SDK convenience
+  // accessor that concatenates ALL text parts including thoughts — avoid it.
+  const rawParts = chunk.candidates?.[0]?.content?.parts ?? [];
+  let text = rawParts.length
+    ? rawParts.filter(p => !p.thought).map(p => p.text || '').join('')
+    : (chunk.text || '');
 
   if (!isGemmaModel(modelName)) {
     if (chunk.executableCode?.code) {
@@ -754,6 +760,27 @@ export async function handleModelResponse(
             await originalMessage.channel.send({ files: [pendingGifUrl] });
           } catch (gifErr) {
             logger.warn(`Failed to send GIF attachment: ${gifErr.message}`);
+          }
+        }
+
+        // ── Deliver profile avatar/banner only if model echoed the URL ───
+        // The model is instructed to include the _avatar_ or _banner_ URL in
+        // its reply ONLY when the user explicitly asked for pfp/banner.
+        // We intercept those marker lines, strip them from the visible reply,
+        // and re-send them as clean image attachments instead.
+        const profileMediaRegex = /^_(?:avatar|banner)_:\s*(https?:\/\/\S+)$/m;
+        if (finalResponse && profileMediaRegex.test(finalResponse)) {
+          const urls = [];
+          finalResponse = finalResponse.replace(
+            /^_(?:avatar|banner)_:\s*(https?:\/\/\S+)$/gm,
+            (_, url) => { urls.push(url); return ''; }
+          ).trim();
+          for (const url of urls) {
+            try {
+              await originalMessage.channel.send({ files: [url] });
+            } catch (mediaErr) {
+              logger.warn(`Failed to send profile media attachment: ${mediaErr.message}`);
+            }
           }
         }
 
