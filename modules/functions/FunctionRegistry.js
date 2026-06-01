@@ -309,7 +309,8 @@ export const functionTools = [
           'Send a message to a server channel — only callable from a DM conversation.',
           'The bot must be in that server. Use when a DM user asks to relay a message to a server.',
           'Specify the server and channel by name. If ambiguous, ask the user to clarify.',
-          'Can only send to servers where the bot is active.',
+          'Can ONLY send to channels that are explicitly configured as allowed channels by a server admin.',
+          'If no allowed channels are configured, or the named channel is not in the allowed list, the message will be refused.',
         ].join(' '),
         parameters: {
           type: O,

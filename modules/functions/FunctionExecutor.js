@@ -765,20 +765,29 @@ async function handleSendServerMessage(userId, guildId, content, guildName, chan
 
     if (!targetGuild) return { result: 'Could not find a mutual server to send the message to. Make sure you and the bot share a server.' };
 
-    // Find channel by name or use system/default channel
+    // Only send to channels the bot is explicitly allowed in
+    const allowedChannels = state.serverSettings[targetGuild.id]?.allowedChannels;
+    if (!allowedChannels || allowedChannels.length === 0) {
+      return { result: `No allowed channels are configured for ${targetGuild.name}. An admin must set allowed channels before the bot can send messages there.` };
+    }
+
+    // Find channel by name within allowed channels only
     let targetChannel = null;
     if (channelName) {
       targetChannel = targetGuild.channels.cache.find(c =>
+        allowedChannels.includes(c.id) &&
         c.isTextBased() && c.viewable &&
         c.name.toLowerCase().includes(channelName.toLowerCase())
       );
     }
-    if (!targetChannel) targetChannel = targetGuild.systemChannel;
+    // Fallback: first allowed channel
     if (!targetChannel) {
-      targetChannel = targetGuild.channels.cache.find(c => c.isTextBased() && c.viewable);
+      targetChannel = targetGuild.channels.cache.find(c =>
+        allowedChannels.includes(c.id) && c.isTextBased() && c.viewable
+      );
     }
 
-    if (!targetChannel) return { result: 'Could not find a suitable text channel to send the message to.' };
+    if (!targetChannel) return { result: 'Could not find a matching allowed channel to send the message to. Check the channel name or ask an admin to configure allowed channels.' };
 
     await targetChannel.send(content);
     return { result: `Message sent to #${targetChannel.name} in ${targetGuild.name}.` };
