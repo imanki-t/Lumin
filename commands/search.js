@@ -328,7 +328,7 @@ async function sendSearchResponse(
  *   By calling getCurrentClient() directly, rate-limit errors propagate as real
  *   throws.  executeWithRetry re-throws them to the outer for-loop, which then
  *   steps correctly through:
- *     gemini-3.1-flash-lite → gemma-4-26b-a4b-it
+ *     gemini-3.1-flash-lite → gemini-3.5-flash → gemma-4-26b-a4b-it
  *
  *   sanitizeRequestForModel is called explicitly here to strip tools that the
  *   target model doesn't support (e.g. urlContext / codeExecution for Gemma).
@@ -549,19 +549,19 @@ export async function executeSearchInteraction(interaction) {
     const embedColor        = effective.embedColor     || BOT_CONFIG.HEX_COLOUR;
 
     // ── Search fallback chain ──────────────────────────────────────────────
-    // Fixed two-model chain for /search — always:
-    //   1. gemini-3.1-flash-lite  (primary — fastest, cheapest Gemini 3)
-    //   2. gemma-4-26b-a4b-it             (fallback — always present, not gated
-    //                                      by ENABLE_GEMMA; Gemma 4 supports
-    //                                      googleSearch for /search purposes)
+    // Three-model chain for /search — always tried in this order:
+    //   1. gemini-3.1-flash-lite  (primary — fastest / cheapest Gemini 3)
+    //   2. gemini-3.5-flash       (mid-tier — more capable, higher quota limit)
+    //   3. gemma-4-26b-a4b-it     (last resort — Gemma 4 supports googleSearch
+    //                              grounding via the Gemini API; not gated by
+    //                              ENABLE_GEMMA for /search purposes)
     //
-    // gemini-3.5-flash not used as a mid-tier fallback here — it was
-    // burning quota without user benefit.  Gemma 4 is the intended second tier.
-    // ENABLE_GEMMA flag intentionally ignored here — /search always falls
-    // back to Gemma 4 regardless of the global chat routing setting.
+    // ENABLE_GEMMA flag is intentionally ignored here — /search always
+    // falls back through the full chain regardless of global chat routing.
     const searchFallbackChain = [
-      'gemini-3.1-flash-lite',
-      MODELS[GEMMA_DEFAULT_MODEL] ?? 'gemma-4-26b-a4b-it'
+      MODELS['gemini-3.1-flash-lite'] ?? 'gemini-3.1-flash-lite',
+      MODELS['gemini-3.5-flash']      ?? 'gemini-3.5-flash',
+      MODELS[GEMMA_DEFAULT_MODEL]     ?? 'gemma-4-26b-a4b-it',
     ];
 
     // ── Search with per-model retry + chain fallback ───────────────────────
