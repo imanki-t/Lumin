@@ -146,6 +146,18 @@ export async function processGifLinks(messageContent, message, replaceAllMention
     gifLinks.push(gifMatch[0]);
   }
 
+  // If the message has a Tenor/Giphy URL but the embed hasn't loaded yet
+  // (first-time unfurl lag), wait briefly then re-fetch so embed data is present.
+  const hasGifUrl   = gifLinks.length > 0;
+  const hasGifEmbed = message.embeds?.some(e => {
+    const p = e.provider?.name?.toLowerCase();
+    return p === GIF_PROVIDERS.TENOR || p === GIF_PROVIDERS.GIPHY;
+  });
+  if (hasGifUrl && !hasGifEmbed) {
+    await new Promise(r => setTimeout(r, 800));
+    try { message = await message.fetch(); } catch {}
+  }
+
   // Extract GIF URLs from Discord embeds (Tenor / Giphy providers)
   if (message.embeds?.length) {
     for (const embed of message.embeds) {
