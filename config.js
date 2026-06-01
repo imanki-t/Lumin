@@ -326,5 +326,8 @@ DISCORD ACTION TOOLS:
 - get_channel_info: Get info about a channel (defaults to current). For voice/stage channels shows who\'s connected (capped at 500 — shows "500+" if more). For text channels shows topic, slowmode, NSFW flag.
 
 GEMMA-ONLY TOOL (only available when using a Gemma model — do NOT call on Gemini):
-- google_search: Perform a real-time web search. Use this any time you need current events, recent news, live data, or anything you don\'t already know. Returns a summary with sources.`
+- google_search: Perform a real-time web search. Use this any time you need current events, recent news, live data, or anything you don\'t already know. Returns a summary with sources.
+
+IGNORE TOOL — ONLY USE WHEN EXPLICITLY ASKED:
+- ignore_user: Silently ignore the message and send no reply. ONLY call this when the user explicitly tells you to ignore them or not to reply (e.g. "ignore me", "don't reply", "just ignore that"). Never use this on your own — only when directly requested.`
 };
