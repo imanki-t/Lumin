@@ -16,7 +16,7 @@ import {
   DEFAULT_USER_SETTINGS
 } from '../../managers/BotManager.js';
 import { checkAndIncrementDailyMessages } from '../../managers/QueueManager.js';
-import { getWeeklySummary } from '../../commands/summary/WeeklySummaryJob.js';
+import { getLatestSessionSummary } from '../../commands/summary/SessionSummaryJob.js';
 import { WEEKLY_SUMMARY_ENABLED } from '../../modules/config.js';
 import { memorySystem }  from '../../memory/MemorySystem.js';
 import { Logger }         from '../../core/Logger.js';
@@ -268,12 +268,12 @@ async function buildSystemInstruction(message, effectiveSettings, serverSettings
     }
   }
 
-  // ── Weekly summary injection (Redis L1 ~1ms — zero RAG cost) ─────────────
+  // ── Session summary injection (latest session context — zero RAG cost) ─────
   if (WEEKLY_SUMMARY_ENABLED) {
     try {
-      const weeklySummary = await getWeeklySummary(message.author.id);
-      if (weeklySummary) {
-        instructions += `\n\n## User Background (Weekly Summary)\n${weeklySummary}`;
+      const sessionSummary = await getLatestSessionSummary(message.author.id);
+      if (sessionSummary) {
+        instructions += `\n\n## Recent Session Memory (Your First-Person Recall)\n${sessionSummary}`;
       }
     } catch { /* non-fatal */ }
   }

@@ -8,6 +8,10 @@ import { getHistoryLock, updateChatHistory, state } from '../../managers/BotMana
 import * as db        from '../../database.js';
 import { memorySystem } from '../../memory/MemorySystem.js';
 import { Logger }      from '../../core/Logger.js';
+import {
+  incrementBotMsgCounter,
+  maybeGenerateSessionSummary
+} from '../../commands/summary/SessionSummaryJob.js';
 
 const logger = Logger.get('HistoryManager');
 
@@ -113,6 +117,23 @@ export async function saveMessageHistory({
       memorySystem
         .storeMemoryWithEmbedding(historyId, newHistory, userId, guildId)
         .catch(err => logger.error('Background memory indexing failed', err));
+
+      // Session summary: increment bot counter and maybe generate a summary window
+      const containsBotMsg = newHistory.some(m => m.role === 'assistant');
+      if (containsBotMsg) {
+        incrementBotMsgCounter(userId, historyId);
+        maybeGenerateSessionSummary(userId, historyId, guildId, async () => {
+          const raw = state.chatHistories[historyId];
+          if (!raw) return [];
+          const msgs = [];
+          for (const key of Object.keys(raw)) {
+            const entries = raw[key];
+            if (Array.isArray(entries)) for (const m of entries) msgs.push(m);
+          }
+          msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+          return msgs;
+        });
+      }
 
       // L-7 fix: guard against saving undefined history (uninitialized historyId)
       const historyToSave = state.chatHistories[historyId];
