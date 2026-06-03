@@ -14,9 +14,11 @@ import {
 } from 'discord.js';
 import { createServer } from 'http';
 import express from 'express';
+import path    from 'path';
+import { fileURLToPath } from 'url';
 
 import config from './config.js';
-import { mountDashboard, isGlobalLockdown, saveRuntimeConfig } from './dashboard/server.js';
+import { mountDashboard, prepareDashboard, isGlobalLockdown, saveRuntimeConfig } from './dashboard/server.js';
 import {
   client,
   token,
@@ -124,7 +126,17 @@ httpServer.listen(EXPRESS_CONFIG.PORT, () => {
   logger.info(`Express server running on port ${EXPRESS_CONFIG.PORT}`);
 });
 
-// Mount admin dashboard at /dashboard on the same port
+// Serve the vanilla-JS dashboard modules at /js/* (absolute URL, independent of
+// the /dashboard basePath, so the browser can load them from _document.jsx).
+const __rootdir = path.dirname(fileURLToPath(import.meta.url));
+app.use('/js', express.static(
+  path.join(__rootdir, 'dashboard', 'next-app', 'public', 'js')
+));
+
+// Prepare Next.js (loads the production build / starts the compiler in dev),
+// then mount the dashboard router which uses Next.js as its final catch-all.
+// Top-level await is valid here because the project is "type":"module".
+await prepareDashboard();
 mountDashboard(app, httpServer);
 
 // ============================================================================
