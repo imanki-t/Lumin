@@ -129,16 +129,22 @@ app.use('/js', express.static(
   path.join(__rootdir, 'dashboard', 'next-app', 'public', 'js')
 ));
 
-// Prepare Next.js (loads the production build / starts the compiler in dev),
-// then mount the dashboard router which uses Next.js as its final catch-all.
-// Top-level await is valid here because the project is "type":"module".
-await prepareDashboard();
-mountDashboard(app, httpServer);
-
-// Listen only after all routes are registered so /dashboard is never missing.
+// Listen immediately so Render's port scanner detects the port right away.
+// Dashboard routes are unavailable for a few seconds while Next.js prepares,
+// but /health responds instantly and the bot starts normally.
 httpServer.listen(EXPRESS_CONFIG.PORT, () => {
   logger.info(`Express server running on port ${EXPRESS_CONFIG.PORT}`);
 });
+
+// Prepare Next.js and mount dashboard routes asynchronously — does NOT block port binding.
+prepareDashboard()
+  .then(() => {
+    mountDashboard(app, httpServer);
+    logger.info('Dashboard routes mounted');
+  })
+  .catch(err => {
+    logger.error('Dashboard preparation failed — dashboard unavailable', err);
+  });
 
 // ============================================================================
 // TEMP FILE CLEANUP
