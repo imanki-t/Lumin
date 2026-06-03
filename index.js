@@ -122,10 +122,6 @@ app.get(EXPRESS_CONFIG.HEALTH_CHECK_PATH, (_req, res) => {
   });
 });
 
-httpServer.listen(EXPRESS_CONFIG.PORT, () => {
-  logger.info(`Express server running on port ${EXPRESS_CONFIG.PORT}`);
-});
-
 // Serve the vanilla-JS dashboard modules at /js/* (absolute URL, independent of
 // the /dashboard basePath, so the browser can load them from _document.jsx).
 const __rootdir = path.dirname(fileURLToPath(import.meta.url));
@@ -138,6 +134,11 @@ app.use('/js', express.static(
 // Top-level await is valid here because the project is "type":"module".
 await prepareDashboard();
 mountDashboard(app, httpServer);
+
+// Listen only after all routes are registered so /dashboard is never missing.
+httpServer.listen(EXPRESS_CONFIG.PORT, () => {
+  logger.info(`Express server running on port ${EXPRESS_CONFIG.PORT}`);
+});
 
 // ============================================================================
 // TEMP FILE CLEANUP
