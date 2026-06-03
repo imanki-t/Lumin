@@ -7,6 +7,7 @@ import os                             from 'os';
 import path                           from 'path';
 import fs                             from 'fs';
 import { fileURLToPath }              from 'url';
+import next                           from 'next';
 
 import {
   client,
@@ -68,6 +69,24 @@ setInterval(saveRuntimeConfig, 5 * 60 * 1000).unref();
 
 export { saveRuntimeConfig };
 
+// ── Next.js integration ───────────────────────────────────────────────────────
+// The Next.js app lives in dashboard/next-app/.  In production it uses the
+// pre-built .next/ bundle; in dev it compiles on the fly.
+const _nextApp = next({
+  dev: process.env.NODE_ENV !== 'production',
+  dir: path.join(__dirname, 'next-app'),
+});
+const _nextHandle = _nextApp.getRequestHandler();
+
+/**
+ * Called once from index.js before mountDashboard().
+ * Awaits Next.js page compilation (dev) or bundle load (production).
+ */
+export async function prepareDashboard() {
+  await _nextApp.prepare();
+  logger.info('Next.js ready');
+}
+
 const sessions    = new Map();
 const oauthStates = new Map();
 
@@ -117,8 +136,10 @@ const router = express.Router();
 router.use((_req, res, next) => {
   res.setHeader('Content-Security-Policy',
     "default-src 'self'; " +
-    "script-src 'self' 'unsafe-inline' https://www.google.com https://www.gstatic.com; " +
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "script-src 'self' 'unsafe-inline' " +
+      "https://www.google.com https://www.gstatic.com https://cdn.jsdelivr.net; " +
+    "style-src 'self' 'unsafe-inline' " +
+      "https://fonts.googleapis.com https://cdn.jsdelivr.net; " +
     "font-src 'self' https://fonts.gstatic.com; " +
     "img-src 'self' data: https:; " +
     "connect-src 'self' wss: ws:; " +
@@ -132,7 +153,8 @@ router.use((_req, res, next) => {
   next();
 });
 
-router.use(express.static(path.join(__dirname, 'public')));
+// Static public/ files (lumin.png etc.) are served by Next.js handler below.
+// Vanilla JS modules are served at /js/* from index.js (root Express level).
 router.use(express.json({ limit: '10mb' }));
 
 // Fix #6: Per-IP rate limiter for auth endpoints (10 req/min, 5-min auto-cleanup)
@@ -1454,6 +1476,10 @@ router.get('/api/cmd/migrate/fields', authenticate, async (req, res) => {
 export function mountDashboard(app, httpServer) {
   app.use('/dashboard', router);
   app.get('/dashboard', (_req, res) => res.redirect('/dashboard/'));
+
+  // Next.js handles everything not matched by API / auth routes above.
+  // This covers the React UI pages and /_next/static/* build artifacts.
+  router.all('*', (req, res) => _nextHandle(req, res));
 
   httpServer.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost');
