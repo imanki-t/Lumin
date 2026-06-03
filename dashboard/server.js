@@ -1481,7 +1481,7 @@ export function mountDashboard(app, httpServer) {
   // the FULL path e.g. /dashboard/ not the Express-stripped /. This is required:
   // basePath: '/dashboard' in next.config.js must see the full URL or it creates
   // an infinite redirect loop.
-  app.all('*', (req, res) => _nextHandle(req, res));
+  app.all('/{*splat}', (req, res) => _nextHandle(req, res));
 
   httpServer.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost');
