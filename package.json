@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node --max-old-space-size=512 --expose-gc index.js",
-    "dev":   "node --max-old-space-size=512 --expose-gc --watch index.js",
+    "dev": "node --max-old-space-size=512 --expose-gc --watch index.js",
     "build": "cd dashboard/next-app && npm install --omit=dev && npm run build"
   },
   "keywords": [
@@ -19,9 +19,6 @@
   "author": "unmuted",
   "license": "MIT",
   "dependencies": {
-    "next":      "14.2.5",
-    "react":     "^18.3.1",
-    "react-dom": "^18.3.1",
     "@google/genai": "^1.48.0",
     "axios": "^1.16.1",
     "discord.js": "^14.26.4",
@@ -30,14 +27,20 @@
     "fluent-ffmpeg": "^2.1.3",
     "lru-cache": "^11.1.0",
     "mongodb": "^6.16.0",
+    "next": "14.2.35",
     "node-cron": "^4.2.1",
     "node-os-utils": "^1.3.7",
     "office-text-extractor": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "redis": "^4.7.1",
     "sharp": "^0.34.2",
     "ws": "^8.21.0"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "overrides": {
+    "postcss": ">=8.5.10"
   }
 }
