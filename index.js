@@ -129,9 +129,24 @@ app.use('/js', express.static(
   path.join(__rootdir, 'dashboard', 'next-app', 'public', 'js')
 ));
 
+// ── Dashboard loading gate ────────────────────────────────────────────────────
+// Registered BEFORE listen so every /dashboard* request that arrives while
+// Next.js is still preparing gets a 503 + retry hint instead of Express's
+// default "Cannot GET /dashboard/" 404.  Once mountDashboard() registers its
+// own router + catch-all further down the stack, this middleware simply calls
+// next() and gets out of the way.
+let _dashboardReady = false;
+app.use('/dashboard', (req, res, next) => {
+  if (_dashboardReady) return next();
+  res.status(503).set('Retry-After', '10').send(
+    '<!doctype html><html><head><meta http-equiv="refresh" content="5;url=/dashboard/"></head>' +
+    '<body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0a0a0a;color:#fff">' +
+    '<div style="text-align:center"><h2>⏳ Dashboard is starting up…</h2>' +
+    '<p style="color:#888">This page will reload automatically in a few seconds.</p></div></body></html>'
+  );
+});
+
 // Listen immediately so Render's port scanner detects the port right away.
-// Dashboard routes are unavailable for a few seconds while Next.js prepares,
-// but /health responds instantly and the bot starts normally.
 httpServer.listen(EXPRESS_CONFIG.PORT, () => {
   logger.info(`Express server running on port ${EXPRESS_CONFIG.PORT}`);
 });
@@ -140,10 +155,11 @@ httpServer.listen(EXPRESS_CONFIG.PORT, () => {
 prepareDashboard()
   .then(() => {
     mountDashboard(app, httpServer);
+    _dashboardReady = true;
     logger.info('Dashboard routes mounted');
   })
   .catch(err => {
-    logger.error('Dashboard preparation failed — dashboard unavailable', err);
+    logger.error(`Dashboard preparation failed — dashboard unavailable\n${err?.stack || err?.message || err}`);
   });
 
 // ============================================================================
