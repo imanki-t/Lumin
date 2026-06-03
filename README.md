@@ -10,7 +10,7 @@
 ```
 
 **An intelligent Discord bot powered by Google Gemini & Gemma AI**  
-*RAG memory · multi-model · multi-key rotation · real-time admin dashboard*
+*Your AI-powered server companion — remembers, responds, and acts on your behalf*
 
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![Discord.js](https://img.shields.io/badge/Discord.js-v14-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.js.org)
@@ -25,7 +25,7 @@
 
 ## What is Lumin?
 
-Lumin is a full-featured AI Discord companion built around Google Gemini and Gemma. It maintains persistent per-user and per-server conversation memory using a RAG pipeline backed by MongoDB Atlas Vector Search, supports multimodal file and image analysis, ships a complete interactive game system, and exposes a real-time admin dashboard secured via Google OAuth.
+Lumin is a full-featured AI Discord companion built around Google Gemini and Gemma. It maintains persistent per-user and per-server conversation memory using a RAG pipeline backed by MongoDB Atlas Vector Search, runs a rolling session summary system to prevent bot amnesia over long histories, supports multimodal file and image analysis, ships 28 autonomous function tools, a complete interactive game system, and exposes a real-time admin dashboard secured via Google OAuth.
 
 Slash commands are registered automatically on every startup — no separate deploy step needed.
 
@@ -39,7 +39,17 @@ Slash commands are registered automatically on every startup — no separate dep
 - **Personal Memory** — Lumin proactively saves facts about each user (hobbies, preferences, life details) via the `manage_personal_memory` function tool and recalls them naturally across all servers and DMs.
 - **Server Facts** — A shared knowledge layer for every guild. Lumin automatically stores and retrieves server-wide facts — relationships, nicknames, roles, recurring activities, events, and more — via `manage_server_fact`, categorised and scoped to the guild.
 - **Cross-Context Memory** — Opt-in feature that lets Lumin carry memories and server facts across every server a user shares with it, and across DMs.
-- **Automatic Tool Calling** — 9 native function tools Lumin calls on its own judgement: `manage_personal_memory`, `manage_server_fact`, `search_memory`, `set_reminder`, `set_birthday`, `set_timezone`, `check_time_elapsed`, `get_message_timestamp`, and `get_current_datetime`.
+- **Automatic Tool Calling** — 28 native function tools Lumin calls on its own judgement, grouped by category:
+
+  | Category | Tools |
+  |---|---|
+  | Memory | `manage_personal_memory`, `manage_server_fact`, `search_memory`, `check_sessions` |
+  | Scheduling | `set_reminder`, `set_birthday`, `set_timezone`, `check_time_elapsed`, `get_message_timestamp`, `get_current_datetime` |
+  | Media / Expression | `search_gif`, `get_server_emojis`, `get_server_stickers`, `fetch_meme`, `search_giphy_sticker` |
+  | Discord Actions | `check_user_profile`, `create_poll`, `send_dm`, `send_server_message`, `edit_bot_message`, `delete_bot_message`, `pin_message`, `create_thread`, `add_reaction` |
+  | Information | `get_server_info`, `get_channel_info` |
+  | Search | `google_search` *(Gemma-only)* |
+  | Moderation | `ignore_user` |
 - **Web Search** — Native Gemini grounding lets Lumin pull live web results into any reply.
 - **Multimodal Input** — Attach images, PDFs, and documents in chat. Video and audio processing are available behind feature flags. Files are processed via the Gemini Files API and optionally embedded into memory.
 - **Custom Personalities** — Each user and server can set their own system prompt that shapes how Lumin responds.
@@ -193,9 +203,20 @@ MemorySystem ──► L1 in-process LRU cache
          Top-N results injected into prompt context
 ```
 
+### Session Memory
+
+To solve bot amnesia over long conversation histories, Lumin runs a rolling session summary system on top of the RAG pipeline:
+
+- **Trigger** — Every 50 bot messages per `(userId, historyId)` pair, the previous 50-message window is summarised.
+- **First-person voice** — Summaries are written as Lumin recalling what happened ("I helped Alex debug…"), keeping them natural when injected back into context.
+- **Single living document** — Rather than appending new docs, the existing session summary for that conversation is fetched, the new window is merged in, and the single document is updated in place — one doc per conversation, always current.
+- **Dual search tools** — `search_memory` covers the last 24 hours of history; `check_sessions` runs a separate vector search over older session summaries (days/weeks back), so Lumin can recall things said long ago without blowing up the context window.
+- **Daily digest collapse** — After 24 hours the `WeeklySummaryJob` / daily digest collapses old per-session entries into a single consolidated entry, keeping the database lean.
+- **Redis TTL** — Active session state is cached in Redis with a 25-hour TTL for fast reads; MongoDB is the durable store.
+
 RAG can be run in two modes (set in `modules/config.js`):
 - `ENABLE_RAG=true` — automatic vector search before every reply
-- `ENABLE_RAG=false` (default) — AI calls `search_memory` as a tool on its own judgement
+- `ENABLE_RAG=false` (default) — AI calls `search_memory` / `check_sessions` as tools on its own judgement
 
 ---
 
@@ -249,7 +270,7 @@ lumin/
 │   │   ├── SettingsRouter.js        # Settings interaction routing
 │   │   └── ActionHandlers.js        # Settings button/modal handlers
 │   ├── functions/
-│   │   ├── FunctionRegistry.js   # Gemini tool declarations (9 tools)
+│   │   ├── FunctionRegistry.js   # Gemini tool declarations (28 tools)
 │   │   └── FunctionExecutor.js   # Tool call dispatch and execution
 │   ├── shared/
 │   │   ├── embedBuilder.js       # Shared embed + component builders
@@ -278,6 +299,7 @@ lumin/
 │   ├── summary/
 │   │   ├── SummaryHandler.js     # /summary command entry
 │   │   ├── SummaryExecutor.js    # Summarisation logic (messages + YouTube)
+│   │   ├── SessionSummaryJob.js  # Rolling 50-msg session memory summariser
 │   │   └── WeeklySummaryJob.js   # Scheduled weekly digest job
 │   ├── fun/
 │   │   ├── RouletteHandler.js    # /reaction (message reaction roulette)

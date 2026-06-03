@@ -168,7 +168,19 @@ GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=GOCSPX-your-client-secret
 ```
 
-> The dashboard hard-codes the allowed email address in `dashboard/server.js` (`ALLOWED_EMAIL`). Update that value to your own Google account email before deploying.
+### Dashboard allowed email
+
+**Variable:** `DASHBOARD_ALLOWED_EMAIL`
+
+This is the Google account email address that is permitted to log in to the dashboard. Any OAuth login from a different account will be rejected with "auth denied".
+
+Set it to the exact email address of the Google account you used in the OAuth consent screen above.
+
+```env
+DASHBOARD_ALLOWED_EMAIL=you@gmail.com
+```
+
+> If this variable is not set, `dashboard/server.js` will log a warning on startup and **all** OAuth logins will be denied — the dashboard will be inaccessible until you add it.
 
 ---
 
@@ -261,6 +273,7 @@ MONGODB_URI=
 # ── Dashboard — Google OAuth ──────────────────────────────────────────────────
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
+DASHBOARD_ALLOWED_EMAIL=    # the Google account email allowed to log in to the dashboard
 
 # ── Dashboard — reCAPTCHA v3 ──────────────────────────────────────────────────
 RECAPTCHA_SITE_KEY=
@@ -323,7 +336,7 @@ For the Google OAuth redirect URI to work on Render, make sure you added your Re
 - Commands are registered automatically on startup. Wait a few minutes after the first deploy for Discord to propagate them globally. If they still don't appear, check the startup logs for registration errors.
 
 **Dashboard shows "auth denied"**
-- The `ALLOWED_EMAIL` constant in `dashboard/server.js` must match the Google account you're signing in with exactly. Edit it to your email address and redeploy.
+- `DASHBOARD_ALLOWED_EMAIL` in your `.env` must match the Google account you're signing in with exactly. Check for typos or trailing spaces, then redeploy.
 
 **Vector search returns no results**
 - Make sure the `vector_index` search index exists on the `memoryEntries` collection in Atlas and its status is **Active** (not Building).
