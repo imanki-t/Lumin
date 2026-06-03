@@ -1474,12 +1474,14 @@ router.get('/api/cmd/migrate/fields', authenticate, async (req, res) => {
 });
 
 export function mountDashboard(app, httpServer) {
+  // API, auth, and WebSocket routes all live under /dashboard via the router.
   app.use('/dashboard', router);
-  app.get('/dashboard', (_req, res) => res.redirect('/dashboard/'));
 
-  // Next.js handles everything not matched by API / auth routes above.
-  // This covers the React UI pages and /_next/static/* build artifacts.
-  router.all('*', (req, res) => _nextHandle(req, res));
+  // Next.js catch-all is at the APP level (not inside the router) so it receives
+  // the FULL path e.g. /dashboard/ not the Express-stripped /. This is required:
+  // basePath: '/dashboard' in next.config.js must see the full URL or it creates
+  // an infinite redirect loop.
+  app.all('*', (req, res) => _nextHandle(req, res));
 
   httpServer.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost');
