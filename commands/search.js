@@ -361,7 +361,10 @@ async function runSearchGeneration(modelName, generationConfig, tools, parts) {
   const result = await getCurrentClient().models.generateContentStream(request);
 
   for await (const chunk of result) {
-    const chunkText = chunk.text || '';
+    const rawParts = chunk.candidates?.[0]?.content?.parts ?? [];
+    const chunkText = rawParts.length
+      ? rawParts.filter(p => !p.thought).map(p => p.text || '').join('')
+      : (chunk.text || '');
 
     let executableCode = '';
     if (chunk.executableCode?.code) {
