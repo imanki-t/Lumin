@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  lumin-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - REDIS_URL=redis://lumin-redis:6379
+      - MONGODB_URI=mongodb://lumin-mongo:27017/lumin
+    env_file:
+      - .env
+    depends_on:
+      - lumin-redis
+      - lumin-mongo
+
+  lumin-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  lumin-mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  redis-data:
+  mongo-data:
